@@ -4,7 +4,11 @@ Bad Actors is an AI social-deduction simulation scaffold. Frontier-model agents 
 
 ## Status
 
-This repository currently contains the empty Python 3.12 package scaffold, project constitution, CI workflow, and smoke test. Application behavior has not been implemented yet.
+This repository currently contains the Python 3.12 package scaffold, project constitution, CI workflow, and Pydantic v2 schemas for the Bad Actors data contract. Engine, scoping, provider, and application behavior have not been implemented yet.
+
+## Data Contract
+
+The canonical schema definitions live in `src/badactors/schemas.py`. They include the role, phase, and visibility enums, player and event models, the discriminated `Action` union, agent turn output, game state, and scoped context models.
 
 ## Setup
 
@@ -17,6 +21,13 @@ ruff check
 ruff format --check
 mypy src
 pytest -q
+```
+
+Run the schema contract checks:
+
+```sh
+pytest tests/test_schemas.py -q
+mypy src/badactors/schemas.py
 ```
 
 ## License

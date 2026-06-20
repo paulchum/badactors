@@ -9,3 +9,4 @@
 - Added CI checks for `uv sync`, Ruff, mypy, and pytest.
 - Added the project constitution in `AGENTS.md`.
 - Added initial README documentation and a changelog.
+- Added Pydantic v2 schemas for the Bad Actors data contract and schema tests.
