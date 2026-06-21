@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 
+import { LeaderboardPage, type LeaderboardPayload } from "./LeaderboardPage";
+
 type Visibility = "PUBLIC" | "TRAITORS" | "AUDIENCE" | "HOST";
 type Role = "FAITHFUL" | "TRAITOR";
 
@@ -50,6 +52,7 @@ export type ViewState = {
 };
 
 type AppStatus = "idle" | "live" | "replayed" | "error";
+type AppView = "game" | "leaderboard";
 
 const emptyState: ViewState = {
   events: [],
@@ -57,6 +60,11 @@ const emptyState: ViewState = {
   reveals: [],
   conclave: [],
   roleByPlayer: {}
+};
+
+const emptyLeaderboard: LeaderboardPayload = {
+  agents: [],
+  creators: []
 };
 
 const demoGame = {
@@ -93,6 +101,8 @@ export function App() {
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [status, setStatus] = useState<AppStatus>("idle");
   const [error, setError] = useState("");
+  const [view, setView] = useState<AppView>("game");
+  const [leaderboard, setLeaderboard] = useState(emptyLeaderboard);
   const sourceRef = useRef<EventSource | null>(null);
   const state = useMemo(() => reduceEvents(events), [events]);
 
@@ -108,6 +118,7 @@ export function App() {
     const nextGameId = `ui-${Date.now()}`;
     setGameId(nextGameId);
     setStatus("live");
+    setView("game");
     try {
       const response = await fetch("/games", {
         method: "POST",
@@ -163,10 +174,31 @@ export function App() {
       const payload = (await response.json()) as { events: GameEvent[] };
       setEvents(payload.events);
       setStatus("replayed");
+      setView("game");
     } catch (caught) {
       setStatus("error");
       setError(caught instanceof Error ? caught.message : "Replay failed.");
     }
+  }
+
+  async function loadLeaderboard() {
+    setError("");
+    try {
+      const response = await fetch("/leaderboard");
+      if (!response.ok) {
+        throw new Error(`Leaderboard failed: ${response.status}`);
+      }
+      setLeaderboard((await response.json()) as LeaderboardPayload);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Leaderboard failed."
+      );
+    }
+  }
+
+  async function showLeaderboard() {
+    setView("leaderboard");
+    await loadLeaderboard();
   }
 
   return (
@@ -174,12 +206,24 @@ export function App() {
       <TopBar
         gameId={gameId}
         status={status}
+        view={view}
         onGameId={setGameId}
         onStart={startMockGame}
         onReplay={replayGame}
+        onGameView={() => setView("game")}
+        onLeaderboard={showLeaderboard}
       />
       {error ? <div className="mx-4 mt-3 border border-red-500 p-3">{error}</div> : null}
-      <SpectatorBoard state={state} status={status} />
+      {view === "leaderboard" ? (
+        <LeaderboardPage
+          leaderboard={leaderboard}
+          onRefresh={() => {
+            void loadLeaderboard();
+          }}
+        />
+      ) : (
+        <SpectatorBoard state={state} status={status} />
+      )}
     </div>
   );
 }
@@ -187,15 +231,21 @@ export function App() {
 function TopBar({
   gameId,
   status,
+  view,
   onGameId,
   onStart,
-  onReplay
+  onReplay,
+  onGameView,
+  onLeaderboard
 }: {
   gameId: string;
   status: AppStatus;
+  view: AppView;
   onGameId: (value: string) => void;
   onStart: () => void;
   onReplay: () => void;
+  onGameView: () => void;
+  onLeaderboard: () => void;
 }) {
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-black/40 px-4 py-3">
@@ -217,6 +267,22 @@ function TopBar({
       </button>
       <button className="control-button" onClick={onReplay} type="button">
         Replay
+      </button>
+      <button
+        className={`control-button ${view === "game" ? "border-faithful" : ""}`}
+        onClick={onGameView}
+        type="button"
+      >
+        Table
+      </button>
+      <button
+        className={`control-button ${
+          view === "leaderboard" ? "border-faithful" : ""
+        }`}
+        onClick={onLeaderboard}
+        type="button"
+      >
+        Leaderboard
       </button>
       <div className="ml-auto flex items-center gap-2 text-sm font-semibold uppercase text-faithful">
         <span className="h-2 w-2 rounded-full bg-faithful" />

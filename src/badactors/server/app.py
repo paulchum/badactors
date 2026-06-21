@@ -13,6 +13,11 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from badactors.persistence import SQLiteEventStore
+from badactors.platform.leaderboard import (
+    LeaderboardService,
+    leaderboard_payload,
+    records_from_events,
+)
 from badactors.runner import cast_from_mapping, default_mock_provider, run_game
 from badactors.schemas import Event
 
@@ -25,9 +30,14 @@ class EventSink(SQLiteEventStore):
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._create_tables()
         self._subscribers: dict[str, list[asyncio.Queue[Event]]] = {}
+        self.leaderboard = LeaderboardService()
+        self._completed_games: set[str] = set()
 
     def append(self, event: Event) -> None:
         super().append(event)
+        if event.type == "GameOver" and event.game_id not in self._completed_games:
+            self.leaderboard.record_game(records_from_events(self.load(event.game_id)))
+            self._completed_games.add(event.game_id)
         self.emit(event)
 
     def emit(self, event: Event) -> None:
@@ -89,6 +99,10 @@ def create_app(event_sink: EventSink | None = None) -> FastAPI:
             "game_id": game_id,
             "events": [_event_payload(event) for event in events],
         }
+
+    @api.get("/leaderboard")
+    async def get_leaderboard() -> dict[str, object]:
+        return leaderboard_payload(sink.leaderboard.current())
 
     @api.post("/games/{game_id}/replay")
     async def replay_game(game_id: str) -> dict[str, object]:

@@ -13,3 +13,4 @@ Prompt 11 complete: implemented deterministic clip moment detection, make-clips 
 Prompt 12 complete: implemented prompt-only submission intake, moderation, and trusted wrapper; tests pass: pytest tests/test_submissions.py -q, mypy src/badactors/platform/submissions.py.
 Prompt 13 complete: implemented cost-bounded auditions and host casting with secret Traitor designation; tests pass: pytest tests/test_casting.py -q, mypy src/badactors/platform/audition.py src/badactors/host/host.py.
 Prompt 14 complete: implemented cross-game memory persistence, scoped injection, wipe/throttle behavior, and budget ladder; tests pass: pytest tests/test_ladder.py -q, mypy src/badactors/platform/ladder.py.
+Prompt 15 complete: implemented deterministic leaderboard ratings, /leaderboard API, and frontend leaderboard page; tests pass: pytest tests/test_leaderboard.py -q, npm run build, mypy src/badactors/platform/leaderboard.py.
