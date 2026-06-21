@@ -5,3 +5,4 @@ Prompt 4 complete: implemented provider protocol, OpenRouter provider, determini
 Prompt 5 complete: implemented deterministic engine events, rules, and state transitions; tests pass: pytest tests/test_engine.py -q, mypy src/badactors/engine.
 Prompt 6 complete: implemented scoped context construction and leakage checks; tests pass: pytest tests/test_scoping.py -q, mypy src/badactors/scoping.py.
 Prompt 7 complete: implemented agent prompt assembly and turn loop; tests pass: pytest tests/test_agent.py -q, mypy src/badactors/agents.
+Prompt 8 complete: implemented host narration boundary; tests pass: pytest tests/test_host.py -q, mypy src/badactors/host.
