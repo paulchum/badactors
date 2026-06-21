@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -211,7 +210,9 @@ class EconomyService:
 
         winning_outcome = self._winning_outcome(game, market, winning_role)
         winners = [
-            position for position in market.positions if position.outcome == winning_outcome
+            position
+            for position in market.positions
+            if position.outcome == winning_outcome
         ]
         if not winners:
             self._credit(
@@ -300,7 +301,11 @@ class EconomyService:
         if account_id not in self._wallets:
             self._wallets[account_id] = self._starting_balance
             self.ledger.append(
-                LedgerEntry(account_id=account_id, amount=self._starting_balance, reason="mint")
+                LedgerEntry(
+                    account_id=account_id,
+                    amount=self._starting_balance,
+                    reason="mint",
+                )
             )
         return self._wallets[account_id]
 
