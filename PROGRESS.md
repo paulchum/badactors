@@ -8,3 +8,4 @@ Prompt 7 complete: implemented agent prompt assembly and turn loop; tests pass: 
 Prompt 8 complete: implemented host narration boundary; tests pass: pytest tests/test_host.py -q, mypy src/badactors/host.
 Runner milestone complete: implemented SQLite persistence, full mock game runner, example cast, and CLI; tests pass: pytest tests/test_runner.py -q, run-game --cast configs/cast.example.yaml.
 Prompt 9 complete: implemented FastAPI game records, SSE stream, and replay sink; tests pass: pytest tests/test_server.py -q, mypy src/badactors/server.
+Prompt 10 complete: implemented spectator frontend with live SSE, public-vs-diary view, conclave/reveal panels, replay mode, and Vitest coverage; tests pass: npm run build, npm run test.
