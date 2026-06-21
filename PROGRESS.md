@@ -3,3 +3,4 @@ Prompt 2 complete: initialized git, updated README and CHANGELOG, and checks pas
 Prompt 3 complete: implemented Pydantic v2 schema data contract and tests pass: pytest tests/test_schemas.py -q, mypy src/badactors/schemas.py.
 Prompt 4 complete: implemented provider protocol, OpenRouter provider, deterministic mock provider, README/CHANGELOG updates, and tests pass: pytest tests/test_providers.py -q, mypy src/badactors/providers.
 Prompt 5 complete: implemented deterministic engine events, rules, and state transitions; tests pass: pytest tests/test_engine.py -q, mypy src/badactors/engine.
+Prompt 6 complete: implemented scoped context construction and leakage checks; tests pass: pytest tests/test_scoping.py -q, mypy src/badactors/scoping.py.
