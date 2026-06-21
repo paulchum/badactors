@@ -17,6 +17,9 @@ dependencies = [
   "uvicorn",
 ]
 
+[project.scripts]
+run-game = "badactors.runner:main"
+
 [dependency-groups]
 dev = [
   "hypothesis",
@@ -47,4 +50,3 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 warn_unused_configs = true
-
