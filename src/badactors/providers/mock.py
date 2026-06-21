@@ -27,9 +27,7 @@ class MockProvider:
         phase_resolver: PhaseResolver | None = None,
         responder: MockResponder | None = None,
     ) -> None:
-        self._queues = {
-            key: deque(values) for key, values in (scripts or {}).items()
-        }
+        self._queues = {key: deque(values) for key, values in (scripts or {}).items()}
         self._phase = phase
         self._phase_resolver = phase_resolver
         self._responder = responder

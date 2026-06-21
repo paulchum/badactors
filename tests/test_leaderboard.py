@@ -29,9 +29,7 @@ def test_ratings_deterministic_from_records() -> None:
     second = compute_ratings(tuple(tuple(record for record in game) for game in games))
 
     assert second == first
-    assert [entry.id for entry in first.agents] == [
-        entry.id for entry in second.agents
-    ]
+    assert [entry.id for entry in first.agents] == [entry.id for entry in second.agents]
 
 
 def test_traitor_win_weighted_more() -> None:

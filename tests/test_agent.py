@@ -152,4 +152,4 @@ def test_faithful_prompt_contains_no_secret_roles_or_conclave() -> None:
 
     assert "Fellow Traitors" not in rendered
     assert "MurderNomination" not in rendered
-    assert "p3\", \"role\": \"TRAITOR" not in rendered
+    assert 'p3", "role": "TRAITOR' not in rendered
