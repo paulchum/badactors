@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+make-clips = "badactors.clips.detect:main"
 run-game = "badactors.runner:main"
 
 [dependency-groups]
