@@ -1,46 +1,76 @@
 # Bad Actors
 
-Bad Actors is an AI social-deduction simulation scaffold. Frontier-model agents will play a hidden-role game while a deterministic engine referees state transitions.
+Frontier AI models play a hidden-role social-deduction game. The audience sees each player's public speech and its private diary, so you can watch the lie and the truth underneath.
 
 ## Status
 
-This repository currently contains the Python 3.12 package scaffold, project constitution, CI workflow, Pydantic v2 schemas for the Bad Actors data contract, and the model provider boundary. Engine, scoping, and application behavior have not been implemented yet.
+- **Hidden-role game:** deterministic engine, scoped prompts with a leakage test, OpenRouter and mock providers, SQLite persistence, spectator UI, seasons, OpenSkill ratings and clip detection. The game is talk-only: speak, nominate, vote, murder.
+- **Persistent village:** residents with needs, places, trade and memories, advanced by a background worker. Residents can enter the hidden-role game and carry the result home.
+- **Not done yet:** no games against real models so far; every stored decision came from the demo provider. The simulated-world version with missions, evidence and traitor sabotage tools is specified in [SPEC.md](SPEC.md).
 
-## Data Contract
+## Run it
 
-The canonical schema definitions live in `src/badactors/schemas.py`. They include the role, phase, and visibility enums, player and event models, the discriminated `Action` union, agent turn output, game state, and scoped context models.
-
-## Setup
-
-Install dependencies with `uv sync`.
-
-Run the validation suite:
+Needs Python 3.12+, [uv](https://docs.astral.sh/uv/) and Node.
 
 ```sh
-ruff check
-ruff format --check
-mypy src
-pytest -q
+uv sync
+uv run uvicorn badactors.server.app:app --host 127.0.0.1 --port 8000
 ```
-
-Run the schema contract checks:
 
 ```sh
-pytest tests/test_schemas.py -q
-mypy src/badactors/schemas.py
+cd frontend
+npm ci
+npm run dev
 ```
 
-Run the provider checks with `OPENROUTER_API_KEY` unset for offline tests:
+Open the Vite URL, create a demo world and run some ticks. Games from the command line use the mock provider:
 
 ```sh
-pytest tests/test_providers.py -q
-mypy src/badactors/providers
+uv run run-game --cast configs/cast.example.yaml --db data/badactors.sqlite3
+uv run run-season --cast configs/cast.example.yaml --games 3 --season-id demo
 ```
 
-## Providers
+## Real models
 
-Provider integrations implement `ModelProvider.complete(messages, schema, model, budget)`. `OpenRouterProvider` uses async `httpx`, validates responses against the requested Pydantic schema, retries once after parse failure, and reads `OPENROUTER_API_KEY` from the environment for live games. `MockProvider` returns deterministic scripted schema-valid results for tests and CI.
+Set these for the API and any separate worker:
 
-## License
+| Variable | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | Provider key; stays server-side |
+| `BADACTORS_MODELS` | Comma-separated allowlist of OpenRouter model IDs |
+| `BADACTORS_API_TOKEN` | Owner token; required on every route except health when set |
+| `BADACTORS_DB` | SQLite path (default `data/badactors.sqlite3`) |
+| `BADACTORS_WORKER` | Set to `0` to run the worker as a separate process: `uv run python -m badactors.simulation.worker` |
 
-Licensed under Apache-2.0.
+A small, budgeted live run (makes paid calls):
+
+```sh
+uv run python scripts/run_live_world_smoke.py --env-file .env --model <provider/model> --ticks 2 --max-requests 24
+```
+
+## World API
+
+| Route | Purpose |
+|---|---|
+| `POST /worlds` | Create a demo or live world |
+| `GET /worlds/template` | Default residents and the model allowlist |
+| `GET /worlds/{id}` | Public world state |
+| `POST /worlds/{id}/control` | `step`, `pause`, or `run` a bounded number of ticks |
+| `PUT /worlds/{id}/settings` | Tick speed, model allowance, token cap |
+| `GET /worlds/{id}/events?after=0&limit=100` | Event journal (cursor) |
+| `GET /worlds/{id}/residents/{rid}` | Owner-only private state and scoped perception |
+| `POST /worlds/{id}/arena` | Run or resume a hidden-role game from the world |
+| `GET /worlds/{id}/report` · `/export` | Operational report · state snapshot |
+
+The API binds to localhost. Put an authenticated TLS gateway in front of it before exposing it anywhere.
+
+## Checks
+
+```sh
+uv run pytest -q && uv run mypy src && uv run ruff check && uv run ruff format --check
+uv run python scripts/verify_persistent_worlds.py
+uv run python scripts/verify_world_lifecycle.py
+cd frontend && npm run test && npm run build
+```
+
+Apache-2.0.

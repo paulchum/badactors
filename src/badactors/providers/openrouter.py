@@ -101,12 +101,13 @@ class OpenRouterProvider:
         }
 
         if self._structured_outputs:
+            body["provider"] = {"require_parameters": True}
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema.__name__,
                     "strict": True,
-                    "schema": schema.model_json_schema(),
+                    "schema": _strict_schema(schema.model_json_schema()),
                 },
             }
 
@@ -194,3 +195,27 @@ class OpenRouterProvider:
                 f"schema. Return corrected JSON only. Validation error: {error}"
             ),
         )
+
+
+def _strict_schema(value: object) -> object:
+    """Adapt the transport schema without changing the domain contracts.
+
+    Strict providers require every property in required and reject open objects;
+    discriminated action variants remain exclusive through their literal kinds.
+    """
+    if isinstance(value, list):
+        return [_strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: _strict_schema(item)
+        for key, item in value.items()
+        if key not in {"default", "discriminator"}
+    }
+    if "oneOf" in result:
+        result["anyOf"] = result.pop("oneOf")
+    properties = result.get("properties")
+    if result.get("type") == "object" and isinstance(properties, dict):
+        result["additionalProperties"] = False
+        result["required"] = list(properties)
+    return result

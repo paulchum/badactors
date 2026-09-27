@@ -1,0 +1,119 @@
+{
+  "id": "my-commons",
+  "name": "My Commons",
+  "seed": 13,
+  "provider": "demo",
+  "residents": [
+    {
+      "id": "mara",
+      "name": "Mara",
+      "model": "demo",
+      "persona": "A patient engineer who values useful work.",
+      "goal": "Build a reserve of 30 coins and help a neighbor.",
+      "objectives": [
+        {
+          "kind": "coins",
+          "target": 30,
+          "progress": 0,
+          "completed_tick": null
+        },
+        {
+          "kind": "community_work",
+          "target": 2,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    },
+    {
+      "id": "sol",
+      "name": "Sol",
+      "model": "demo",
+      "persona": "A generous gardener who notices scarcity.",
+      "goal": "Keep a food reserve and feed someone who needs it.",
+      "objectives": [
+        {
+          "kind": "food_given",
+          "target": 4,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    },
+    {
+      "id": "iris",
+      "name": "Iris",
+      "model": "demo",
+      "persona": "An outgoing organizer with a long memory.",
+      "goal": "Build relationships with three different neighbors.",
+      "objectives": [
+        {
+          "kind": "connections",
+          "target": 3,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    },
+    {
+      "id": "knox",
+      "name": "Knox",
+      "model": "demo",
+      "persona": "A competitive craftsperson who wants independence.",
+      "goal": "Earn 40 coins without running out of food.",
+      "objectives": [
+        {
+          "kind": "coins",
+          "target": 40,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    },
+    {
+      "id": "june",
+      "name": "June",
+      "model": "demo",
+      "persona": "A curious observer who asks careful questions.",
+      "goal": "Explore every place and get to know the residents.",
+      "objectives": [
+        {
+          "kind": "places_visited",
+          "target": 5,
+          "progress": 0,
+          "completed_tick": null
+        },
+        {
+          "kind": "connections",
+          "target": 3,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    },
+    {
+      "id": "ash",
+      "name": "Ash",
+      "model": "demo",
+      "persona": "A restless explorer who repays favors.",
+      "goal": "Travel widely and share food with a new friend.",
+      "objectives": [
+        {
+          "kind": "places_visited",
+          "target": 5,
+          "progress": 0,
+          "completed_tick": null
+        },
+        {
+          "kind": "food_given",
+          "target": 2,
+          "progress": 0,
+          "completed_tick": null
+        }
+      ]
+    }
+  ],
+  "tick_seconds": 3.0,
+  "max_model_requests": 1000,
+  "max_tokens": 400
+}

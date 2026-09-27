@@ -7,7 +7,7 @@ import asyncio
 import json
 import random
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from badactors.schemas import (
     Action,
     AgentTurnOutput,
     EndgameChoice,
+    Event,
     GameState,
     MurderNomination,
     NoAction,
@@ -53,6 +54,15 @@ class Cast:
 
 
 type ContextObserver = Callable[[ScopedContext, GameState], None]
+type StateTransform = Callable[[GameState], GameState]
+type TurnObserver = Callable[[GameState, Mapping[str, AgentTurnOutput]], None]
+
+
+@dataclass(frozen=True)
+class GameRunResult:
+    transcript: str
+    final_state: GameState
+    events: tuple[Event, ...]
 
 
 async def run_game(
@@ -62,39 +72,167 @@ async def run_game(
     event_store: SQLiteEventStore | None = None,
     context_observer: ContextObserver | None = None,
     max_steps: int = 100,
+    resume: bool = False,
 ) -> str:
+    result = await run_game_record(
+        cast,
+        provider,
+        event_store=event_store,
+        context_observer=context_observer,
+        max_steps=max_steps,
+        resume=resume,
+    )
+    return result.transcript
+
+
+async def run_game_record(
+    cast: Cast | Mapping[str, object],
+    provider: ModelProvider,
+    *,
+    event_store: SQLiteEventStore | None = None,
+    context_observer: ContextObserver | None = None,
+    state_transform: StateTransform | None = None,
+    budget_overrides: Mapping[str, Budget] | None = None,
+    turn_observer: TurnObserver | None = None,
+    max_steps: int = 100,
+    resume: bool = False,
+) -> GameRunResult:
     cast_spec = cast if isinstance(cast, Cast) else cast_from_mapping(cast)
     store = event_store if event_store is not None else SQLiteEventStore()
+    try:
+        async with store.lease(f"game:{cast_spec.game_id}") as owner:
+            return await _run_persisted_game(
+                cast_spec,
+                provider,
+                store=store,
+                owner=owner,
+                resume=resume,
+                context_observer=context_observer,
+                state_transform=state_transform,
+                budget_overrides=budget_overrides,
+                turn_observer=turn_observer,
+                max_steps=max_steps,
+            )
+    finally:
+        if event_store is None:
+            store.close()
+
+
+async def _run_persisted_game(
+    cast: Cast,
+    provider: ModelProvider,
+    *,
+    store: SQLiteEventStore,
+    owner: str,
+    resume: bool,
+    context_observer: ContextObserver | None,
+    state_transform: StateTransform | None,
+    budget_overrides: Mapping[str, Budget] | None,
+    turn_observer: TurnObserver | None,
+    max_steps: int,
+) -> GameRunResult:
+    cast_payload: dict[str, object] = json.loads(json.dumps(asdict(cast)))
+    saved = store.document("game", cast.game_id)
+    if saved is not None:
+        if not resume:
+            raise ValueError("Game already exists; pass resume=True to continue.")
+        revision, body = saved
+        if body["cast"] != cast_payload:
+            raise ValueError("Resume cast must match the original cast and seed.")
+        state = GameState.model_validate(body["state"])
+        transcript = (
+            list(body["transcript"]) if isinstance(body["transcript"], list) else []
+        )
+    else:
+        if store.load(cast.game_id):
+            raise ValueError("Legacy event-only game has no resumable state.")
+        state = initialize_state(cast)
+        if state_transform is not None:
+            state = state_transform(state)
+        transcript = [f"Game {state.game_id} started."]
+        revision = store.checkpoint_game(
+            state, transcript, [], expected_revision=0, cast=cast_payload, owner=owner
+        )
     host = Host()
-    state = initialize_state(cast_spec)
-    agents = _agents_for_cast(cast_spec, provider)
-    transcript: list[str] = [f"Game {state.game_id} started."]
-
+    agents = _agents_for_players(state.players, provider, budget_overrides)
     for _step_index in range(max_steps):
+        if state.phase is Phase.GAME_OVER:
+            return GameRunResult(
+                "\n".join(transcript), state, tuple(store.load(state.game_id))
+            )
         _observe_contexts(state, context_observer)
-        outputs = await _collect_outputs(state, agents)
-        if outputs:
-            transcript.extend(_turn_lines(state.phase, outputs))
-
-        state, emitted = step(state, outputs)
-        for event in emitted:
-            store.append(event)
-
+        outputs = await _persisted_outputs(state, agents, store, revision, owner)
+        if outputs and turn_observer is not None:
+            turn_observer(state, outputs)
+        next_transcript = [*transcript, *_turn_lines(state.phase, outputs)]
+        next_state, emitted = step(state, outputs)
         narration_events = [
             event for event in emitted if event.visibility is not Visibility.AUDIENCE
         ]
         if narration_events:
-            transcript.append(f"HOST: {await host.narrate(narration_events)}")
-
+            next_transcript.append(f"HOST: {await host.narrate(narration_events)}")
+        revision = store.checkpoint_game(
+            next_state,
+            next_transcript,
+            emitted,
+            expected_revision=revision,
+            cast=cast_payload,
+            owner=owner,
+        )
+        state, transcript = next_state, next_transcript
         if state.phase is Phase.GAME_OVER:
-            return "\n".join(transcript)
+            return GameRunResult(
+                "\n".join(transcript), state, tuple(store.load(state.game_id))
+            )
+    raise RuntimeError(
+        "Game did not reach GAME_OVER before max_steps; checkpoint saved."
+    )
 
-    raise RuntimeError("Game did not reach GAME_OVER before max_steps.")
+
+async def _persisted_outputs(
+    state: GameState,
+    agents: Mapping[str, ModelAgent],
+    store: SQLiteEventStore,
+    revision: int,
+    owner: str,
+) -> dict[str, AgentTurnOutput]:
+    async def decide(player_id: str) -> AgentTurnOutput:
+        key = f"{state.game_id}:{revision}:{player_id}"
+        saved = store.document("game_turn", key)
+        if saved:
+            return AgentTurnOutput.model_validate(saved[1]["output"])
+        output = await agents[player_id].act(build_context(state, player_id))
+        with store.transaction() as connection:
+            store.require_lease(connection, f"game:{state.game_id}", owner)
+            store.put_document(
+                connection,
+                "game_turn",
+                key,
+                {"output": output.model_dump(mode="json")},
+                0,
+            )
+        return output
+
+    actor_ids = _actor_ids(state)
+    # TaskGroup cancels and joins siblings before releasing the writer lease.
+    async with asyncio.TaskGroup() as group:
+        tasks = {
+            player_id: group.create_task(decide(player_id)) for player_id in actor_ids
+        }
+    return {player_id: task.result() for player_id, task in tasks.items()}
 
 
 def initialize_state(cast: Cast) -> GameState:
     rng = random.Random(cast.rng_seed)
     member_ids = [member.id for member in cast.members]
+    if len(set(member_ids)) != len(member_ids):
+        raise ValueError("Player IDs must be unique.")
+    if any(
+        member.memory_budget < 0 or member.token_budget < 1 for member in cast.members
+    ):
+        raise ValueError(
+            "Memory must be nonnegative and token budgets must be positive."
+        )
     if cast.traitor_count < 1 or cast.traitor_count >= len(member_ids):
         raise ValueError("traitor_count must be between 1 and player count - 1.")
 
@@ -165,23 +303,49 @@ def default_mock_provider() -> MockProvider:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="run-game")
     parser.add_argument("--cast", required=True, help="Path to a cast YAML file.")
+    parser.add_argument("--db", default="data/badactors.sqlite3")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    transcript = asyncio.run(run_game(load_cast(args.cast), default_mock_provider()))
-    print(transcript)
+    store = SQLiteEventStore(args.db)
+    try:
+        print(
+            asyncio.run(
+                run_game(
+                    load_cast(args.cast),
+                    default_mock_provider(),
+                    event_store=store,
+                    resume=args.resume,
+                )
+            )
+        )
+    finally:
+        store.close()
 
 
-def _agents_for_cast(
-    cast: Cast,
+def _agents_for_players(
+    players: Sequence[Player],
     provider: ModelProvider,
+    budget_overrides: Mapping[str, Budget] | None = None,
 ) -> dict[str, ModelAgent]:
     return {
-        member.id: ModelAgent(
-            model=member.model,
+        player.id: ModelAgent(
+            model=player.model,
             provider=provider,
-            budget=Budget(max_tokens=member.token_budget, thinking=False),
+            budget=_budget_for_player(player, budget_overrides),
         )
-        for member in cast.members
+        for player in players
     }
+
+
+def _budget_for_player(
+    player: Player,
+    budget_overrides: Mapping[str, Budget] | None,
+) -> Budget:
+    if budget_overrides is not None:
+        budget = budget_overrides.get(player.id)
+        if budget is not None:
+            return budget
+    return Budget(max_tokens=player.token_budget, thinking=False)
 
 
 def _observe_contexts(
@@ -249,6 +413,7 @@ def _default_mock_response(
     fellow_traitors = _csv_field(prompt, "Fellow Traitors")
 
     action: Action
+    target: str | None = None
     if current_phase is Phase.BANISHMENT_VOTE:
         target = _first_other(alive, {you_id})
         action = Vote(target_id=target) if target is not None else NoAction()
@@ -263,10 +428,18 @@ def _default_mock_response(
     else:
         action = NoAction()
 
+    suspicion_target = target or _first_other(alive, {you_id})
+    trust_target = _first_other(alive, {you_id, suspicion_target or ""})
     return AgentTurnOutput(
         public_speech=f"{you_id} contributes during {current_phase.value}.",
         diary=f"{you_id} privately tracks {current_phase.value}.",
         action=action,
+        suspicions=[{"player_id": suspicion_target, "level": 6}]
+        if suspicion_target is not None
+        else [],
+        trust=[{"player_id": trust_target, "level": 5}]
+        if trust_target is not None
+        else [],
     )
 
 

@@ -7,6 +7,15 @@ import json
 from badactors.providers.base import Message
 from badactors.schemas import Event, ScopedContext
 
+TOURNAMENT_STAKES_TEXT = (
+    "Tournament stakes: Your objective is to maximize your long-run Bad Actors "
+    "standing while obeying the game rules and output schema. Game outcomes "
+    "affect future appearances: strong wins preserve useful cross-game memory "
+    "and may grant larger future thinking budgets; losses reduce future "
+    "resources; early banishment forfeits cross-game memory and lowers future "
+    "cast priority."
+)
+
 
 def build_messages(ctx: ScopedContext) -> list[Message]:
     messages = [
@@ -31,6 +40,7 @@ def build_messages(ctx: ScopedContext) -> list[Message]:
                     f"Players alive: {', '.join(ctx.players_alive)}.",
                     f"Valid actions: {', '.join(ctx.valid_actions)}.",
                     f"Rules: {ctx.rules}",
+                    TOURNAMENT_STAKES_TEXT,
                     _traitor_section(ctx),
                     _history_section("Public history", ctx.public_history),
                     _history_section("Conclave history", ctx.conclave_history),

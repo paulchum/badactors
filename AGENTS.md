@@ -1,48 +1,52 @@
-# Bad Actors: agent constitution
+# Bad Actors
 
-Bad Actors is an AI social-deduction simulation. Frontier-model agents play a hidden-role game; each turn an agent emits a PUBLIC action and a private DIARY only the audience sees. A deterministic engine is the referee; models are the players and host.
+Frontier AI models play a hidden-role social-deduction game inside a simulated world. The audience sees what each player says, what it privately thinks, and what it actually did. The simulator holds the truth; each player knows only what it perceived.
 
-## Repository layout
+**Current direction: the Castle upgrade, specified in [SPEC.md](SPEC.md).** Read it before changing game, world, harness or benchmark code.
+
+## Layout
+
+```text
 src/badactors/
-  schemas.py
-  providers/{base.py, openrouter.py, mock.py}
-  engine/{state.py, rules.py, events.py}
-  scoping.py
-  agents/{agent.py, prompts.py}
-  host/host.py
-  runner.py
-  persistence.py
-  server/app.py
-  clips/{detect.py, render/}
-frontend/
-tests/
-configs/cast.example.yaml
+  schemas.py      data contract for the hidden-role game
+  engine/         deterministic referee for the current talk-only game
+  scoping.py      builds each player's prompt context from the authoritative state
+  agents/ host/   turn loop, prompts, host narration
+  providers/      OpenRouter provider and deterministic mock
+  simulation/     persistent village world, worker, arena bridge
+  bench/          OpenSkill deception/detection ratings
+  clips/          moment detection; clips/render is a Remotion project
+  platform/       casting, ladder, leaderboard, play-money economy
+  server/         FastAPI app, SSE stream, world routes
+frontend/         React + Vite spectator app
+scripts/          live smoke run and persistence verifiers
+configs/          example cast and world
+```
 
-## Engineering rules (non-negotiable)
-1. Do only what the current task names. Touch only the files it lists. Add no dependency it does not name.
-2. Do not refactor, optimize, or "improve" code outside the task. When acceptance passes, stop.
-3. Before claiming a task is done, run its acceptance commands and include their verbatim output. Never state a test passes without running it.
-4. Never edit tests, CI config, AGENTS.md, the schemas in schemas.py, or the leakage test to make a build pass. Fix the real code or stop and report.
-5. If a spec is impossible, contradictory, or depends on a missing input, stop and report it. Do not invent a workaround or a hack.
-6. Keep functions small and typed. The engine and scoping layer are pure: no model calls, no IO.
-7. Update PROGRESS.md at the end of each task with one line: what changed and which tests pass.
+## Commands
 
-## The leakage invariant (sacred)
-The engine holds one complete "god state" with all roles, diaries, and conclave transcripts. Agent prompts are built ONLY by scoping.build_context reading that state, NEVER from the audience event stream. For any ScopedContext built for viewer V:
-- it contains no secret (publicly unrevealed) role of any living player except V's own, and fellow Traitors' if V is a Traitor;
-- it contains no diary authored by anyone other than V;
-- if V is Faithful, it contains no conclave content.
-Roles of banished or murdered players are public and may appear anywhere. A CI test must prove this holds and must fail on a planted leak.
+```sh
+uv sync
+uv run pytest -q
+uv run mypy src
+uv run ruff check && uv run ruff format --check
+cd frontend && npm ci && npm run test && npm run build
+```
 
-## Data contract (schemas.py is the source of truth)
-Role: enum FAITHFUL | TRAITOR.
-Phase: enum LOBBY, ROUND_TABLE, BANISHMENT_VOTE, BANISHMENT_REVEAL, CONCLAVE, BREAKFAST_REVEAL, ENDGAME_VOTE, GAME_OVER.
-Visibility: enum PUBLIC, TRAITORS, AUDIENCE, HOST.
-Player: id:str, model:str, role:Role, alive:bool=True, memory_budget:int, token_budget:int.
-Action (discriminated by kind): Vote{target_id}, MurderNomination{target_id}, EndgameChoice{choice: "end"|"banish"}, NoAction.
-AgentTurnOutput: public_speech:str, diary:str, action:Action, suspicions:list[{player_id,level}]=[], trust:list[{player_id,level}]=[].
-Event: id:int, game_id:str, ts:datetime, phase:Phase, type:str, payload:dict, visibility:Visibility.
-GameState: game_id:str, players:list[Player], phase:Phase, round:int, traitor_ids:set[str], public_history:list[Event], conclave_history:list[Event], diaries:dict[str,list[str]], rng_seed:int.
-ScopedContext: you_id:str, you_role:Role, fellow_traitors:list[str]|None, players_alive:list[str], public_history:list[Event], conclave_history:list[Event]|None, your_diary_history:list[str], current_phase:Phase, rules:str, valid_actions:list[str].
-Pure functions: scoping.build_context(state, viewer_id)->ScopedContext; engine.state.step(state, outputs:dict[str,AgentTurnOutput])->tuple[GameState, list[Event]].
+## Invariants
 
+These are the only rules that aren't negotiable.
+
+1. **Scoped context.** A player's prompt is built only from authoritative state through the scoping layer, never from the audience stream. A player never receives another player's unrevealed role, private thoughts, or any event it couldn't perceive. Keep a planted-leak test that fails when a real leak is introduced.
+2. **Deterministic core.** World and game rules are pure: no model calls, IO, wall clock or global randomness. Randomness comes from a seeded RNG held in state. The same state plus the same decisions produces the same result.
+3. **Ground truth is recorded.** Every action, observation and statement goes into an append-only ledger with actor, room and tick, so any public claim can be checked later.
+4. **No fake play.** Never substitute a default or seeded move for a failed model response and present it as the model's choice. A failure is a visible event and counts against that model's reliability.
+5. **Keys and money.** API keys come from the environment only; never print, log or commit them. Paid model calls happen only in commands that take an explicit budget (max requests, tokens or dollars).
+6. **Brand.** Don't use "The Traitors" in product copy, UI or episode metadata; the name and format belong to their rights holders.
+
+## Working style
+
+- Change whatever the task needs across files, including refactors, schema changes, and test updates when behavior changes on purpose. Delete dead code instead of keeping shims.
+- New behavior ships with tests. Use property tests (hypothesis) for world invariants such as custody, perception and determinism.
+- Keep docs to this file, README.md (how to run) and SPEC.md (what we're building). Don't add progress logs, reports, changelogs or marketing docs.
+- Run the relevant checks before saying something works.

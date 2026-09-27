@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "badactors"
 version = "0.1.0"
-description = "AI social-deduction simulation scaffold."
+description = "AI social-deduction arena where frontier-model agents play a hidden-role game and the audience watches them lie."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 make-clips = "badactors.clips.detect:main"
 run-game = "badactors.runner:main"
+run-season = "badactors.season:main"
 
 [dependency-groups]
 dev = [

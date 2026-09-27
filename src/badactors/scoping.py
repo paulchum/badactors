@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 
 from badactors.engine.rules import valid_actions
 from badactors.schemas import Event, GameState, Player, Role, ScopedContext, Visibility
+from badactors.simulation.models import WorldContext, WorldState
 
 RULES_TEXT = (
     "Play the hidden-role social deduction game. Speak publicly, keep a private "
@@ -171,3 +172,68 @@ def _player_by_id(players: Iterable[Player], player_id: str) -> Player:
         if player.id == player_id:
             return player
     raise ValueError(f"Unknown player id: {player_id}")
+
+
+def build_world_context(state: WorldState, viewer_id: str) -> WorldContext:
+    """Read local perception and only the viewer's memory from the world state.
+
+    Audience journal entries, other residents' goals, resources, reflections and
+    relationships are never used to construct a resident prompt.
+    """
+    viewer = state.residents[viewer_id]
+    place = state.places[viewer.location]
+    nearby = [
+        {"id": resident.id, "name": resident.name}
+        for resident in sorted(state.residents.values(), key=lambda item: item.id)
+        if resident.location == viewer.location and resident.id != viewer_id
+    ]
+    actions = ["rest"]
+    if viewer.food:
+        actions.append("eat")
+    hunger_after_tick = min(100, viewer.hunger + 4)
+    energy_after_tick = max(0, viewer.energy - (8 if hunger_after_tick >= 90 else 2))
+    if energy_after_tick >= 10:
+        actions.extend(f"move:{location}" for location in place.neighbors)
+        if place.id == "garden" and place.food and viewer.food < 12:
+            actions.append("harvest")
+        if place.id == "workshop" and energy_after_tick >= 14:
+            actions.append("work")
+        if place.id == "hearth":
+            if viewer.coins >= 2 and viewer.food < 12 and place.food:
+                actions.append("buy")
+            if viewer.food and place.food < place.capacity and place.coins:
+                actions.append("sell")
+        if viewer.coins >= 2 and any(
+            project.location == viewer.location and project.level < project.max_level
+            for project in state.projects.values()
+        ):
+            actions.append("build")
+        for resident in nearby:
+            actions.append(f"talk:{resident['id']}")
+            if viewer.food:
+                actions.append(f"give:{resident['id']}")
+    return WorldContext(
+        world_name=state.name,
+        tick=state.tick,
+        time_of_day=("morning", "afternoon", "evening", "night")[
+            (state.tick % 24) // 6
+        ],
+        you=viewer.model_copy(deep=True),
+        place=place.model_copy(deep=True),
+        nearby=nearby,
+        map=[
+            {
+                "id": item.id,
+                "name": item.name,
+                "neighbors": list(item.neighbors),
+                "description": item.description,
+            }
+            for item in sorted(state.places.values(), key=lambda item: item.id)
+        ],
+        valid_actions=actions,
+        local_projects=[
+            project.model_copy(deep=True)
+            for project in state.projects.values()
+            if project.location == viewer.location
+        ],
+    )
