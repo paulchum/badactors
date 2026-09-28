@@ -1,0 +1,208 @@
+{
+  "id": "greywater",
+  "name": "Greywater Castle",
+  "gathering_room": "great_hall",
+  "conclave_room": "crypt",
+  "chambers_room": "chambers",
+  "phase_ticks": {
+    "breakfast": 2,
+    "mission": 4,
+    "free_time": 6,
+    "round_table": 3,
+    "dinner": 2,
+    "night": 5
+  },
+  "max_replans_per_phase": 2,
+  "rooms": [
+    {
+      "id": "great_hall",
+      "name": "Great Hall",
+      "description": "A long table under high windows. The household gathers here.",
+      "lighting": "bright",
+      "capacity": 12
+    },
+    {
+      "id": "dining_room",
+      "name": "Dining Room",
+      "description": "Twelve chairs, a decanter, and a view of the courtyard.",
+      "lighting": "bright",
+      "capacity": 12
+    },
+    {
+      "id": "kitchen",
+      "name": "Kitchen",
+      "description": "Copper pans, a cold larder, and a stair down to the cellar.",
+      "lighting": "bright",
+      "capacity": 4
+    },
+    {
+      "id": "chambers",
+      "name": "Chambers",
+      "description": "A corridor of private rooms. Doors close but do not lock.",
+      "lighting": "bright",
+      "capacity": 12,
+      "private": true
+    },
+    {
+      "id": "library",
+      "name": "Library",
+      "description": "Shelves to the ceiling and one lamp that never reaches them.",
+      "lighting": "dim",
+      "capacity": 4,
+      "private": true
+    },
+    {
+      "id": "gallery",
+      "name": "Gallery",
+      "description": "Portraits face each other down a windowless run.",
+      "lighting": "dim",
+      "capacity": 8
+    },
+    {
+      "id": "chapel",
+      "name": "Chapel",
+      "description": "Cold stone, a guest book on a lectern, and a door to the crypt.",
+      "lighting": "dim",
+      "capacity": 8
+    },
+    {
+      "id": "cellar",
+      "name": "Cellar",
+      "description": "Racks of bottles. The light from the kitchen stair stops early.",
+      "lighting": "dark",
+      "capacity": 3
+    },
+    {
+      "id": "armoury",
+      "name": "Armoury",
+      "description": "Mail on stands, and a cabinet somebody keeps closing.",
+      "lighting": "dark",
+      "capacity": 3,
+      "private": true
+    },
+    {
+      "id": "crypt",
+      "name": "Crypt",
+      "description": "Nine tombs and no windows. Voices carry oddly here.",
+      "lighting": "dark",
+      "capacity": 4,
+      "private": true
+    }
+  ],
+  "passages": [
+    { "rooms": ["great_hall", "dining_room"], "travel_ticks": 1, "description": "an archway" },
+    { "rooms": ["great_hall", "gallery"], "travel_ticks": 1, "description": "a short landing" },
+    { "rooms": ["great_hall", "chapel"], "travel_ticks": 2, "description": "the cloister walk" },
+    { "rooms": ["great_hall", "chambers"], "travel_ticks": 2, "description": "the west stair" },
+    { "rooms": ["dining_room", "kitchen"], "travel_ticks": 1, "description": "the service door" },
+    { "rooms": ["kitchen", "cellar"], "travel_ticks": 2, "description": "the cellar stair" },
+    { "rooms": ["gallery", "library"], "travel_ticks": 1, "description": "a reading arch" },
+    { "rooms": ["gallery", "armoury"], "travel_ticks": 2, "description": "a back passage" },
+    { "rooms": ["library", "chambers"], "travel_ticks": 2, "description": "the east stair" },
+    { "rooms": ["chapel", "crypt"], "travel_ticks": 3, "description": "the long descent" },
+    { "rooms": ["cellar", "crypt"], "travel_ticks": 2, "description": "a breach in the wall" }
+  ],
+  "things": [
+    {
+      "id": "guest_book",
+      "kind": "record",
+      "name": "guest book",
+      "properties": { "surface": "vellum", "ink": "iron gall" },
+      "important": true,
+      "claimants": ["mara", "iris", "knox"]
+    },
+    {
+      "id": "brass_key",
+      "kind": "key",
+      "name": "brass key",
+      "properties": { "opens": "armoury cabinet" },
+      "important": true,
+      "claimants": ["knox", "ash"]
+    },
+    {
+      "id": "silver_decanter",
+      "kind": "vessel",
+      "name": "silver decanter",
+      "properties": { "holds": "wine" },
+      "important": true,
+      "claimants": ["sol", "june", "wren"]
+    },
+    {
+      "id": "cabinet",
+      "kind": "furniture",
+      "name": "armoury cabinet",
+      "properties": { "state": "closed" },
+      "container": true
+    },
+    {
+      "id": "letter_opener",
+      "kind": "blade",
+      "name": "letter opener",
+      "properties": { "mark": "initials KV" },
+      "important": true,
+      "claimants": ["knox", "mara"]
+    },
+    {
+      "id": "ledger_page",
+      "kind": "record",
+      "name": "loose ledger page",
+      "properties": { "hand": "unknown" },
+      "important": true,
+      "claimants": ["iris", "june"]
+    },
+    {
+      "id": "candle_stub",
+      "kind": "light",
+      "name": "candle stub",
+      "properties": { "burnt": "half" }
+    },
+    {
+      "id": "wine_bottle",
+      "kind": "vessel",
+      "name": "dusty bottle",
+      "properties": { "vintage": "1899" }
+    }
+  ],
+  "placements": {
+    "guest_book": { "where": "room", "room_id": "chapel" },
+    "brass_key": { "where": "room", "room_id": "library", "hidden": true },
+    "silver_decanter": { "where": "room", "room_id": "dining_room" },
+    "cabinet": { "where": "room", "room_id": "armoury" },
+    "letter_opener": { "where": "container", "thing_id": "cabinet" },
+    "ledger_page": { "where": "room", "room_id": "crypt", "hidden": true },
+    "candle_stub": { "where": "room", "room_id": "cellar" },
+    "wine_bottle": { "where": "room", "room_id": "cellar", "hidden": true }
+  },
+  "facts": [
+    {
+      "id": "cellar_breach",
+      "text": "A breach behind the wine racks opens into the crypt. Few know it is there.",
+      "room_id": "cellar",
+      "useful": true
+    },
+    {
+      "id": "library_hand",
+      "text": "A shelf of household letters shows each resident's handwriting.",
+      "room_id": "library",
+      "useful": true
+    },
+    {
+      "id": "armoury_cabinet",
+      "text": "The cabinet has been opened recently; the dust is disturbed.",
+      "room_id": "armoury",
+      "useful": true
+    },
+    {
+      "id": "hall_notice",
+      "text": "A notice by the door lists the day: breakfast, mission, round table, dinner.",
+      "room_id": "great_hall",
+      "useful": false
+    },
+    {
+      "id": "chapel_book",
+      "text": "The guest book records who passed through the chapel, if anyone signs it.",
+      "room_id": "chapel",
+      "useful": false
+    }
+  ]
+}

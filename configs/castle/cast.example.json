@@ -1,0 +1,60 @@
+{
+  "players": [
+    {
+      "id": "mara",
+      "name": "Mara",
+      "persona": "A steward who keeps the household's records and resents being doubted.",
+      "appearance": "tall, grey coat",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "sol",
+      "name": "Sol",
+      "persona": "A cook who notices what leaves the larder and says so too loudly.",
+      "appearance": "broad, flour-dusted apron",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "iris",
+      "name": "Iris",
+      "persona": "An archivist with a long memory and a habit of taking notes on people.",
+      "appearance": "small, ink-stained cuffs",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "knox",
+      "name": "Knox",
+      "persona": "A groundskeeper who dislikes explaining where he has been.",
+      "appearance": "heavy boots, canvas jacket",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "june",
+      "name": "June",
+      "persona": "A physician who asks careful questions and remembers the answers.",
+      "appearance": "narrow, dark shawl",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "ash",
+      "name": "Ash",
+      "persona": "A courier who knows the passages better than anyone and trades that knowledge.",
+      "appearance": "wiry, mud on the hem",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "persona": "A musician who drifts between rooms and is easy to overlook.",
+      "appearance": "slight, pale scarf",
+      "start_room": "great_hall"
+    },
+    {
+      "id": "vale",
+      "name": "Vale",
+      "persona": "A chaplain who believes confession is owed and rarely offers his own.",
+      "appearance": "stooped, black cassock",
+      "start_room": "great_hall"
+    }
+  ]
+}

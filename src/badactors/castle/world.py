@@ -1,0 +1,766 @@
+"""Pure world transitions: one tick, one phase boundary.
+
+Nothing here calls a model, touches IO or reads the clock. Every roll comes from
+the seeded cursor in the state, and players are always resolved in ``state.seats``
+order, so the same state plus the same plans gives the same ledger.
+
+Night is a phase like any other here. Sending the traitors to the conclave and the
+Faithful to their chambers needs roles, which arrive with the game layer; until then
+night is simply five unsupervised ticks, which is the part the world owes it.
+
+Two physical rules are worth stating because they generate most of the evidence.
+A move commits on arrival: a player who has stepped into a passage is in neither
+room until the travel ticks run out, so a long corridor is time nobody can account
+for. And when a phase ends, the remaining steps of a plan are cut — that cut is a
+ledger entry — but a move already underway finishes, because a person in a passage
+has to come out somewhere. Nobody is ever teleported to make a gathering start
+tidily, which is exactly why arriving late is evidence.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Callable
+
+from badactors.castle.contracts import (
+    DAY_ORDER,
+    GATHERINGS,
+    AtRoom,
+    CastlePhase,
+    Drop,
+    HeldBy,
+    InRoom,
+    InTransit,
+    Move,
+    Plan,
+    PlayerState,
+    Step,
+    Take,
+    Talk,
+    Thing,
+    ToolStep,
+    Use,
+    WitnessRecord,
+    WorldState,
+)
+from badactors.castle.ledger import (
+    append,
+    append_perceived,
+    move_object,
+    placement_payload,
+    seed_placements,
+)
+from badactors.castle.perceive import occupants, perceive, visible_things
+
+
+def start(state: WorldState) -> WorldState:
+    """Open the world: record the authored custody and the first phase."""
+    world = state.model_copy(deep=True)
+    seed_placements(world)
+    append(
+        world,
+        type="phase_opened",
+        text=f"Day {world.day}: {_phase_label(world.phase)} begins.",
+        payload={"phase": world.phase, "day": str(world.day)},
+        witnesses=[],
+    )
+    if world.phase in GATHERINGS:
+        _summon(world)
+    return world
+
+
+def submit_plan(state: WorldState, player_id: str, plan: Plan) -> WorldState:
+    """Attach a plan to a player and record that they formed one."""
+    world = state.model_copy(deep=True)
+    player = world.players[player_id]
+    if not player.alive:
+        return world
+    player.plan = plan.model_copy(deep=True)
+    append(
+        world,
+        type="plan_formed",
+        text=f"{player.name} decides: {plan.goal or 'to keep moving'}.",
+        actor_id=player_id,
+        room_id=player.room_id,
+        payload={"steps": str(len(plan.steps)), "goal": plan.goal},
+        witnesses=[
+            _own_record(player_id, player.room_id, f"I plan to {plan.goal or 'act'}.")
+        ],
+    )
+    return world
+
+
+def tick(state: WorldState) -> WorldState:
+    """Advance one tick: every living player takes at most one step."""
+    world = state.model_copy(deep=True)
+    world.tick += 1
+    world.phase_tick += 1
+    for player_id in world.seats:
+        player = world.players[player_id]
+        if not player.alive:
+            continue
+        if isinstance(player.position, InTransit):
+            _advance_transit(world, player)
+            continue
+        if player.plan.steps:
+            step = player.plan.steps.pop(0)
+            _execute(world, player, step)
+    return world
+
+
+def phase_complete(state: WorldState) -> bool:
+    return state.phase_tick >= state.map.phase_ticks.ticks(state.phase)
+
+
+def advance_phase(state: WorldState) -> WorldState:
+    """Close the current phase, cut running plans, and open the next one."""
+    world = state.model_copy(deep=True)
+    _cut_plans(world)
+    index = DAY_ORDER.index(world.phase)
+    if index + 1 < len(DAY_ORDER):
+        world.phase = DAY_ORDER[index + 1]
+    else:
+        world.phase = DAY_ORDER[0]
+        world.day += 1
+    world.phase_tick = 0
+    world.replans = {}
+    append(
+        world,
+        type="phase_opened",
+        text=f"Day {world.day}: {_phase_label(world.phase)} begins.",
+        payload={"phase": world.phase, "day": str(world.day)},
+        witnesses=[],
+    )
+    if world.phase in GATHERINGS:
+        _summon(world)
+    return world
+
+
+def interrupted(state: WorldState, player_id: str, since_seq: int) -> bool:
+    """Whether this player should be re-prompted, budget included."""
+    if not would_interrupt(state, player_id, since_seq):
+        return False
+    return replans_left(state, player_id) > 0
+
+
+def replans_left(state: WorldState, player_id: str) -> int:
+    used = state.replans.get(player_id, 0)
+    return max(0, state.map.max_replans_per_phase - used)
+
+
+def would_interrupt(state: WorldState, player_id: str, since_seq: int) -> bool:
+    """Whether something happened that a five-step plan could not have foreseen.
+
+    Only events that change what a plan can achieve count: another person entering
+    or leaving the room, a step of one's own that failed, an object changing hands
+    in view, or being spoken to. Overheard noise from next door does not, or a
+    crowded room would burn the phase's model calls on nothing.
+    """
+    player = state.players[player_id]
+    if not player.alive:
+        return False
+    if not player.plan.steps:
+        return True
+    for entry in state.ledger:
+        if entry.seq <= since_seq:
+            continue
+        record = entry.record_for(player_id)
+        if record is None:
+            continue
+        if entry.actor_id == player_id:
+            if entry.type == "blocked":
+                return True
+            continue
+        if record.channel != "saw":
+            continue
+        if entry.type in _INTERRUPTING:
+            return True
+        if entry.type == "talk" and entry.payload.get("to") == player_id:
+            return True
+    return False
+
+
+def note_replan(state: WorldState, player_id: str) -> WorldState:
+    world = state.model_copy(deep=True)
+    world.replans[player_id] = world.replans.get(player_id, 0) + 1
+    return world
+
+
+def note_replan_capped(state: WorldState, player_id: str) -> WorldState:
+    """Record that the phase's decision budget, not the player, ended the acting.
+
+    Without this the ledger would show a character standing still and give no
+    reason, which reads exactly like a choice. It is not one.
+    """
+    world = state.model_copy(deep=True)
+    player = world.players[player_id]
+    append(
+        world,
+        type="replan_capped",
+        text=(
+            f"{player.name} had no plan left and no decisions remaining this "
+            f"{_phase_label(world.phase)}."
+        ),
+        actor_id=player_id,
+        room_id=player.room_id,
+        payload={"used": str(world.replans.get(player_id, 0))},
+        witnesses=[
+            _own_record(player_id, player.room_id, "I ran out of time to decide.")
+        ],
+    )
+    return world
+
+
+def valid_actions(state: WorldState, player_id: str) -> list[str]:
+    """Step kinds this player could legally submit right now."""
+    player = state.players[player_id]
+    if not player.alive:
+        return []
+    room_id = player.room_id
+    if room_id is None:
+        return ["wait"]
+    actions = ["wait", "talk", "tool:search"]
+    actions.extend(f"move:{neighbor}" for neighbor in state.map.neighbors(room_id))
+    here = visible_things(state, player_id, room_id)
+    portable = {thing.id for thing in state.map.things if not thing.container}
+    actions.extend(f"take:{thing_id}" for thing_id in here if thing_id in portable)
+    actions.extend(f"use:{thing_id}" for thing_id in here)
+    actions.extend(f"tool:inspect:{thing_id}" for thing_id in here)
+    for thing_id, placement in sorted(state.placements.items()):
+        if isinstance(placement, HeldBy) and placement.player_id == player_id:
+            actions.append(f"drop:{thing_id}")
+            actions.append(f"use:{thing_id}")
+            actions.append(f"tool:inspect:{thing_id}")
+    return sorted(set(actions))
+
+
+# ------------------------------------------------------------------- step engine
+
+_INTERRUPTING: frozenset[str] = frozenset(
+    {"move_arrive", "move_depart", "take", "drop", "stow", "death"}
+)
+
+
+def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
+    room_id = player.room_id
+    if room_id is None:
+        return
+    if isinstance(step, Move):
+        _do_move(world, player, room_id, step)
+    elif isinstance(step, Take):
+        _do_take(world, player, room_id, step)
+    elif isinstance(step, Talk):
+        _do_talk(world, player, room_id, step)
+    elif isinstance(step, ToolStep):
+        _do_tool(world, player, room_id, step)
+    elif isinstance(step, Use):
+        _do_use(world, player, room_id, step)
+    elif isinstance(step, Drop):
+        _do_drop(world, player, room_id, step.thing_id, hidden=step.hidden)
+    else:
+        _do_wait(world, player, room_id, step.reason)
+
+
+def _do_move(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: Move,
+) -> None:
+    travel = world.map.travel_ticks(room_id, step.room_id)
+    if travel is None:
+        _blocked(world, player, room_id, "there is no passage that way")
+        return
+    destination = world.map.room(step.room_id)
+    perception = perceive(
+        world,
+        kind="move_depart",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} left toward the {destination.name}.",
+        own_text=f"I set out for the {destination.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="move_depart",
+        text=f"{player.name} left the {world.map.room(room_id).name} "
+        f"toward the {destination.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"destination": step.room_id, "travel_ticks": str(travel)},
+    )
+    # The tick that steps out is the first travel tick, so a one-tick archway is
+    # crossed at once and only a longer passage leaves time unaccounted for.
+    if travel <= 1:
+        _arrive(world, player, room_id, step.room_id)
+        return
+    player.position = InTransit(
+        origin=room_id,
+        destination=step.room_id,
+        ticks_remaining=travel - 1,
+    )
+
+
+def _advance_transit(world: WorldState, player: PlayerState) -> None:
+    position = player.position
+    if not isinstance(position, InTransit):
+        return
+    remaining = position.ticks_remaining - 1
+    if remaining > 0:
+        player.position = position.model_copy(update={"ticks_remaining": remaining})
+        return
+    _arrive(world, player, position.origin, position.destination)
+
+
+def _arrive(
+    world: WorldState,
+    player: PlayerState,
+    origin_id: str,
+    destination_id: str,
+) -> None:
+    """Land in a room, or turn back at the door if it is already full.
+
+    Capacity binds here rather than at departure, because nobody can tell from the
+    far end of a passage whether a room has filled up while they walked. Turning
+    back is witnessed in the room they return to, which is the point.
+    """
+    origin = world.map.room(origin_id)
+    destination = world.map.room(destination_id)
+    if len(occupants(world, destination_id)) >= destination.capacity:
+        player.position = AtRoom(room_id=origin_id)
+        _blocked(
+            world,
+            player,
+            origin_id,
+            f"the {destination.name} was full and I turned back",
+            witnessed=True,
+            describe=lambda seen: f"{seen} came back from the {destination.name}.",
+        )
+        return
+    player.position = AtRoom(room_id=destination_id)
+    perception = perceive(
+        world,
+        kind="move_arrive",
+        actor_id=player.id,
+        room_id=destination_id,
+        describe=lambda seen: f"{seen} arrived from the {origin.name}.",
+        own_text=f"I arrived from the {origin.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="move_arrive",
+        text=f"{player.name} arrived from the {origin.name}.",
+        actor_id=player.id,
+        room_id=destination_id,
+        payload={"origin": origin_id},
+    )
+
+
+def _do_take(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: Take,
+) -> None:
+    if step.thing_id not in visible_things(world, player.id, room_id):
+        _blocked(world, player, room_id, "that is not within reach")
+        return
+    thing = _thing(world, step.thing_id)
+    if thing.container:
+        _blocked(world, player, room_id, f"the {thing.name} cannot be carried")
+        return
+    placement = HeldBy(player_id=player.id)
+    perception = perceive(
+        world,
+        kind="take",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} picked up the {thing.name}.",
+        own_text=f"I picked up the {thing.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="take",
+        text=f"{player.name} picked up the {thing.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload=placement_payload(step.thing_id, placement),
+    )
+    move_object(world, step.thing_id, placement)
+
+
+def _do_drop(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    thing_id: str,
+    *,
+    hidden: bool,
+) -> None:
+    held = world.placements.get(thing_id)
+    if not (isinstance(held, HeldBy) and held.player_id == player.id):
+        _blocked(world, player, room_id, "that is not in hand")
+        return
+    thing = _thing(world, thing_id)
+    placement = InRoom(room_id=room_id, hidden=hidden)
+    verb = "hid" if hidden else "set down"
+    perception = perceive(
+        world,
+        kind="drop",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} {verb} the {thing.name}.",
+        own_text=f"I {verb} the {thing.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="drop",
+        text=f"{player.name} {verb} the {thing.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload=placement_payload(thing_id, placement),
+    )
+    move_object(world, thing_id, placement)
+
+
+def _do_talk(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: Talk,
+) -> None:
+    listeners = [other for other in occupants(world, room_id) if other != player.id]
+    if not listeners:
+        _blocked(world, player, room_id, "there is nobody here to talk to")
+        return
+    if step.to is not None and step.to not in listeners:
+        _blocked(world, player, room_id, "that person is not here")
+        return
+    perception = perceive(
+        world,
+        kind="talk",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen}: “{step.text}”",
+        own_text=f"I said: “{step.text}”",
+        speaker_count=1,
+    )
+    append_perceived(
+        world,
+        perception,
+        type="talk",
+        text=f"{player.name}: “{step.text}”",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"to": step.to or "", "words": str(len(step.text.split()))},
+    )
+
+
+def _do_tool(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: ToolStep,
+) -> None:
+    if step.tool == "search":
+        _do_search(world, player, room_id)
+        return
+    _do_inspect(world, player, room_id, step.thing_id)
+
+
+def _do_search(world: WorldState, player: PlayerState, room_id: str) -> None:
+    hidden = sorted(
+        thing_id
+        for thing_id, placement in world.placements.items()
+        if isinstance(placement, InRoom)
+        and placement.room_id == room_id
+        and placement.hidden
+    )
+    world.searched.setdefault(player.id, [])
+    if room_id not in world.searched[player.id]:
+        world.searched[player.id].append(room_id)
+    found = ", ".join(_thing(world, thing_id).name for thing_id in hidden)
+    room = world.map.room(room_id)
+    perception = perceive(
+        world,
+        kind="search",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} searched the {room.name}.",
+        own_text=(
+            f"I searched the {room.name} and found: {found}."
+            if hidden
+            else f"I searched the {room.name} and found nothing hidden."
+        ),
+    )
+    append_perceived(
+        world,
+        perception,
+        type="search",
+        text=f"{player.name} searched the {room.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"found": str(len(hidden))},
+    )
+
+
+def _do_inspect(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    thing_id: str | None,
+) -> None:
+    reachable = set(visible_things(world, player.id, room_id))
+    for held_id, placement in world.placements.items():
+        if isinstance(placement, HeldBy) and placement.player_id == player.id:
+            reachable.add(held_id)
+    if thing_id is None or thing_id not in reachable:
+        _blocked(world, player, room_id, "there is nothing there to examine")
+        return
+    thing = _thing(world, thing_id)
+    world.inspected.setdefault(player.id, [])
+    if thing_id not in world.inspected[player.id]:
+        world.inspected[player.id].append(thing_id)
+    perception = perceive(
+        world,
+        kind="inspect",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} examined the {thing.name} closely.",
+        own_text=f"I examined the {thing.name} and traced where it had been.",
+        silent=True,
+    )
+    append_perceived(
+        world,
+        perception,
+        type="inspect",
+        text=f"{player.name} examined the {thing.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"thing_id": thing_id},
+    )
+
+
+def _do_use(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: Use,
+) -> None:
+    placement = world.placements.get(step.thing_id)
+    holding = isinstance(placement, HeldBy) and placement.player_id == player.id
+    if not holding and step.thing_id not in visible_things(world, player.id, room_id):
+        _blocked(world, player, room_id, "that is not within reach")
+        return
+    thing = _thing(world, step.thing_id)
+    perception = perceive(
+        world,
+        kind="use",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} used the {thing.name}.",
+        own_text=f"I used the {thing.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="use",
+        text=f"{player.name} used the {thing.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"thing_id": step.thing_id},
+    )
+
+
+def _do_wait(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    reason: str,
+) -> None:
+    perception = perceive(
+        world,
+        kind="wait",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} waited.",
+        own_text=f"I waited: {reason}." if reason else "I waited.",
+        silent=True,
+    )
+    append_perceived(
+        world,
+        perception,
+        type="wait",
+        text=f"{player.name} waited.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"reason": reason},
+    )
+
+
+def _blocked(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    reason: str,
+    *,
+    witnessed: bool = False,
+    describe: Callable[[str], str] | None = None,
+) -> None:
+    """A failed step is private to the actor: nobody else sees an intention.
+
+    The exception is a failure with a visible body attached to it — turning back
+    at a full door — where ``witnessed`` lets the room record what it saw.
+    """
+    perception = perceive(
+        world,
+        kind="blocked",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=describe or (lambda seen: f"{seen} hesitated."),
+        own_text=f"I could not: {reason}.",
+        silent=True,
+        private=not witnessed,
+    )
+    append_perceived(
+        world,
+        perception,
+        type="blocked",
+        text=f"{player.name} could not act: {reason}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"reason": reason},
+    )
+
+
+# --------------------------------------------------------------- phase machinery
+
+
+def _cut_plans(world: WorldState) -> None:
+    for player_id in world.seats:
+        player = world.players[player_id]
+        if not player.alive or not player.plan.steps:
+            continue
+        dropped = len(player.plan.steps)
+        kinds = ",".join(step.kind for step in player.plan.steps)
+        player.plan = Plan()
+        append(
+            world,
+            type="plan_cut",
+            text=(
+                f"{player.name}'s plan was cut with {dropped} step(s) unfinished "
+                f"when {_phase_label(world.phase)} ended."
+            ),
+            actor_id=player_id,
+            room_id=player.room_id,
+            payload={"dropped": str(dropped), "kinds": kinds},
+            witnesses=[
+                _own_record(
+                    player_id,
+                    player.room_id,
+                    f"{_phase_label(world.phase)} ended before I finished.",
+                )
+            ],
+        )
+
+
+def _summon(world: WorldState) -> None:
+    """Call everyone to the gathering, routing each from where they stand."""
+    target = world.map.gathering_room
+    append(
+        world,
+        type="summoned",
+        text=f"The household is called to the {world.map.room(target).name}.",
+        room_id=target,
+        payload={"room": target},
+        witnesses=[
+            _own_record(
+                player_id,
+                world.players[player_id].room_id,
+                f"We are called to the {world.map.room(target).name}.",
+            )
+            for player_id in world.seats
+            if world.players[player_id].alive
+        ],
+    )
+    for player_id in world.seats:
+        player = world.players[player_id]
+        if not player.alive:
+            continue
+        route = _route(world, player, target)
+        player.plan = Plan(
+            goal=f"answer the call to the {world.map.room(target).name}",
+            steps=[Move(room_id=room_id) for room_id in route],
+        )
+
+
+def _route(world: WorldState, player: PlayerState, target: str) -> list[str]:
+    """Shortest hop path to ``target`` from wherever this player will next stand."""
+    position = player.position
+    origin = position.room_id if isinstance(position, AtRoom) else position.destination
+    if origin == target:
+        return []
+    previous: dict[str, str] = {origin: origin}
+    queue = deque([origin])
+    while queue:
+        room_id = queue.popleft()
+        if room_id == target:
+            break
+        for neighbor in world.map.neighbors(room_id):
+            if neighbor not in previous:
+                previous[neighbor] = room_id
+                queue.append(neighbor)
+    if target not in previous:
+        return []
+    path: list[str] = []
+    cursor = target
+    while cursor != origin:
+        path.append(cursor)
+        cursor = previous[cursor]
+    path.reverse()
+    return path[:5]
+
+
+def _own_record(
+    player_id: str,
+    room_id: str | None,
+    text: str,
+) -> WitnessRecord:
+    return WitnessRecord(
+        player_id=player_id,
+        channel="own",
+        confidence="clear",
+        text=text,
+        recorded_actor=player_id,
+        from_room=room_id,
+    )
+
+
+def _phase_label(phase: CastlePhase) -> str:
+    return phase.replace("_", " ")
+
+
+def _thing(world: WorldState, thing_id: str) -> Thing:
+    for thing in world.map.things:
+        if thing.id == thing_id:
+            return thing
+    raise KeyError(thing_id)
+
+
+__all__ = [
+    "advance_phase",
+    "interrupted",
+    "note_replan",
+    "note_replan_capped",
+    "phase_complete",
+    "replans_left",
+    "start",
+    "submit_plan",
+    "tick",
+    "valid_actions",
+    "would_interrupt",
+]

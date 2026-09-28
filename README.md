@@ -4,9 +4,10 @@ Frontier AI models play a hidden-role social-deduction game. The audience sees e
 
 ## Status
 
-- **Hidden-role game:** deterministic engine, scoped prompts with a leakage test, OpenRouter and mock providers, SQLite persistence, spectator UI, seasons, OpenSkill ratings and clip detection. The game is talk-only: speak, nominate, vote, murder.
-- **Persistent village:** residents with needs, places, trade and memories, advanced by a background worker. Residents can enter the hidden-role game and carry the result home.
-- **Not done yet:** no games against real models so far; every stored decision came from the demo provider. The simulated-world version with missions, evidence and traitor sabotage tools is specified in [SPEC.md](SPEC.md).
+- **The Castle (in progress):** a ten-room castle with per-passage travel times, mixed lighting, objects whose custody is derived from an append-only ledger, and perception that degrades a witness's record as it is written. Rooms, ticks, plans and scoped observations are done; roles, missions and the traitor toolkit are next. Specified in [SPEC.md](SPEC.md).
+- **Hidden-role game:** deterministic engine, scoped prompts with a leakage test, OpenRouter and mock providers, SQLite persistence, spectator UI, seasons, OpenSkill ratings and clip detection. The game is talk-only: speak, nominate, vote, murder. The Castle replaces it.
+- **Persistent village:** residents with needs, places, trade and memories, advanced by a background worker. Residents can enter the hidden-role game and carry the result home. The Castle replaces it.
+- **Not done yet:** no games against real models so far; every stored decision came from the demo provider.
 
 ## Run it
 
@@ -22,6 +23,17 @@ cd frontend
 npm ci
 npm run dev
 ```
+
+Three days in the Castle, with no model calls and nothing to configure:
+
+```sh
+uv run python scripts/castle_three_days.py
+```
+
+It prints the simulator's own timeline (including the rolls that decided who
+recognised whom), what two of the witnesses privately believe, and every event
+where two witnesses in the same room wrote down different people. The same seed
+always prints the same output.
 
 Open the Vite URL, create a demo world and run some ticks. Games from the command line use the mock provider:
 
@@ -70,6 +82,7 @@ The API binds to localhost. Put an authenticated TLS gateway in front of it befo
 uv run pytest -q && uv run mypy src && uv run ruff check && uv run ruff format --check
 uv run python scripts/verify_persistent_worlds.py
 uv run python scripts/verify_world_lifecycle.py
+uv run python scripts/castle_three_days.py --days 1
 cd frontend && npm run test && npm run build
 ```
 
