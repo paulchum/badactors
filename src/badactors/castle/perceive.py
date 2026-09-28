@@ -21,6 +21,8 @@ from badactors.castle.contracts import (
     AtRoom,
     CastleMap,
     Confidence,
+    InContainer,
+    InRoom,
     Lighting,
     RngDraw,
     WitnessRecord,
@@ -36,6 +38,7 @@ _AUDIBLE: dict[str, str] = {
     "move_arrive": "footsteps arriving",
     "take": "something being lifted",
     "drop": "something set down",
+    "stow": "a lid closing",
     "use": "something being handled",
     "search": "furniture being moved",
     "talk": "voices",
@@ -200,19 +203,44 @@ def _count_word(speakers: int) -> str:
 
 
 def visible_things(state: WorldState, viewer_id: str, room_id: str) -> list[str]:
-    """Objects on show in ``room_id``, plus hidden ones this viewer has found."""
-    found = set(state.searched.get(viewer_id, []))
+    """Objects on show in ``room_id``, plus what this viewer found by searching it.
+
+    A search turns up both the objects hidden in a room and the contents of the
+    containers standing in it. Someone who has not searched sees neither, so a
+    stowed object is as private as a hidden one until a search.
+    """
+    searched_here = room_id in state.searched.get(viewer_id, [])
     out: list[str] = []
     for thing in state.map.things:
         placement = state.placements.get(thing.id)
-        if placement is None or placement.where != "room":
-            continue
-        if placement.room_id != room_id:
-            continue
-        if placement.hidden and room_id not in found:
-            continue
-        out.append(thing.id)
+        if isinstance(placement, InRoom):
+            if placement.room_id == room_id and (searched_here or not placement.hidden):
+                out.append(thing.id)
+        elif (
+            isinstance(placement, InContainer)
+            and searched_here
+            and room_of(state, thing.id) == room_id
+        ):
+            out.append(thing.id)
     return sorted(out)
+
+
+def room_of(state: WorldState, thing_id: str) -> str | None:
+    """The room an object is ultimately in, through any containers.
+
+    ``None`` when it is held, or when its containers never reach a room.
+    """
+    seen: set[str] = set()
+    current = thing_id
+    while current not in seen:
+        seen.add(current)
+        placement = state.placements.get(current)
+        if isinstance(placement, InRoom):
+            return placement.room_id
+        if not isinstance(placement, InContainer):
+            return None
+        current = placement.thing_id
+    return None
 
 
 def carried_things(state: WorldState, holder_id: str) -> list[str]:
@@ -240,5 +268,6 @@ __all__ = [
     "describe_room",
     "occupants",
     "perceive",
+    "room_of",
     "visible_things",
 ]

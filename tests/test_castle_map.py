@@ -198,3 +198,14 @@ def test_empty_cast_file_is_rejected(tmp_path: Path) -> None:
     path.write_text(json.dumps({"players": []}))
     with pytest.raises(CastSpecError, match="non-empty"):
         load_cast(path)
+
+
+def test_a_loop_of_containers_is_rejected(tmp_path: Path) -> None:
+    raw = _raw_map()
+    for thing in raw["things"]:
+        if thing["id"] == "candle_stub":
+            thing["container"] = True
+    raw["placements"]["cabinet"] = {"where": "container", "thing_id": "candle_stub"}
+    raw["placements"]["candle_stub"] = {"where": "container", "thing_id": "cabinet"}
+    with pytest.raises(MapError, match="loop of containers"):
+        load_map(_write(tmp_path, raw))

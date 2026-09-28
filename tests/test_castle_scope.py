@@ -27,7 +27,7 @@ from badactors.castle.contracts import (
 )
 from badactors.castle.director import RoutineDecider, run_phase
 from badactors.castle.ledger import custody_chain
-from badactors.castle.mapfile import load_world
+from badactors.castle.mapfile import build_world, load_cast, load_map, load_world
 from badactors.castle.scope import (
     LeakageError,
     assert_no_leak,
@@ -267,6 +267,33 @@ def test_planted_leak_heard_record_naming_an_actor() -> None:
     observation = build_observation(world, viewer_id)
     with pytest.raises(LeakageError, match="names an actor"):
         assert_no_leak(observation, world)
+
+
+def test_a_name_inside_a_room_name_is_not_a_heard_identity() -> None:
+    """Whole words only: a player called Al is not named by "the Great Hall"."""
+    cast = [dict(member) for member in load_cast(CAST_PATH)]
+    renamed = next(member for member in cast if member["id"] == "vale")
+    renamed.update(id="al", name="Al")
+    world = start(build_world(load_map(MAP_PATH), cast, world_id="w", seed=13))
+    world = submit_plan(world, "sol", Plan(steps=[Move(room_id="dining_room")]))
+    world = tick(world)
+    assert world.players["sol"].room_id == "dining_room"
+
+    world = submit_plan(world, "al", Plan(steps=[Move(room_id="gallery")]))
+    world = tick(world)
+    departure = next(
+        entry
+        for entry in world.ledger
+        if entry.type == "move_depart" and entry.actor_id == "al"
+    )
+    heard = departure.record_for("sol")
+    assert heard is not None and heard.channel == "heard"
+    assert "Great Hall" in heard.text
+    assert_no_leak(build_observation(world, "sol"), world)
+
+    heard.text = f"Al, {heard.text}"
+    with pytest.raises(LeakageError, match="the actor's identity"):
+        assert_no_leak(build_observation(world, "sol"), world)
 
 
 # --------------------------------------------------- leak 4: another player's plan

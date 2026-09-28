@@ -29,6 +29,7 @@ from badactors.castle.contracts import (
     CastlePhase,
     Drop,
     HeldBy,
+    InContainer,
     InRoom,
     InTransit,
     Move,
@@ -50,7 +51,7 @@ from badactors.castle.ledger import (
     placement_payload,
     seed_placements,
 )
-from badactors.castle.perceive import occupants, perceive, visible_things
+from badactors.castle.perceive import occupants, perceive, room_of, visible_things
 
 
 def start(state: WorldState) -> WorldState:
@@ -226,9 +227,12 @@ def valid_actions(state: WorldState, player_id: str) -> list[str]:
     actions.extend(f"take:{thing_id}" for thing_id in here if thing_id in portable)
     actions.extend(f"use:{thing_id}" for thing_id in here)
     actions.extend(f"tool:inspect:{thing_id}" for thing_id in here)
+    containers = [thing.id for thing in state.map.things if thing.container]
+    open_here = [thing_id for thing_id in here if thing_id in containers]
     for thing_id, placement in sorted(state.placements.items()):
         if isinstance(placement, HeldBy) and placement.player_id == player_id:
             actions.append(f"drop:{thing_id}")
+            actions.extend(f"drop:{thing_id}:into:{box}" for box in open_here)
             actions.append(f"use:{thing_id}")
             actions.append(f"tool:inspect:{thing_id}")
     return sorted(set(actions))
@@ -255,6 +259,8 @@ def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
         _do_tool(world, player, room_id, step)
     elif isinstance(step, Use):
         _do_use(world, player, room_id, step)
+    elif isinstance(step, Drop) and step.into is not None:
+        _do_stow(world, player, room_id, step.thing_id, step.into)
     elif isinstance(step, Drop):
         _do_drop(world, player, room_id, step.thing_id, hidden=step.hidden)
     else:
@@ -371,20 +377,26 @@ def _do_take(
     if thing.container:
         _blocked(world, player, room_id, f"the {thing.name} cannot be carried")
         return
+    origin = world.placements[step.thing_id]
+    source = (
+        f" from the {_thing(world, origin.thing_id).name}"
+        if isinstance(origin, InContainer)
+        else ""
+    )
     placement = HeldBy(player_id=player.id)
     perception = perceive(
         world,
         kind="take",
         actor_id=player.id,
         room_id=room_id,
-        describe=lambda seen: f"{seen} picked up the {thing.name}.",
-        own_text=f"I picked up the {thing.name}.",
+        describe=lambda seen: f"{seen} took the {thing.name}{source}.",
+        own_text=f"I took the {thing.name}{source}.",
     )
     append_perceived(
         world,
         perception,
         type="take",
-        text=f"{player.name} picked up the {thing.name}.",
+        text=f"{player.name} took the {thing.name}{source}.",
         actor_id=player.id,
         room_id=room_id,
         payload=placement_payload(step.thing_id, placement),
@@ -420,6 +432,47 @@ def _do_drop(
         perception,
         type="drop",
         text=f"{player.name} {verb} the {thing.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload=placement_payload(thing_id, placement),
+    )
+    move_object(world, thing_id, placement)
+
+
+def _do_stow(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    thing_id: str,
+    container_id: str,
+) -> None:
+    held = world.placements.get(thing_id)
+    if not (isinstance(held, HeldBy) and held.player_id == player.id):
+        _blocked(world, player, room_id, "that is not in hand")
+        return
+    box = next((item for item in world.map.things if item.id == container_id), None)
+    if (
+        box is None
+        or not box.container
+        or container_id not in visible_things(world, player.id, room_id)
+    ):
+        _blocked(world, player, room_id, "there is nothing here to put it in")
+        return
+    thing = _thing(world, thing_id)
+    placement = InContainer(thing_id=container_id)
+    perception = perceive(
+        world,
+        kind="stow",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} put the {thing.name} in the {box.name}.",
+        own_text=f"I put the {thing.name} in the {box.name}.",
+    )
+    append_perceived(
+        world,
+        perception,
+        type="stow",
+        text=f"{player.name} put the {thing.name} in the {box.name}.",
         actor_id=player.id,
         room_id=room_id,
         payload=placement_payload(thing_id, placement),
@@ -476,9 +529,12 @@ def _do_search(world: WorldState, player: PlayerState, room_id: str) -> None:
     hidden = sorted(
         thing_id
         for thing_id, placement in world.placements.items()
-        if isinstance(placement, InRoom)
-        and placement.room_id == room_id
-        and placement.hidden
+        if (
+            isinstance(placement, InRoom)
+            and placement.room_id == room_id
+            and placement.hidden
+        )
+        or (isinstance(placement, InContainer) and room_of(world, thing_id) == room_id)
     )
     world.searched.setdefault(player.id, [])
     if room_id not in world.searched[player.id]:

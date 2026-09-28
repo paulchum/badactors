@@ -20,6 +20,8 @@ refactor could make:
 
 from __future__ import annotations
 
+import re
+
 from badactors.castle.contracts import (
     AtRoom,
     InTransit,
@@ -196,8 +198,10 @@ def _assert_hearing(
         return
     actor = state.players.get(actor_id)
     names = {actor_id} | ({actor.name} if actor is not None else set())
-    spoken = item.text.casefold()
-    if any(name.casefold() in spoken for name in names):
+    # Whole words only: a player called Al must not trip over "the Great Hall".
+    if any(
+        re.search(rf"\b{re.escape(name)}\b", item.text, re.IGNORECASE) for name in names
+    ):
         raise LeakageError(
             f"Heard record for entry {entry.seq} contains the actor's identity."
         )

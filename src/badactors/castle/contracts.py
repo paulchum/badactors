@@ -181,9 +181,18 @@ class Take(Contract):
 
 
 class Drop(Contract):
+    """Put down something held: in plain sight, hidden, or into a container."""
+
     kind: Literal["drop"] = "drop"
     thing_id: str
     hidden: bool = False
+    into: str | None = None
+
+    @model_validator(mode="after")
+    def one_destination(self) -> Self:
+        if self.into is not None and self.hidden:
+            raise ValueError("Stow into a container or hide in the room, not both.")
+        return self
 
 
 class Use(Contract):

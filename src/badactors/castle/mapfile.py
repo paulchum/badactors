@@ -186,6 +186,8 @@ def _lint_things(castle: CastleMap) -> None:
         raise MapError(f"Every object needs exactly one placement; {detail}.")
     for thing_id, placement in castle.placements.items():
         _lint_placement(thing_id, placement, known_rooms, containers)
+    for thing_id in sorted(castle.placements):
+        _lint_reaches_a_room(castle.placements, thing_id)
 
 
 def _lint_placement(
@@ -206,6 +208,20 @@ def _lint_placement(
         f"Object {thing_id!r} starts held by {placement.player_id!r}; "
         "authored maps place objects in rooms or containers."
     )
+
+
+def _lint_reaches_a_room(placements: Mapping[str, Placement], thing_id: str) -> None:
+    """Containers may nest, but every chain must end in a room."""
+    seen: set[str] = set()
+    current = thing_id
+    while True:
+        if current in seen:
+            raise MapError(f"Object {thing_id!r} sits in a loop of containers.")
+        seen.add(current)
+        placement = placements[current]
+        if not isinstance(placement, InContainer):
+            return
+        current = placement.thing_id
 
 
 def _lint_private_fact(castle: CastleMap) -> None:

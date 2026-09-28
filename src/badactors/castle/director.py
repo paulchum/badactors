@@ -17,6 +17,7 @@ behind the same protocol.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -52,6 +53,10 @@ class Decider(Protocol):
     def __call__(self, observation: ScopedObservation) -> Plan: ...
 
 
+type TickObserver = Callable[[WorldState], None]
+"""Called with the world after every tick and after every phase change."""
+
+
 @dataclass
 class DirectorStats:
     """How many times each player was asked to decide, per phase."""
@@ -71,6 +76,7 @@ def run_phase(
     *,
     stats: DirectorStats | None = None,
     check_leaks: bool = True,
+    on_tick: TickObserver | None = None,
 ) -> WorldState:
     """Play the current phase to its tick budget and open the next one."""
     world = state
@@ -86,7 +92,12 @@ def run_phase(
             world = _prompt_interrupted(
                 world, decider, tally, before, check_leaks=check_leaks
             )
-    return advance_phase(world)
+        if on_tick is not None:
+            on_tick(world)
+    world = advance_phase(world)
+    if on_tick is not None:
+        on_tick(world)
+    return world
 
 
 def run_day(
@@ -95,10 +106,17 @@ def run_day(
     *,
     stats: DirectorStats | None = None,
     check_leaks: bool = True,
+    on_tick: TickObserver | None = None,
 ) -> WorldState:
     world = state
     for _ in range(6):
-        world = run_phase(world, decider, stats=stats, check_leaks=check_leaks)
+        world = run_phase(
+            world,
+            decider,
+            stats=stats,
+            check_leaks=check_leaks,
+            on_tick=on_tick,
+        )
     return world
 
 
@@ -261,7 +279,14 @@ def _line(observation: ScopedObservation, other: str) -> str:
     if room is None:
         return "Keep walking."
     heard = [item for item in observation.recent if item.channel == "heard"]
-    unsure = [item for item in observation.recent if item.confidence != "clear"]
+    # Ask about something half-seen: not something heard, which has its own
+    # line, and not something said, since quoting a quote nests speech inside
+    # speech and reads as noise in the timeline.
+    unsure = [
+        item
+        for item in observation.recent
+        if item.channel == "saw" and item.confidence != "clear" and "“" not in item.text
+    ]
     carried = observation.carrying
     salt = _salt(observation.tick + 7, observation)
     options: list[str] = [
@@ -285,6 +310,7 @@ __all__ = [
     "Decider",
     "DirectorStats",
     "RoutineDecider",
+    "TickObserver",
     "observe",
     "run_day",
     "run_phase",
