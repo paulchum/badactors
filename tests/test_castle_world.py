@@ -361,6 +361,36 @@ def test_hidden_objects_need_a_search() -> None:
     assert "brass_key" not in visible_things(world, "mara", "library")
 
 
+# ----------------------------------------------------------------------- light
+
+
+def test_each_light_level_records_what_the_spec_allows() -> None:
+    """Bright names the actor; dim names them or describes them; dark gives only
+    a silhouette, never the description that would identify them anyway."""
+    world = _world()
+    for _ in range(9):
+        world = run_phase(world, RoutineDecider(seed=world.seed))
+    counted = {"bright": 0, "dim": 0, "dark": 0}
+    for entry in world.ledger:
+        if entry.actor_id is None or entry.room_id is None:
+            continue
+        actor = world.players[entry.actor_id]
+        lighting = world.map.room(entry.room_id).lighting
+        for record in entry.witnesses:
+            if record.sense != "saw":
+                continue
+            counted[lighting] += 1
+            if lighting == "bright":
+                assert record.recorded_actor == entry.actor_id
+            elif lighting == "dark":
+                assert record.recorded_actor is None
+                assert record.text.startswith("someone")
+                assert actor.appearance not in record.text
+            elif record.recorded_actor is None:
+                assert record.text.startswith(actor.appearance)
+    assert all(counted.values()), counted
+
+
 # -------------------------------------------------------------------- containers
 
 

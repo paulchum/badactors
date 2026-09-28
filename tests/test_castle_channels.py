@@ -99,7 +99,7 @@ def test_an_unrecognised_speaker_is_quoted_without_an_author() -> None:
     assert record is not None
     assert record.quote == "It was me."
     assert record.author is None
-    assert "Mara" not in record.text
+    assert record.text == "someone said:"
 
 
 def test_through_a_wall_speech_is_only_voices() -> None:

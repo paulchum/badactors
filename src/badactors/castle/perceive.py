@@ -128,9 +128,14 @@ def perceive(
         if roll is not None:
             perception.rolls.append(roll)
             perception.cursor += 1
-        label = (
-            state.players[identity].name if identity is not None else actor.appearance
-        )
+        if identity is not None:
+            label = state.players[identity].name
+        elif lighting == "dark":
+            # A silhouette. A description in the dark would name the actor as
+            # surely as daylight to anyone who knows what the household wears.
+            label = "someone"
+        else:
+            label = actor.appearance
         perception.records.append(
             WitnessRecord(
                 player_id=witness_id,
