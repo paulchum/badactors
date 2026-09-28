@@ -8,14 +8,22 @@ leak is therefore not a suspicious-looking string but a line with no provenance 
 which is why a new kind of leak cannot slip past a checker that was written before
 it existed.
 
-Five classes of leak have their own guard, because each is a mistake a plausible
+Seven classes of leak have their own guard, because each is a mistake a plausible
 refactor could make:
 
 * **foreign room** — an object or memory from somewhere the viewer has not been;
 * **unwitnessed action** — an entry with no record for this viewer;
-* **heard identity** — a through-the-wall record naming who did it;
+* **heard identity** — a through-the-wall record naming who did it, or carrying
+  the words said;
 * **another player's plan** — plan steps that are not the viewer's own;
-* **uninspected custody chain** — an object's history without an inspection.
+* **uninspected custody chain** — an object's history without an inspection;
+* **laundered channel** — words shown through a channel, or under an author, other
+  than the ones they arrived by, and above all a player's words in the Steward's
+  channel, which only the host may use;
+* **private field** — anything from a ledger entry's ``private`` intentions, which
+  only the audience sees. No builder reads ``private``, and every other source a
+  player may be shown is checked against the ledger, including the entry text a
+  custody link quotes.
 """
 
 from __future__ import annotations
@@ -171,13 +179,32 @@ def _assert_item(
             f"Observation item for entry {entry.seq} does not match the record "
             "this viewer actually kept."
         )
-    if item.channel != record.channel or item.confidence != record.confidence:
+    if item.sense != record.sense or item.confidence != record.confidence:
         raise LeakageError(
             f"Observation item for entry {entry.seq} misstates how it was perceived."
         )
+    if (item.channel, item.quote, item.author) != (
+        record.channel,
+        record.quote,
+        record.author,
+    ):
+        raise LeakageError(
+            f"Observation item for entry {entry.seq} misstates what was said, by "
+            "whom, or through which channel."
+        )
     if item.tick != entry.tick:
         raise LeakageError(f"Observation item for entry {entry.seq} moves it in time.")
+    _assert_official(entry, record)
     _assert_hearing(entry, record, item, state)
+
+
+def _assert_official(entry: LedgerEntry, record: WitnessRecord) -> None:
+    """Only the host writes to the Steward's channel; a player never can."""
+    if record.channel == "steward" and entry.actor_id is not None:
+        raise LeakageError(
+            f"Entry {entry.seq} puts {entry.actor_id!r}'s words in the Steward's "
+            "channel, which only the host may use."
+        )
 
 
 def _assert_hearing(
@@ -186,12 +213,17 @@ def _assert_hearing(
     item: ObservationItem,
     state: WorldState,
 ) -> None:
-    if record.channel != "heard":
+    if record.sense != "heard":
         return
     if record.recorded_actor is not None:
         raise LeakageError(
             f"Heard record for entry {entry.seq} names an actor; a wall carries "
             "the kind of event and the room, never who did it."
+        )
+    if record.quote is not None or record.author is not None:
+        raise LeakageError(
+            f"Heard record for entry {entry.seq} carries words; through a wall "
+            "speech is only voices."
         )
     actor_id = entry.actor_id
     if actor_id is None:
@@ -246,12 +278,21 @@ def _assert_custody(
             f"Observation reveals the custody chain of {view.id!r} without the "
             "viewer having inspected it."
         )
-    truth = {link.ledger_seq for link in custody_chain(state.ledger, view.id)}
-    invented = sorted({link.ledger_seq for link in view.custody} - truth)
+    truth = {link.ledger_seq: link for link in custody_chain(state.ledger, view.id)}
+    invented = sorted({link.ledger_seq for link in view.custody} - set(truth))
     if invented:
         raise LeakageError(
             f"Custody chain for {view.id!r} cites entries {invented} that never "
             "moved it."
+        )
+    # A custody link is the one place an entry's own text reaches a player, so
+    # it must be that text exactly — nothing added, nothing from ``private``.
+    rewritten = sorted(
+        link.ledger_seq for link in view.custody if link != truth[link.ledger_seq]
+    )
+    if rewritten:
+        raise LeakageError(
+            f"Custody chain for {view.id!r} misquotes entries {rewritten}."
         )
 
 
@@ -326,10 +367,13 @@ def _item(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
     return ObservationItem(
         ledger_seq=entry.seq,
         tick=entry.tick,
-        channel=record.channel,
+        sense=record.sense,
         confidence=record.confidence,
+        channel=record.channel,
         text=record.text,
-        from_room=record.from_room if record.channel == "heard" else None,
+        quote=record.quote,
+        author=record.author,
+        from_room=record.from_room if record.sense == "heard" else None,
     )
 
 

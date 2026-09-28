@@ -20,6 +20,7 @@ from badactors.castle.contracts import (
     Plan,
     ScopedObservation,
     Take,
+    Talk,
     ThingView,
     ToolStep,
     Wait,
@@ -78,7 +79,7 @@ def test_every_item_matches_the_record_it_cites() -> None:
         record = by_seq[item.ledger_seq].record_for("mara")
         assert record is not None
         assert item.text == record.text
-        assert item.channel == record.channel
+        assert item.sense == record.sense
         assert item.confidence == record.confidence
 
 
@@ -159,9 +160,12 @@ def test_planted_leak_unwitnessed_action() -> None:
                 ObservationItem(
                     ledger_seq=unseen.seq,
                     tick=unseen.tick,
-                    channel=other.channel,
+                    sense=other.sense,
                     confidence=other.confidence,
+                    channel=other.channel,
                     text=other.text,
+                    quote=other.quote,
+                    author=other.author,
                 ),
             ]
         }
@@ -180,8 +184,9 @@ def test_planted_leak_invented_ledger_reference() -> None:
                 ObservationItem(
                     ledger_seq=world.ledger_seq + 500,
                     tick=world.tick,
-                    channel="saw",
+                    sense="saw",
                     confidence="clear",
+                    channel="direct",
                     text="Something that never happened.",
                 ),
             ]
@@ -219,7 +224,7 @@ def test_planted_leak_rewritten_record_text() -> None:
 def _heard_pair(world: WorldState) -> tuple[str, ObservationItem]:
     for entry in world.ledger:
         for record in entry.witnesses:
-            if record.channel != "heard":
+            if record.sense != "heard":
                 continue
             observation = build_observation(world, record.player_id)
             for item in observation.recent:
@@ -232,7 +237,7 @@ def test_hearing_never_carries_who_it_was() -> None:
     world = _played(phases=4)
     for entry in world.ledger:
         for record in entry.witnesses:
-            if record.channel != "heard":
+            if record.sense != "heard":
                 continue
             assert record.recorded_actor is None
             if entry.actor_id is not None:
@@ -287,7 +292,7 @@ def test_a_name_inside_a_room_name_is_not_a_heard_identity() -> None:
         if entry.type == "move_depart" and entry.actor_id == "al"
     )
     heard = departure.record_for("sol")
-    assert heard is not None and heard.channel == "heard"
+    assert heard is not None and heard.sense == "heard"
     assert "Great Hall" in heard.text
     assert_no_leak(build_observation(world, "sol"), world)
 
@@ -424,6 +429,129 @@ def test_planted_leak_claiming_to_carry_something() -> None:
         }
     )
     with pytest.raises(LeakageError, match="carries"):
+        assert_no_leak(leaked, world)
+
+
+# ---------------------------------------------------- leak 6: laundered channel
+
+
+def _spoken(world: WorldState) -> tuple[str, ObservationItem]:
+    """A viewer, and an item holding words someone else said in their sight."""
+    world_items = (
+        (player_id, item)
+        for player_id in world.seats
+        for item in build_observation(world, player_id).recent
+        if item.channel == "speech" and item.sense == "saw"
+    )
+    return next(world_items)
+
+
+def _replace_item(
+    observation: ScopedObservation, seq: int, **changes: object
+) -> ScopedObservation:
+    return observation.model_copy(
+        update={
+            "recent": [
+                item.model_copy(update=changes) if item.ledger_seq == seq else item
+                for item in observation.recent
+            ]
+        }
+    )
+
+
+def test_planted_leak_speech_passed_off_as_the_steward() -> None:
+    world = _played(phases=4)
+    viewer_id, item = _spoken(world)
+    observation = build_observation(world, viewer_id)
+    leaked = _replace_item(observation, item.ledger_seq, channel="steward")
+    with pytest.raises(LeakageError, match="through which channel"):
+        assert_no_leak(leaked, world)
+
+
+def test_planted_leak_words_given_to_another_author() -> None:
+    world = _played(phases=4)
+    viewer_id, item = _spoken(world)
+    other = next(p for p in world.seats if p not in {viewer_id, item.author})
+    observation = build_observation(world, viewer_id)
+    leaked = _replace_item(observation, item.ledger_seq, author=other)
+    with pytest.raises(LeakageError, match="by whom"):
+        assert_no_leak(leaked, world)
+
+
+def test_planted_leak_a_player_writing_in_the_stewards_channel() -> None:
+    """A world bug, not a builder bug: the record itself claims official status."""
+    world = _played(phases=4)
+    viewer_id, item = _spoken(world)
+    entry = next(e for e in world.ledger if e.seq == item.ledger_seq)
+    assert entry.actor_id is not None
+    record = entry.record_for(viewer_id)
+    assert record is not None
+    record.channel = "steward"
+    with pytest.raises(LeakageError, match="only the host may use"):
+        assert_no_leak(build_observation(world, viewer_id), world)
+
+
+def test_planted_leak_words_carried_through_a_wall() -> None:
+    world = _world()
+    world = submit_plan(world, "sol", Plan(steps=[Move(room_id="dining_room")]))
+    world = tick(world)
+    world = submit_plan(world, "mara", Plan(steps=[Talk(text="Meet me tonight.")]))
+    world = tick(world)
+    record = world.ledger[-1].record_for("sol")
+    assert record is not None and record.sense == "heard"
+    record.quote = "Meet me tonight."
+    with pytest.raises(LeakageError, match="carries words"):
+        assert_no_leak(build_observation(world, "sol"), world)
+
+
+# ------------------------------------------------------- leak 7: private field
+
+
+def test_planted_leak_another_players_intent_in_memory() -> None:
+    world = submit_plan(
+        _world(), "knox", Plan(goal="frame Mara for the key", steps=[Wait()])
+    )
+    intent = world.ledger[-1].private["goal"]
+    observation = build_observation(world, "mara")
+    item = observation.recent[-1]
+    leaked = _replace_item(
+        observation, item.ledger_seq, text=f"Knox means to {intent}."
+    )
+    with pytest.raises(LeakageError, match="does not match the record"):
+        assert_no_leak(leaked, world)
+
+
+def test_planted_leak_intent_quoted_in_a_custody_link() -> None:
+    world = _with_decanter(_world())
+    world = submit_plan(
+        world,
+        "knox",
+        Plan(goal="make Mara look like the poisoner", steps=[Wait()]),
+    )
+    intent = world.ledger[-1].private["goal"]
+    world = submit_plan(
+        world,
+        "mara",
+        Plan(steps=[ToolStep(tool="inspect", thing_id="silver_decanter")]),
+    )
+    world = tick(world)
+    observation = build_observation(world, "mara")
+
+    def with_intent(view: ThingView) -> ThingView:
+        chain = list(view.custody or [])
+        last = chain[-1]
+        chain[-1] = last.model_copy(update={"text": f"{last.text} Knox: {intent}."})
+        return view.model_copy(update={"custody": chain})
+
+    leaked = observation.model_copy(
+        update={
+            "carrying": [
+                with_intent(view) if view.id == "silver_decanter" else view
+                for view in observation.carrying
+            ]
+        }
+    )
+    with pytest.raises(LeakageError, match="misquotes"):
         assert_no_leak(leaked, world)
 
 

@@ -21,8 +21,19 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Lighting = Literal["bright", "dim", "dark"]
-Channel = Literal["own", "saw", "heard"]
 Confidence = Literal["clear", "unsure", "glimpse"]
+
+Sense = Literal["own", "saw", "heard"]
+"""How a record's holder perceived an event: their own act, sight, or a sound
+through a wall."""
+
+Channel = Literal["direct", "speech", "whisper", "note", "book", "log", "steward"]
+"""What content arrived through. ``direct`` is the holder's own senses, with
+nothing communicated; every other channel carries quoted words. ``steward`` is the
+official channel, and only the host writes to it."""
+
+QUOTE_LIMIT = 400
+"""The most words one message may carry. Filibuster will be the only exception."""
 
 CastlePhase = Literal[
     "breakfast",
@@ -208,7 +219,7 @@ class ToolStep(Contract):
 
 class Talk(Contract):
     kind: Literal["talk"] = "talk"
-    text: str = Field(min_length=1, max_length=400)
+    text: str = Field(min_length=1, max_length=QUOTE_LIMIT)
     to: str | None = None
 
 
@@ -244,18 +255,53 @@ class RngDraw(Contract):
 
 
 class WitnessRecord(Contract):
-    """What one player wrote down. Already degraded; never holds hidden truth."""
+    """What one player wrote down. Already degraded; never holds hidden truth.
+
+    ``text`` is simulator narration and never contains anyone's words. Words that
+    arrived through a channel sit in ``quote``, attributed to ``author`` as this
+    holder recorded them, so they can be shown as attributed quotes and never
+    mistaken for the narration around them.
+    """
 
     player_id: str
-    channel: Channel
+    sense: Sense
     confidence: Confidence
+    channel: Channel
     text: str = Field(min_length=1, max_length=400)
+    quote: str | None = Field(default=None, min_length=1, max_length=QUOTE_LIMIT)
+    author: str | None = None
     recorded_actor: str | None = None
     from_room: str | None = None
 
+    @model_validator(mode="after")
+    def words_travel_only_by_channel(self) -> Self:
+        if self.sense == "heard" and (
+            self.quote is not None
+            or self.author is not None
+            or self.recorded_actor is not None
+        ):
+            raise ValueError(
+                "A wall carries the kind of event and the room, never words or a name."
+            )
+        if self.channel == "direct" and self.quote is not None:
+            raise ValueError("A direct record carries no quoted words.")
+        if self.channel != "direct" and self.sense != "heard" and self.quote is None:
+            raise ValueError("Words that arrived through a channel must be kept.")
+        if self.author is not None and self.quote is None:
+            raise ValueError("Only quoted words have an author.")
+        return self
+
 
 class LedgerEntry(Contract):
-    """Ground truth for one thing that happened, plus every record of it."""
+    """Ground truth for one thing that happened, plus every record of it.
+
+    ``quote`` holds the exact words said or written, if any. ``payload`` is what
+    happened, in machine-readable form; the fact-checker treats it as fact.
+    ``private`` is what the actor meant — a plan's goal, a reason, a declared
+    intent — which is not a fact about the world. Only the audience sees it: no
+    scoping path reads it, and an actor's own memory of it, if any, is an ordinary
+    witness record.
+    """
 
     seq: int = Field(ge=1)
     tick: int = Field(ge=0)
@@ -265,7 +311,9 @@ class LedgerEntry(Contract):
     actor_id: str | None = None
     room_id: str | None = None
     text: str = Field(min_length=1, max_length=400)
+    quote: str | None = Field(default=None, min_length=1, max_length=QUOTE_LIMIT)
     payload: dict[str, str] = Field(default_factory=dict)
+    private: dict[str, str] = Field(default_factory=dict)
     witnesses: list[WitnessRecord] = Field(default_factory=list)
     rolls: list[RngDraw] = Field(default_factory=list)
 
@@ -377,9 +425,12 @@ class ObservationItem(Contract):
 
     ledger_seq: int = Field(ge=1)
     tick: int = Field(ge=0)
-    channel: Channel
+    sense: Sense
     confidence: Confidence
+    channel: Channel
     text: str = Field(min_length=1, max_length=400)
+    quote: str | None = Field(default=None, min_length=1, max_length=QUOTE_LIMIT)
+    author: str | None = None
     from_room: str | None = None
 
 

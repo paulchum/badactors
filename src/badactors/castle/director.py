@@ -278,14 +278,14 @@ def _line(observation: ScopedObservation, other: str) -> str:
     room = observation.room
     if room is None:
         return "Keep walking."
-    heard = [item for item in observation.recent if item.channel == "heard"]
+    heard = [item for item in observation.recent if item.sense == "heard"]
     # Ask about something half-seen: not something heard, which has its own
     # line, and not something said, since quoting a quote nests speech inside
     # speech and reads as noise in the timeline.
     unsure = [
         item
         for item in observation.recent
-        if item.channel == "saw" and item.confidence != "clear" and "“" not in item.text
+        if item.sense == "saw" and item.confidence != "clear" and item.quote is None
     ]
     carried = observation.carrying
     salt = _salt(observation.tick + 7, observation)

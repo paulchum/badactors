@@ -36,7 +36,9 @@ def append(
     text: str,
     actor_id: str | None = None,
     room_id: str | None = None,
+    quote: str | None = None,
     payload: Mapping[str, str] | None = None,
+    private: Mapping[str, str] | None = None,
     witnesses: Sequence[WitnessRecord] = (),
     rolls: Sequence[RngDraw] = (),
     cursor: int | None = None,
@@ -57,7 +59,9 @@ def append(
         actor_id=actor_id,
         room_id=room_id,
         text=text,
+        quote=quote,
         payload=dict(payload or {}),
+        private=dict(private or {}),
         witnesses=list(witnesses),
         rolls=list(rolls),
     )
@@ -75,7 +79,9 @@ def append_perceived(
     text: str,
     actor_id: str,
     room_id: str,
+    quote: str | None = None,
     payload: Mapping[str, str] | None = None,
+    private: Mapping[str, str] | None = None,
 ) -> LedgerEntry:
     """Append an entry carrying the records and rolls a perception produced."""
     return append(
@@ -84,7 +90,9 @@ def append_perceived(
         text=text,
         actor_id=actor_id,
         room_id=room_id,
+        quote=quote,
         payload=payload,
+        private=private,
         witnesses=perception.records,
         rolls=perception.rolls,
         cursor=perception.cursor,

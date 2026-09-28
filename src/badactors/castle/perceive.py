@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from badactors.castle.contracts import (
     AtRoom,
     CastleMap,
+    Channel,
     Confidence,
     InContainer,
     InRoom,
@@ -79,6 +80,8 @@ def perceive(
     room_id: str,
     describe: Callable[[str], str],
     own_text: str | None = None,
+    channel: Channel = "direct",
+    quote: str | None = None,
     speaker_count: int = 1,
     silent: bool = False,
     private: bool = False,
@@ -86,7 +89,9 @@ def perceive(
     """Build every record of one event.
 
     ``describe`` renders the actor as a witness recorded them: it receives the
-    recorded name, a physical description, or "someone".
+    recorded name, a physical description, or "someone". It must never render
+    ``quote``: words travel in their own field, attributed to whoever the witness
+    took the speaker to be, and a wall passes on only the channel.
     """
     cursor = state.rng_cursor
     perception = Perception(cursor=cursor)
@@ -94,9 +99,12 @@ def perceive(
     perception.records.append(
         WitnessRecord(
             player_id=actor_id,
-            channel="own",
+            sense="own",
             confidence="clear",
+            channel=channel,
             text=own_text if own_text is not None else describe(actor.name),
+            quote=quote,
+            author=actor_id if quote is not None else None,
             recorded_actor=actor_id,
             from_room=room_id,
         )
@@ -126,9 +134,12 @@ def perceive(
         perception.records.append(
             WitnessRecord(
                 player_id=witness_id,
-                channel="saw",
+                sense="saw",
                 confidence=_CONFIDENCE_BY_LIGHT[lighting],
+                channel=channel,
                 text=describe(label),
+                quote=quote,
+                author=identity if quote is not None else None,
                 recorded_actor=identity,
                 from_room=room_id,
             )
@@ -136,7 +147,13 @@ def perceive(
 
     if not silent:
         perception.records.extend(
-            _overheard(state, kind, room_id, speaker_count=speaker_count)
+            _overheard(
+                state,
+                kind,
+                room_id,
+                channel=channel,
+                speaker_count=speaker_count,
+            )
         )
     return perception
 
@@ -170,6 +187,7 @@ def _overheard(
     kind: str,
     room_id: str,
     *,
+    channel: Channel,
     speaker_count: int,
 ) -> list[WitnessRecord]:
     phrase = _AUDIBLE.get(kind)
@@ -184,8 +202,9 @@ def _overheard(
             records.append(
                 WitnessRecord(
                     player_id=listener_id,
-                    channel="heard",
+                    sense="heard",
                     confidence="glimpse",
+                    channel=channel,
                     text=f"{phrase} in the {source}",
                     recorded_actor=None,
                     from_room=room_id,

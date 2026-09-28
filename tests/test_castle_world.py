@@ -472,7 +472,7 @@ def test_a_stow_is_heard_next_door_without_a_name() -> None:
     stow = next(entry for entry in world.ledger if entry.type == "stow")
     heard = stow.record_for("knox")
     assert heard is not None
-    assert heard.channel == "heard"
+    assert heard.sense == "heard"
     assert heard.text == "a lid closing in the Armoury"
     assert heard.recorded_actor is None
 
@@ -502,9 +502,9 @@ def test_overheard_noise_does_not_interrupt() -> None:
         for entry in world.ledger
         if entry.seq > before
         for record in entry.witnesses
-        if record.player_id == "june" and record.channel != "own"
+        if record.player_id == "june" and record.sense != "own"
     ]
-    assert [record.channel for record in others] == ["heard"]
+    assert [record.sense for record in others] == ["heard"]
     assert "Kitchen" in others[0].text
     assert others[0].recorded_actor is None
     assert not would_interrupt(world, "june", before)

@@ -80,10 +80,11 @@ def submit_plan(state: WorldState, player_id: str, plan: Plan) -> WorldState:
     append(
         world,
         type="plan_formed",
-        text=f"{player.name} decides: {plan.goal or 'to keep moving'}.",
+        text=f"{player.name} made a plan.",
         actor_id=player_id,
         room_id=player.room_id,
-        payload={"steps": str(len(plan.steps)), "goal": plan.goal},
+        payload={"steps": str(len(plan.steps))},
+        private={"goal": plan.goal} if plan.goal else {},
         witnesses=[
             _own_record(player_id, player.room_id, f"I plan to {plan.goal or 'act'}.")
         ],
@@ -172,7 +173,7 @@ def would_interrupt(state: WorldState, player_id: str, since_seq: int) -> bool:
             if entry.type == "blocked":
                 return True
             continue
-        if record.channel != "saw":
+        if record.sense != "saw":
             continue
         if entry.type in _INTERRUPTING:
             return True
@@ -498,17 +499,20 @@ def _do_talk(
         kind="talk",
         actor_id=player.id,
         room_id=room_id,
-        describe=lambda seen: f"{seen}: “{step.text}”",
-        own_text=f"I said: “{step.text}”",
+        describe=lambda seen: f"{seen} said:",
+        own_text="I said:",
+        channel="speech",
+        quote=step.text,
         speaker_count=1,
     )
     append_perceived(
         world,
         perception,
         type="talk",
-        text=f"{player.name}: “{step.text}”",
+        text=f"{player.name} said:",
         actor_id=player.id,
         room_id=room_id,
+        quote=step.text,
         payload={"to": step.to or "", "words": str(len(step.text.split()))},
     )
 
@@ -654,7 +658,7 @@ def _do_wait(
         text=f"{player.name} waited.",
         actor_id=player.id,
         room_id=room_id,
-        payload={"reason": reason},
+        private={"reason": reason} if reason else {},
     )
 
 
@@ -727,18 +731,16 @@ def _cut_plans(world: WorldState) -> None:
 def _summon(world: WorldState) -> None:
     """Call everyone to the gathering, routing each from where they stand."""
     target = world.map.gathering_room
+    announcement = f"The household is called to the {world.map.room(target).name}."
     append(
         world,
         type="summoned",
-        text=f"The household is called to the {world.map.room(target).name}.",
+        text="The Steward announced:",
         room_id=target,
+        quote=announcement,
         payload={"room": target},
         witnesses=[
-            _own_record(
-                player_id,
-                world.players[player_id].room_id,
-                f"We are called to the {world.map.room(target).name}.",
-            )
+            _steward_record(player_id, world.players[player_id].room_id, announcement)
             for player_id in world.seats
             if world.players[player_id].alive
         ],
@@ -788,10 +790,28 @@ def _own_record(
 ) -> WitnessRecord:
     return WitnessRecord(
         player_id=player_id,
-        channel="own",
+        sense="own",
         confidence="clear",
+        channel="direct",
         text=text,
         recorded_actor=player_id,
+        from_room=room_id,
+    )
+
+
+def _steward_record(
+    player_id: str,
+    room_id: str | None,
+    announcement: str,
+) -> WitnessRecord:
+    """One player's copy of an official announcement. Only the host writes these."""
+    return WitnessRecord(
+        player_id=player_id,
+        sense="own",
+        confidence="clear",
+        channel="steward",
+        text="The Steward announced:",
+        quote=announcement,
         from_room=room_id,
     )
 
