@@ -30,7 +30,7 @@ from badactors.castle.world import advance_phase, start, submit_plan, tick
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.example.json"
+CAST_PATH = ROOT / "configs/castle/cast.json"
 
 _CHANNEL_OF = {"talk": "speech", "summoned": "steward"}
 

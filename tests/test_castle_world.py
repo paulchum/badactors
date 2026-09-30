@@ -38,6 +38,7 @@ from badactors.castle.contracts import (
     ToolStep,
     Use,
     Wait,
+    Whisper,
     WorldState,
 )
 from badactors.castle.director import (
@@ -65,7 +66,9 @@ from badactors.castle.perceive import (
 from badactors.castle.rng import draw
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import (
+    _FORKED,
     advance_phase,
+    fall_asleep,
     interrupted,
     phase_complete,
     replans_left,
@@ -73,12 +76,13 @@ from badactors.castle.world import (
     submit_plan,
     tick,
     valid_actions,
+    wake_up,
     would_interrupt,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.example.json"
+CAST_PATH = ROOT / "configs/castle/cast.json"
 
 
 def _world(seed: int = 13) -> WorldState:
@@ -124,6 +128,43 @@ def test_day_cycles_through_every_phase_in_order() -> None:
         "breakfast",
     ]
     assert world.day == 2
+
+
+def test_a_transition_never_changes_the_world_it_was_given() -> None:
+    """Copies share the map and every ledger entry; nothing may write through."""
+    world = _world()
+    for _ in range(4):
+        world = run_phase(world, RoutineDecider(seed=world.seed))
+    somebody = next(pid for pid in world.seats if world.players[pid].room_id)
+    before = world.model_dump_json()
+    for transition in (
+        tick,
+        advance_phase,
+        lambda w: submit_plan(w, somebody, Plan(steps=[Wait(), Wait()])),
+        lambda w: tick(submit_plan(w, somebody, Plan(steps=[Talk(text="Hello.")]))),
+        lambda w: fall_asleep(w, somebody),
+        lambda w: wake_up(fall_asleep(w, somebody), somebody),
+    ):
+        transition(world)
+        assert world.model_dump_json() == before
+
+
+def test_fork_copies_every_field_a_transition_may_change() -> None:
+    """Adding a field to the world means deciding whether a fork must copy it."""
+    never_changed_in_place = {
+        "schema_version",
+        "id",
+        "seed",
+        "rng_cursor",
+        "tick",
+        "day",
+        "phase",
+        "phase_tick",
+        "map",
+        "seats",
+        "ledger_seq",
+    }
+    assert set(WorldState.model_fields) == _FORKED | never_changed_in_place
 
 
 def test_phase_boundary_resets_the_replan_budget() -> None:
@@ -359,6 +400,59 @@ def test_hidden_objects_need_a_search() -> None:
     world = tick(world)
     assert "brass_key" in visible_things(world, "june", "library")
     assert "brass_key" not in visible_things(world, "mara", "library")
+
+
+# ------------------------------------------------------------------ whispers
+
+
+def test_a_whisper_reaches_only_its_recipient() -> None:
+    world = _world()
+    world = submit_plan(
+        world, "mara", Plan(steps=[Whisper(to="sol", text="Watch Knox tonight.")])
+    )
+    world = tick(world)
+    whisper = world.ledger[-1]
+    assert (whisper.type, whisper.quote) == ("whisper", "Watch Knox tonight.")
+    assert {record.player_id for record in whisper.witnesses} == {"mara", "sol"}
+    heard = whisper.record_for("sol")
+    assert heard is not None
+    assert (heard.channel, heard.author) == ("whisper", "mara")
+
+
+def test_a_whisper_needs_its_recipient_awake_and_present() -> None:
+    world = _world()
+    world = submit_plan(world, "mara", Plan(steps=[Whisper(to="sol", text="Psst.")]))
+    world.players["sol"].position = AtRoom(room_id="kitchen")
+    world = tick(world)
+    assert world.ledger[-1].type == "blocked"
+
+
+# -------------------------------------------------------------------- sleep
+
+
+def test_a_sleeper_records_nothing_and_takes_no_steps() -> None:
+    world = fall_asleep(_world(), "sol")
+    assert world.players["sol"].asleep
+    assert valid_actions(world, "sol") == []
+    world = submit_plan(world, "mara", Plan(steps=[Talk(text="Anyone awake?")]))
+    world = tick(world)
+    talk = world.ledger[-1]
+    assert talk.type == "talk"
+    assert talk.record_for("sol") is None
+    world = submit_plan(world, "sol", Plan(steps=[Move(room_id="dining_room")]))
+    world = tick(world)
+    assert world.players["sol"].room_id == "great_hall"
+
+    world = wake_up(world, "sol")
+    assert not world.players["sol"].asleep
+    assert [entry.type for entry in world.ledger[-1:]] == ["wake"]
+
+
+def test_a_summons_takes_the_quickest_way_not_the_fewest_rooms() -> None:
+    castle = load_map(MAP_PATH)
+    # Library to Great Hall: the Gallery arch (1 + 1) beats the east stair (2 + 2).
+    assert castle.route("library", "great_hall") == ["gallery", "great_hall"]
+    assert castle.route("great_hall", "great_hall") == []
 
 
 # ----------------------------------------------------------------------- light
@@ -641,6 +735,10 @@ def _legal(action: str, present: list[str]) -> st.SearchStrategy[Step]:
     if kind == "talk":
         targets = st.sampled_from([None, *present])
         return st.builds(Talk, text=st.sampled_from(_LINES), to=targets)
+    if kind == "whisper" and present:
+        return st.builds(
+            Whisper, text=st.sampled_from(_LINES), to=st.sampled_from(present)
+        )
     return st.builds(Wait, reason=st.sampled_from(("", "watching the door")))
 
 
@@ -657,6 +755,7 @@ def _illegal(world: WorldState) -> st.SearchStrategy[Step]:
         st.builds(
             Talk, text=st.just("Are you there?"), to=st.sampled_from(world.seats)
         ),
+        st.builds(Whisper, text=st.just("Not here."), to=st.sampled_from(world.seats)),
     )
 
 
@@ -969,6 +1068,38 @@ class CastleMachine(RuleBasedStateMachine):
                     pairs.append((pid, box))
         return pairs
 
+    def _packers(self) -> list[tuple[str, str, str]]:
+        """A player, something loose and a container, all in the same view."""
+        world = self._now()
+        boxes = {thing.id for thing in world.map.things if thing.container}
+        triples: list[tuple[str, str, str]] = []
+        for pid in self._seated():
+            room_id = world.players[pid].room_id
+            assert room_id is not None
+            here = visible_things(world, pid, room_id)
+            triples.extend(
+                (pid, thing_id, box)
+                for thing_id in here
+                if thing_id not in boxes
+                for box in here
+                if box in boxes
+            )
+        return triples
+
+    def _rummagers(self) -> list[tuple[str, str]]:
+        """A player standing where a container holds something."""
+        world = self._now()
+        pairs: list[tuple[str, str]] = []
+        for pid in self._seated():
+            room_id = world.players[pid].room_id
+            pairs.extend(
+                (pid, thing_id)
+                for thing_id, placement in sorted(world.placements.items())
+                if isinstance(placement, InContainer)
+                and room_of(world, thing_id) == room_id
+            )
+        return pairs
+
     def _takers(self) -> list[tuple[str, str]]:
         world = self._now()
         portable = {thing.id for thing in world.map.things if not thing.container}
@@ -1019,11 +1150,40 @@ class CastleMachine(RuleBasedStateMachine):
         thing_id = data.draw(st.sampled_from(carried_things(self._now(), pid)))
         self._act(pid, Drop(thing_id=thing_id, into=box))
 
+    @precondition(lambda self: self.world is not None and bool(self._rummagers()))
+    @rule(data=st.data())
+    def rummage(self, data: st.DataObject) -> None:
+        pid, thing_id = data.draw(st.sampled_from(self._rummagers()), label="dig")
+        self._act(pid, ToolStep(tool="search"), Take(thing_id=thing_id))
+
+    @precondition(lambda self: self.world is not None and bool(self._takers()))
+    @rule(data=st.data())
+    def pocket_and_hide(self, data: st.DataObject) -> None:
+        pid, thing_id = data.draw(st.sampled_from(self._takers()), label="hide")
+        self._act(pid, Take(thing_id=thing_id), Drop(thing_id=thing_id, hidden=True))
+
+    @precondition(lambda self: self.world is not None and bool(self._packers()))
+    @rule(data=st.data())
+    def pack_away(self, data: st.DataObject) -> None:
+        pid, thing_id, box = data.draw(st.sampled_from(self._packers()), label="pack")
+        self._act(pid, Take(thing_id=thing_id), Drop(thing_id=thing_id, into=box))
+
     @precondition(lambda self: self.world is not None and bool(self._seated()))
     @rule(data=st.data())
     def talk(self, data: st.DataObject) -> None:
         pid = data.draw(st.sampled_from(self._seated()), label="who")
         self._act(pid, Talk(text=data.draw(st.sampled_from(_LINES))))
+
+    @precondition(lambda self: self.world is not None and bool(self._seated()))
+    @rule(data=st.data())
+    def whisper(self, data: st.DataObject) -> None:
+        world = self._now()
+        pid = data.draw(st.sampled_from(self._seated()), label="who")
+        room_id = world.players[pid].room_id
+        assert room_id is not None
+        others = [other for other in occupants(world, room_id) if other != pid]
+        to = data.draw(st.sampled_from(others or world.seats), label="to")
+        self._act(pid, Whisper(to=to, text=data.draw(st.sampled_from(_LINES))))
 
     @precondition(lambda self: self.world is not None)
     @rule(data=st.data())

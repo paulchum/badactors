@@ -15,6 +15,7 @@ import pytest
 from badactors.castle.contracts import (
     AtRoom,
     CustodyLink,
+    LedgerEntry,
     Move,
     ObservationItem,
     Plan,
@@ -24,6 +25,7 @@ from badactors.castle.contracts import (
     ThingView,
     ToolStep,
     Wait,
+    WitnessRecord,
     WorldState,
 )
 from badactors.castle.director import RoutineDecider, run_phase
@@ -38,7 +40,7 @@ from badactors.castle.world import start, submit_plan, tick
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.example.json"
+CAST_PATH = ROOT / "configs/castle/cast.json"
 
 
 def _world(seed: int = 13) -> WorldState:
@@ -51,6 +53,25 @@ def _played(phases: int = 3, seed: int = 13) -> WorldState:
     for _ in range(phases):
         world = run_phase(world, decider, check_leaks=False)
     return world
+
+
+def _rewrite(
+    world: WorldState, entry: LedgerEntry, player_id: str, **changes: object
+) -> WitnessRecord:
+    """Plant a world bug: swap in a copy of ``entry`` whose record for
+    ``player_id`` says something else. Records are frozen, so a bug has to
+    write a new one, just as this does, and nothing validates it on the way."""
+    record = entry.record_for(player_id)
+    assert record is not None
+    changed = record.model_copy(update=changes)
+    world.ledger[entry.seq - 1] = entry.model_copy(
+        update={
+            "witnesses": [
+                changed if witness is record else witness for witness in entry.witnesses
+            ]
+        }
+    )
+    return changed
 
 
 def _someone_indoors(world: WorldState) -> str:
@@ -160,6 +181,7 @@ def test_planted_leak_unwitnessed_action() -> None:
                 ObservationItem(
                     ledger_seq=unseen.seq,
                     tick=unseen.tick,
+                    kind=unseen.type,
                     sense=other.sense,
                     confidence=other.confidence,
                     channel=other.channel,
@@ -184,6 +206,7 @@ def test_planted_leak_invented_ledger_reference() -> None:
                 ObservationItem(
                     ledger_seq=world.ledger_seq + 500,
                     tick=world.tick,
+                    kind="talk",
                     sense="saw",
                     confidence="clear",
                     channel="direct",
@@ -254,7 +277,7 @@ def test_planted_leak_heard_identity_in_the_text() -> None:
     actor = world.players[entry.actor_id]
     record = entry.record_for(viewer_id)
     assert record is not None
-    record.text = f"{actor.name}: {record.text}"
+    _rewrite(world, entry, viewer_id, text=f"{actor.name}: {record.text}")
 
     observation = build_observation(world, viewer_id)
     with pytest.raises(LeakageError, match="the actor's identity"):
@@ -265,9 +288,7 @@ def test_planted_leak_heard_record_naming_an_actor() -> None:
     world = _played(phases=4)
     viewer_id, item = _heard_pair(world)
     entry = next(e for e in world.ledger if e.seq == item.ledger_seq)
-    record = entry.record_for(viewer_id)
-    assert record is not None
-    record.recorded_actor = entry.actor_id
+    _rewrite(world, entry, viewer_id, recorded_actor=entry.actor_id)
 
     observation = build_observation(world, viewer_id)
     with pytest.raises(LeakageError, match="names an actor"):
@@ -296,7 +317,7 @@ def test_a_name_inside_a_room_name_is_not_a_heard_identity() -> None:
     assert "Great Hall" in heard.text
     assert_no_leak(build_observation(world, "sol"), world)
 
-    heard.text = f"Al, {heard.text}"
+    _rewrite(world, departure, "sol", text=f"Al, {heard.text}")
     with pytest.raises(LeakageError, match="the actor's identity"):
         assert_no_leak(build_observation(world, "sol"), world)
 
@@ -484,9 +505,7 @@ def test_planted_leak_a_player_writing_in_the_stewards_channel() -> None:
     viewer_id, item = _spoken(world)
     entry = next(e for e in world.ledger if e.seq == item.ledger_seq)
     assert entry.actor_id is not None
-    record = entry.record_for(viewer_id)
-    assert record is not None
-    record.channel = "steward"
+    _rewrite(world, entry, viewer_id, channel="steward")
     with pytest.raises(LeakageError, match="only the host may use"):
         assert_no_leak(build_observation(world, viewer_id), world)
 
@@ -499,7 +518,7 @@ def test_planted_leak_words_carried_through_a_wall() -> None:
     world = tick(world)
     record = world.ledger[-1].record_for("sol")
     assert record is not None and record.sense == "heard"
-    record.quote = "Meet me tonight."
+    _rewrite(world, world.ledger[-1], "sol", quote="Meet me tonight.")
     with pytest.raises(LeakageError, match="carries words"):
         assert_no_leak(build_observation(world, "sol"), world)
 

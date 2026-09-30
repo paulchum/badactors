@@ -19,7 +19,7 @@ from badactors.castle.mapfile import (
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.example.json"
+CAST_PATH = ROOT / "configs/castle/cast.json"
 
 
 def _raw_map() -> dict[str, Any]:
@@ -49,7 +49,7 @@ def test_shipped_castle_loads() -> None:
 
 def test_shipped_world_seats_the_cast() -> None:
     world = load_world(MAP_PATH, CAST_PATH)
-    assert len(world.players) == len(world.seats) == 8
+    assert len(world.players) == len(world.seats) == 10
     assert set(world.placements) == {thing.id for thing in world.map.things}
     assert world.tick == 0 and world.phase == "breakfast"
 
@@ -58,6 +58,7 @@ def test_travel_time_is_per_passage() -> None:
     castle = load_map(MAP_PATH)
     assert castle.travel_ticks("great_hall", "dining_room") == 1
     assert castle.travel_ticks("chapel", "crypt") == 3
+    assert castle.travel_ticks("chambers", "crypt") == 1
     assert castle.travel_ticks("great_hall", "crypt") is None
 
 
@@ -172,7 +173,7 @@ def test_gathering_room_must_hold_the_cast(tmp_path: Path) -> None:
         if room["id"] == "great_hall":
             room["capacity"] = 3
     castle = load_map(_write(tmp_path, raw))
-    with pytest.raises(MapError, match="the cast is 8"):
+    with pytest.raises(MapError, match="the cast is 10"):
         build_world(castle, _raw_cast(), world_id="w", seed=1)
 
 

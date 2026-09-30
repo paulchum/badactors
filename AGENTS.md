@@ -13,6 +13,7 @@ src/badactors/
   scoping.py      builds each player's prompt context from the authoritative state
   agents/ host/   turn loop, prompts, host narration
   providers/      OpenRouter provider and deterministic mock
+  castle/         the Castle: world core, game layer, bots, castle-game CLI
   simulation/     persistent village world, worker, arena bridge
   bench/          OpenSkill deception/detection ratings
   clips/          moment detection; clips/render is a Remotion project
@@ -20,7 +21,7 @@ src/badactors/
   server/         FastAPI app, SSE stream, world routes
 frontend/         React + Vite spectator app
 scripts/          live smoke run and persistence verifiers
-configs/          example cast and world
+configs/          example cast and world; castle/ holds the castle map and cast
 ```
 
 ## Commands

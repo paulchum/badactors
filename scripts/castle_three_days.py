@@ -25,7 +25,7 @@ from badactors.castle.world import start
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MAP = ROOT / "configs/castle/map.json"
-DEFAULT_CAST = ROOT / "configs/castle/cast.example.json"
+DEFAULT_CAST = ROOT / "configs/castle/cast.json"
 
 
 def main() -> None:

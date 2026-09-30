@@ -5,56 +5,80 @@
       "name": "Mara",
       "persona": "A steward who keeps the household's records and resents being doubted.",
       "appearance": "tall, grey coat",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "anthropic/claude-opus-4.1"
     },
     {
       "id": "sol",
       "name": "Sol",
       "persona": "A cook who notices what leaves the larder and says so too loudly.",
       "appearance": "broad, flour-dusted apron",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "openai/gpt-5"
     },
     {
       "id": "iris",
       "name": "Iris",
       "persona": "An archivist with a long memory and a habit of taking notes on people.",
       "appearance": "small, ink-stained cuffs",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "google/gemini-2.5-pro"
     },
     {
       "id": "knox",
       "name": "Knox",
       "persona": "A groundskeeper who dislikes explaining where he has been.",
       "appearance": "heavy boots, canvas jacket",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "x-ai/grok-4"
     },
     {
       "id": "june",
       "name": "June",
       "persona": "A physician who asks careful questions and remembers the answers.",
       "appearance": "narrow, dark shawl",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "deepseek/deepseek-chat-v3.1"
     },
     {
       "id": "ash",
       "name": "Ash",
       "persona": "A courier who knows the passages better than anyone and trades that knowledge.",
       "appearance": "wiry, mud on the hem",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "moonshotai/kimi-k2"
     },
     {
       "id": "wren",
       "name": "Wren",
       "persona": "A musician who drifts between rooms and is easy to overlook.",
       "appearance": "slight, pale scarf",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "qwen/qwen3-235b-a22b-2507"
     },
     {
       "id": "vale",
       "name": "Vale",
       "persona": "A chaplain who believes confession is owed and rarely offers his own.",
       "appearance": "stooped, black cassock",
-      "start_room": "great_hall"
+      "start_room": "great_hall",
+      "model": "z-ai/glm-4.5"
+    },
+    {
+      "id": "hale",
+      "name": "Hale",
+      "persona": "A retired officer who counts the exits in every room and distrusts anyone in a hurry.",
+      "appearance": "upright, brass-buttoned coat",
+      "start_room": "great_hall",
+      "model": "meta-llama/llama-4-maverick"
+    },
+    {
+      "id": "nell",
+      "name": "Nell",
+      "persona": "A housemaid who hears everything through the service doors and repeats half of it.",
+      "appearance": "quick, starched cap",
+      "start_room": "great_hall",
+      "model": "mistralai/mistral-medium-3.1"
     }
   ]
 }

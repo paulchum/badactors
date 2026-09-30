@@ -18,6 +18,7 @@ from badactors.castle.contracts import (
     InContainer,
     InRoom,
     LedgerEntry,
+    Offstage,
     Placement,
     RngDraw,
     WitnessRecord,
@@ -25,8 +26,14 @@ from badactors.castle.contracts import (
 )
 from badactors.castle.perceive import Perception
 
-CUSTODY_TYPES: frozenset[str] = frozenset({"placed", "take", "drop", "stow"})
-"""Entry types that move an object. Nothing else may change a placement."""
+CUSTODY_TYPES: frozenset[str] = frozenset(
+    {"placed", "take", "drop", "stow", "awarded", "spent"}
+)
+"""Entry types that move an object. Nothing else may change a placement.
+
+``awarded`` and ``spent`` are the Steward's: an object handed out of its keeping
+into a player's hands, and one taken back out of play once used up.
+"""
 
 
 def append(
@@ -130,14 +137,19 @@ def custody_chain(
     """Every recorded move of one object, oldest first.
 
     ``limit`` keeps only the most recent links, which is how a partial chain is
-    served without inventing a second source of truth.
+    served without inventing a second source of truth. It reads backwards and
+    stops once it has them, so a partial chain costs nothing like a full one.
     """
-    links = [
-        CustodyLink(ledger_seq=entry.seq, tick=entry.tick, text=entry.text)
-        for entry in ledger
-        if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id
-    ]
-    return links if limit is None else links[-limit:]
+    links: list[CustodyLink] = []
+    for entry in reversed(ledger):
+        if limit is not None and len(links) >= limit:
+            break
+        if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
+            links.append(
+                CustodyLink(ledger_seq=entry.seq, tick=entry.tick, text=entry.text)
+            )
+    links.reverse()
+    return links
 
 
 def witnessed_by(
@@ -146,15 +158,44 @@ def witnessed_by(
     *,
     since_seq: int = 0,
 ) -> list[tuple[LedgerEntry, WitnessRecord]]:
-    """Entries this player has a record of, with that record."""
+    """Entries this player has a record of, with that record, oldest first."""
     out: list[tuple[LedgerEntry, WitnessRecord]] = []
-    for entry in ledger:
-        if entry.seq <= since_seq:
-            continue
+    for entry in ledger[since_seq:]:
         record = entry.record_for(player_id)
         if record is not None:
             out.append((entry, record))
     return out
+
+
+def recent_records(
+    ledger: Sequence[LedgerEntry],
+    player_id: str,
+    limit: int,
+) -> list[tuple[LedgerEntry, WitnessRecord]]:
+    """This player's ``limit`` most recent records, oldest first.
+
+    The same as the tail of :func:`witnessed_by`, read backwards so that a long
+    game costs a prompt only the stretch of ledger its memory reaches back over.
+    """
+    out: list[tuple[LedgerEntry, WitnessRecord]] = []
+    for entry in reversed(ledger):
+        if len(out) >= limit:
+            break
+        record = entry.record_for(player_id)
+        if record is not None:
+            out.append((entry, record))
+    out.reverse()
+    return out
+
+
+def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
+    """The entry with this sequence number. Sequence numbers are a gapless run
+    from 1, so this is an index, not a search."""
+    if 1 <= seq <= len(ledger):
+        entry = ledger[seq - 1]
+        if entry.seq == seq:
+            return entry
+    return None
 
 
 def _placement_from_payload(entry: LedgerEntry) -> Placement:
@@ -168,6 +209,8 @@ def _placement_from_payload(entry: LedgerEntry) -> Placement:
             room_id=entry.payload["room"],
             hidden=entry.payload.get("hidden") == "true",
         )
+    if where == "offstage":
+        return Offstage()
     raise ValueError(f"Custody entry {entry.seq} has no usable placement.")
 
 
@@ -179,7 +222,7 @@ def placement_payload(thing_id: str, placement: Placement) -> dict[str, str]:
         payload["hidden"] = "true" if placement.hidden else "false"
     elif isinstance(placement, HeldBy):
         payload["holder_id"] = placement.player_id
-    else:
+    elif isinstance(placement, InContainer):
         payload["container_id"] = placement.thing_id
     return payload
 
@@ -205,6 +248,8 @@ def _where_phrase(state: WorldState, placement: Placement) -> str:
         return f"in the {room.name}{hidden}"
     if isinstance(placement, HeldBy):
         return f"in {state.players[placement.player_id].name}'s hands"
+    if isinstance(placement, Offstage):
+        return "in the Steward's keeping"
     container = next(item for item in state.map.things if item.id == placement.thing_id)
     return f"inside the {container.name}"
 
@@ -214,8 +259,10 @@ __all__ = [
     "append",
     "append_perceived",
     "custody_chain",
+    "entry_at",
     "move_object",
     "placement_payload",
+    "recent_records",
     "replay_placements",
     "seed_placements",
     "witnessed_by",

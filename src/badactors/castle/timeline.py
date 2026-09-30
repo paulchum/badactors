@@ -133,11 +133,14 @@ def _with_quote(text: str, quote: str | None) -> str:
 def _roll_lines(entry: LedgerEntry) -> list[str]:
     lines: list[str] = []
     for roll in entry.rolls:
-        outcome = (
-            "—"
-            if roll.success is None
-            else ("recognised" if roll.success else "not recognised")
-        )
+        if roll.threshold is None:
+            lines.append(f"       roll #{roll.cursor} {roll.purpose} {roll.value:.3f}")
+            continue
+        recognition = roll.purpose.startswith("recognize:")
+        if roll.success:
+            outcome = "recognised" if recognition else "success"
+        else:
+            outcome = "not recognised" if recognition else "failure"
         lines.append(
             f"       roll #{roll.cursor} {roll.purpose} "
             f"{roll.value:.3f} < {roll.threshold} → {outcome}"

@@ -16,6 +16,8 @@ every roll, and each roll is recorded on the entry that consumed it.
 
 from __future__ import annotations
 
+import heapq
+from collections.abc import Sequence
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -58,6 +60,16 @@ GATHERINGS: frozenset[CastlePhase] = frozenset({"breakfast", "round_table", "din
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class Record(Contract):
+    """Something already written down. Frozen, so copies of a world can share it.
+
+    The ledger only ever grows, so a world and the copy it was forked from hold
+    the same entry objects rather than a deep copy of the whole past each tick.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
 # --------------------------------------------------------------------------- map
@@ -125,10 +137,47 @@ class InContainer(Contract):
     thing_id: str
 
 
+class Offstage(Contract):
+    """In the Steward's keeping: out of the castle and out of play."""
+
+    where: Literal["offstage"] = "offstage"
+
+
 type Placement = Annotated[
-    InRoom | HeldBy | InContainer,
+    InRoom | HeldBy | InContainer | Offstage,
     Field(discriminator="where"),
 ]
+
+
+def quickest_route(passages: Sequence[Passage], origin: str, target: str) -> list[str]:
+    """The rooms after ``origin`` on the quickest way to ``target``.
+
+    Quickest by travel ticks, then by fewest rooms, then alphabetically, so the
+    same map always gives the same route. Empty when already there or when
+    ``target`` cannot be reached.
+    """
+    frontier: list[tuple[int, int, tuple[str, ...], str]] = [(0, 0, (), origin)]
+    settled: set[str] = set()
+    while frontier:
+        ticks, hops, path, room_id = heapq.heappop(frontier)
+        if room_id in settled:
+            continue
+        settled.add(room_id)
+        if room_id == target:
+            return list(path)
+        for passage in passages:
+            neighbor = passage.other(room_id)
+            if neighbor is not None and neighbor not in settled:
+                heapq.heappush(
+                    frontier,
+                    (
+                        ticks + passage.travel_ticks,
+                        hops + 1,
+                        (*path, neighbor),
+                        neighbor,
+                    ),
+                )
+    return []
 
 
 class PhaseBudget(Contract):
@@ -177,6 +226,10 @@ class CastleMap(Contract):
                 return passage.travel_ticks
         return None
 
+    def route(self, origin: str, target: str) -> list[str]:
+        """The rooms after ``origin`` on the quickest way to ``target``."""
+        return quickest_route(self.passages, origin, target)
+
 
 # ------------------------------------------------------------------------ plans
 
@@ -223,13 +276,21 @@ class Talk(Contract):
     to: str | None = None
 
 
+class Whisper(Contract):
+    """Words for one person's ear. Nobody else in the room catches them."""
+
+    kind: Literal["whisper"] = "whisper"
+    to: str
+    text: str = Field(min_length=1, max_length=QUOTE_LIMIT)
+
+
 class Wait(Contract):
     kind: Literal["wait"] = "wait"
     reason: str = Field(default="", max_length=200)
 
 
 type Step = Annotated[
-    Move | Take | Drop | Use | ToolStep | Talk | Wait,
+    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait,
     Field(discriminator="kind"),
 ]
 
@@ -244,7 +305,7 @@ class Plan(Contract):
 # ----------------------------------------------------------------------- ledger
 
 
-class RngDraw(Contract):
+class RngDraw(Record):
     """One consumed roll, replayable from ``seed`` and ``cursor``."""
 
     cursor: int
@@ -254,7 +315,7 @@ class RngDraw(Contract):
     success: bool | None = None
 
 
-class WitnessRecord(Contract):
+class WitnessRecord(Record):
     """What one player wrote down. Already degraded; never holds hidden truth.
 
     ``text`` is simulator narration and never contains anyone's words. Words that
@@ -292,7 +353,7 @@ class WitnessRecord(Contract):
         return self
 
 
-class LedgerEntry(Contract):
+class LedgerEntry(Record):
     """Ground truth for one thing that happened, plus every record of it.
 
     ``quote`` holds the exact words said or written, if any. ``payload`` is what
@@ -349,6 +410,7 @@ class PlayerState(Contract):
     appearance: str = Field(min_length=1, max_length=80)
     position: Position
     alive: bool = True
+    asleep: bool = False
     plan: Plan = Field(default_factory=Plan)
     disguised_as: str | None = None
 
@@ -421,16 +483,25 @@ def _position_rooms(position: Position) -> tuple[str, ...]:
 
 
 class ObservationItem(Contract):
-    """One line of a player's memory, tagged with the entry it came from."""
+    """One line of a player's memory, tagged with the entry it came from.
+
+    ``kind`` is the entry's type, ``actor`` whoever the holder took the actor to
+    be (already degraded, like the text), and ``target`` whom the act was aimed
+    at when the holder could see that. They restate the record in a form a
+    program can read; none of them adds anything the record does not hold.
+    """
 
     ledger_seq: int = Field(ge=1)
     tick: int = Field(ge=0)
+    kind: str = Field(min_length=1, max_length=40)
     sense: Sense
     confidence: Confidence
     channel: Channel
     text: str = Field(min_length=1, max_length=400)
     quote: str | None = Field(default=None, min_length=1, max_length=QUOTE_LIMIT)
     author: str | None = None
+    actor: str | None = None
+    target: str | None = None
     from_room: str | None = None
 
 

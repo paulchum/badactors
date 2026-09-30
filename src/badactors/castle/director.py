@@ -56,6 +56,9 @@ class Decider(Protocol):
 type TickObserver = Callable[[WorldState], None]
 """Called with the world after every tick and after every phase change."""
 
+type Ask = Callable[[WorldState, str], WorldState]
+"""Ask one player for a plan, and return the world with that plan submitted."""
+
 
 @dataclass
 class DirectorStats:
@@ -82,16 +85,17 @@ def run_phase(
     world = state
     tally = stats if stats is not None else DirectorStats()
 
+    def ask(current: WorldState, player_id: str) -> WorldState:
+        return _ask(current, player_id, decider, tally, check_leaks=check_leaks)
+
     if world.phase not in GATHERINGS:
-        world = _prompt_all(world, decider, tally, check_leaks=check_leaks)
+        world = prompt_everyone(world, ask)
     while not phase_complete(world):
         before = world.ledger_seq
         world = tick(world)
         # No point asking for a plan there is no tick left to act on.
         if not phase_complete(world):
-            world = _prompt_interrupted(
-                world, decider, tally, before, check_leaks=check_leaks
-            )
+            world = prompt_interrupted(world, ask, before)
         if on_tick is not None:
             on_tick(world)
     world = advance_phase(world)
@@ -132,29 +136,20 @@ def observe(
     return observation
 
 
-def _prompt_all(
-    state: WorldState,
-    decider: Decider,
-    stats: DirectorStats,
-    *,
-    check_leaks: bool,
-) -> WorldState:
+def prompt_everyone(state: WorldState, ask: Ask) -> WorldState:
+    """The opening prompt of a phase: every living, waking player, in seat order."""
     world = state
     for player_id in world.seats:
-        if not world.players[player_id].alive:
+        player = world.players[player_id]
+        if not player.alive or player.asleep:
             continue
-        world = _ask(world, player_id, decider, stats, check_leaks=check_leaks)
+        world = ask(world, player_id)
     return world
 
 
-def _prompt_interrupted(
-    state: WorldState,
-    decider: Decider,
-    stats: DirectorStats,
-    since_seq: int,
-    *,
-    check_leaks: bool,
-) -> WorldState:
+def prompt_interrupted(state: WorldState, ask: Ask, since_seq: int) -> WorldState:
+    """Re-prompt whoever something has happened to since ``since_seq``, within
+    the phase's decision budget, and record it when the budget runs out."""
     world = state
     for player_id in world.seats:
         if not would_interrupt(world, player_id, since_seq):
@@ -168,7 +163,7 @@ def _prompt_interrupted(
                 world = note_replan_capped(world, player_id)
             continue
         world = note_replan(world, player_id)
-        world = _ask(world, player_id, decider, stats, check_leaks=check_leaks)
+        world = ask(world, player_id)
     return world
 
 
@@ -307,11 +302,14 @@ def _line(observation: ScopedObservation, other: str) -> str:
 
 
 __all__ = [
+    "Ask",
     "Decider",
     "DirectorStats",
     "RoutineDecider",
     "TickObserver",
     "observe",
+    "prompt_everyone",
+    "prompt_interrupted",
     "run_day",
     "run_phase",
 ]

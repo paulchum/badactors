@@ -10,6 +10,9 @@ tracks how the record was made, not whether it happens to be right.
 Hearing is deliberately thin. An adjacent room learns an event's kind and the room
 it came from, never who did it or what was said, because a leaked identity through
 a wall would defeat disguise and most of the evidence game with it.
+
+A sleeper records nothing at all. They still take up room, and anyone awake
+beside them sees them lying there, but what happens around them passes them by.
 """
 
 from __future__ import annotations
@@ -72,6 +75,15 @@ def occupants(state: WorldState, room_id: str) -> list[str]:
     ]
 
 
+def awake_in(state: WorldState, room_id: str) -> list[str]:
+    """Occupants of ``room_id`` who are awake, and so can see and hear."""
+    return [
+        player_id
+        for player_id in occupants(state, room_id)
+        if not state.players[player_id].asleep
+    ]
+
+
 def perceive(
     state: WorldState,
     *,
@@ -114,7 +126,7 @@ def perceive(
 
     lighting = state.map.room(room_id).lighting
     seen_as = actor.disguised_as
-    for witness_id in occupants(state, room_id):
+    for witness_id in awake_in(state, room_id):
         if witness_id == actor_id:
             continue
         identity, roll = _identify(
@@ -203,7 +215,7 @@ def _overheard(
     source = state.map.room(room_id).name
     records: list[WitnessRecord] = []
     for neighbor in state.map.neighbors(room_id):
-        for listener_id in occupants(state, neighbor):
+        for listener_id in awake_in(state, neighbor):
             records.append(
                 WitnessRecord(
                     player_id=listener_id,
@@ -288,6 +300,7 @@ __all__ = [
     "DIM_RECOGNITION",
     "Perception",
     "audible_kinds",
+    "awake_in",
     "carried_things",
     "describe_room",
     "occupants",

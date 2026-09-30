@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+castle-game = "badactors.castle.cli:main"
 make-clips = "badactors.clips.detect:main"
 run-game = "badactors.runner:main"
 run-season = "badactors.season:main"

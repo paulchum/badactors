@@ -43,7 +43,7 @@ from badactors.castle.contracts import (
     WitnessRecord,
     WorldState,
 )
-from badactors.castle.ledger import custody_chain, witnessed_by
+from badactors.castle.ledger import custody_chain, entry_at, recent_records
 from badactors.castle.perceive import carried_things, occupants, visible_things
 from badactors.castle.world import valid_actions
 
@@ -101,7 +101,7 @@ def build_observation(
             ticks_remaining=position.ticks_remaining,
         )
 
-    records = witnessed_by(state.ledger, viewer_id)[-recent_limit:]
+    records = recent_records(state.ledger, viewer_id, recent_limit)
     return ScopedObservation(
         viewer_id=viewer_id,
         tick=state.tick,
@@ -117,7 +117,7 @@ def build_observation(
             for thing_id in carried_things(state, viewer_id)
         ],
         known_facts=facts,
-        recent=[_item(entry, record) for entry, record in records],
+        recent=[item_for(entry, record) for entry, record in records],
         plan_remaining=list(viewer.plan.steps),
         valid_actions=valid_actions(state, viewer_id),
     )
@@ -129,11 +129,10 @@ def assert_no_leak(observation: ScopedObservation, state: WorldState) -> None:
     if viewer_id not in state.players:
         raise LeakageError("Observation names a viewer who is not in this world.")
     viewer = state.players[viewer_id]
-    by_seq = {entry.seq: entry for entry in state.ledger}
 
     _assert_position(observation, viewer)
     for item in observation.recent:
-        _assert_item(item, by_seq.get(item.ledger_seq), viewer_id, state)
+        assert_item(item, viewer_id, state)
     _assert_objects(observation, state, viewer_id)
     _assert_plan(observation, state, viewer_id)
     _assert_facts(observation, state, viewer_id)
@@ -157,12 +156,14 @@ def _assert_position(observation: ScopedObservation, viewer: PlayerState) -> Non
         raise LeakageError("A viewer in a passage must be told they are travelling.")
 
 
-def _assert_item(
+def assert_item(
     item: ObservationItem,
-    entry: LedgerEntry | None,
     viewer_id: str,
     state: WorldState,
-) -> None:
+) -> LedgerEntry:
+    """Check one line of memory against the record it cites, and return the
+    entry it came from."""
+    entry = entry_at(state.ledger, item.ledger_seq)
     if entry is None:
         raise LeakageError(
             f"Observation item cites ledger entry {item.ledger_seq}, which does "
@@ -194,8 +195,29 @@ def _assert_item(
         )
     if item.tick != entry.tick:
         raise LeakageError(f"Observation item for entry {entry.seq} moves it in time.")
+    if item.kind != entry.type:
+        raise LeakageError(
+            f"Observation item for entry {entry.seq} misstates what kind of event "
+            "it was."
+        )
+    if item.actor != record.recorded_actor:
+        raise LeakageError(
+            f"Observation item for entry {entry.seq} names an actor this viewer did "
+            "not record."
+        )
+    target = entry.payload.get("target") if record.sense != "heard" else None
+    if item.target != target:
+        raise LeakageError(
+            f"Observation item for entry {entry.seq} misstates whom the act was "
+            "aimed at."
+        )
+    if item.from_room != (record.from_room if record.sense == "heard" else None):
+        raise LeakageError(
+            f"Observation item for entry {entry.seq} misstates where it came from."
+        )
     _assert_official(entry, record)
     _assert_hearing(entry, record, item, state)
+    return entry
 
 
 def _assert_official(entry: LedgerEntry, record: WitnessRecord) -> None:
@@ -363,16 +385,20 @@ def _thing_view(state: WorldState, viewer_id: str, thing_id: str) -> ThingView:
     )
 
 
-def _item(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
+def item_for(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
+    """The line of memory one record becomes."""
     return ObservationItem(
         ledger_seq=entry.seq,
         tick=entry.tick,
+        kind=entry.type,
         sense=record.sense,
         confidence=record.confidence,
         channel=record.channel,
         text=record.text,
         quote=record.quote,
         author=record.author,
+        actor=record.recorded_actor,
+        target=entry.payload.get("target") if record.sense != "heard" else None,
         from_room=record.from_room if record.sense == "heard" else None,
     )
 
@@ -381,6 +407,8 @@ __all__ = [
     "CUSTODY_LIMIT",
     "RECENT_LIMIT",
     "LeakageError",
+    "assert_item",
     "assert_no_leak",
     "build_observation",
+    "item_for",
 ]

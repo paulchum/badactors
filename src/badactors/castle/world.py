@@ -5,8 +5,8 @@ the seeded cursor in the state, and players are always resolved in ``state.seats
 order, so the same state plus the same plans gives the same ledger.
 
 Night is a phase like any other here. Sending the traitors to the conclave and the
-Faithful to their chambers needs roles, which arrive with the game layer; until then
-night is simply five unsupervised ticks, which is the part the world owes it.
+Faithful to their chambers needs roles, so the game layer does it; the world owes
+it sleep, which is role-blind: a sleeper takes no steps and records nothing.
 
 Two physical rules are worth stating because they generate most of the evidence.
 A move commits on arrival: a player who has stepped into a passage is in neither
@@ -19,12 +19,12 @@ tidily, which is exactly why arriving late is evidence.
 
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from badactors.castle.contracts import (
     DAY_ORDER,
     GATHERINGS,
+    MAX_PLAN_STEPS,
     AtRoom,
     CastlePhase,
     Drop,
@@ -41,6 +41,7 @@ from badactors.castle.contracts import (
     Thing,
     ToolStep,
     Use,
+    Whisper,
     WitnessRecord,
     WorldState,
 )
@@ -51,12 +52,54 @@ from badactors.castle.ledger import (
     placement_payload,
     seed_placements,
 )
-from badactors.castle.perceive import occupants, perceive, room_of, visible_things
+from badactors.castle.perceive import (
+    awake_in,
+    occupants,
+    perceive,
+    room_of,
+    visible_things,
+)
+
+_FORKED = frozenset(
+    {"players", "placements", "ledger", "inspected", "searched", "replans"}
+)
+"""WorldState fields a transition may change in place, so :func:`fork` copies
+them. Every other field is a scalar or is never changed once the world starts."""
+
+
+def fork(state: WorldState) -> WorldState:
+    """A copy of ``state`` that a transition may change without touching the
+    original.
+
+    Everything a transition changes in place gets a fresh container; what is
+    never changed after it is made — the map, placements, positions, steps and
+    every ledger entry, which is frozen — is shared. That keeps a tick's cost
+    independent of how long the game has run.
+    """
+    return state.model_copy(
+        update={
+            "players": {
+                player_id: player.model_copy(
+                    update={
+                        "plan": player.plan.model_copy(
+                            update={"steps": list(player.plan.steps)}
+                        )
+                    }
+                )
+                for player_id, player in state.players.items()
+            },
+            "placements": dict(state.placements),
+            "ledger": list(state.ledger),
+            "inspected": {key: list(value) for key, value in state.inspected.items()},
+            "searched": {key: list(value) for key, value in state.searched.items()},
+            "replans": dict(state.replans),
+        }
+    )
 
 
 def start(state: WorldState) -> WorldState:
     """Open the world: record the authored custody and the first phase."""
-    world = state.model_copy(deep=True)
+    world = fork(state)
     seed_placements(world)
     append(
         world,
@@ -70,13 +113,24 @@ def start(state: WorldState) -> WorldState:
     return world
 
 
-def submit_plan(state: WorldState, player_id: str, plan: Plan) -> WorldState:
-    """Attach a plan to a player and record that they formed one."""
-    world = state.model_copy(deep=True)
+def submit_plan(
+    state: WorldState,
+    player_id: str,
+    plan: Plan,
+    *,
+    private: Mapping[str, str] | None = None,
+) -> WorldState:
+    """Attach a plan to a player and record that they formed one.
+
+    ``private`` adds to what only the audience sees, such as a diary line.
+    """
+    world = fork(state)
     player = world.players[player_id]
-    if not player.alive:
+    if not player.alive or player.asleep:
         return world
-    player.plan = plan.model_copy(deep=True)
+    player.plan = plan.model_copy(update={"steps": list(plan.steps)})
+    meant = {"goal": plan.goal} if plan.goal else {}
+    meant.update(private or {})
     append(
         world,
         type="plan_formed",
@@ -84,7 +138,7 @@ def submit_plan(state: WorldState, player_id: str, plan: Plan) -> WorldState:
         actor_id=player_id,
         room_id=player.room_id,
         payload={"steps": str(len(plan.steps))},
-        private={"goal": plan.goal} if plan.goal else {},
+        private=meant,
         witnesses=[
             _own_record(player_id, player.room_id, f"I plan to {plan.goal or 'act'}.")
         ],
@@ -93,13 +147,13 @@ def submit_plan(state: WorldState, player_id: str, plan: Plan) -> WorldState:
 
 
 def tick(state: WorldState) -> WorldState:
-    """Advance one tick: every living player takes at most one step."""
-    world = state.model_copy(deep=True)
+    """Advance one tick: every living, waking player takes at most one step."""
+    world = fork(state)
     world.tick += 1
     world.phase_tick += 1
     for player_id in world.seats:
         player = world.players[player_id]
-        if not player.alive:
+        if not player.alive or player.asleep:
             continue
         if isinstance(player.position, InTransit):
             _advance_transit(world, player)
@@ -116,7 +170,7 @@ def phase_complete(state: WorldState) -> bool:
 
 def advance_phase(state: WorldState) -> WorldState:
     """Close the current phase, cut running plans, and open the next one."""
-    world = state.model_copy(deep=True)
+    world = fork(state)
     _cut_plans(world)
     index = DAY_ORDER.index(world.phase)
     if index + 1 < len(DAY_ORDER):
@@ -159,13 +213,11 @@ def would_interrupt(state: WorldState, player_id: str, since_seq: int) -> bool:
     crowded room would burn the phase's model calls on nothing.
     """
     player = state.players[player_id]
-    if not player.alive:
+    if not player.alive or player.asleep:
         return False
     if not player.plan.steps:
         return True
-    for entry in state.ledger:
-        if entry.seq <= since_seq:
-            continue
+    for entry in state.ledger[since_seq:]:
         record = entry.record_for(player_id)
         if record is None:
             continue
@@ -177,13 +229,13 @@ def would_interrupt(state: WorldState, player_id: str, since_seq: int) -> bool:
             continue
         if entry.type in _INTERRUPTING:
             return True
-        if entry.type == "talk" and entry.payload.get("to") == player_id:
+        if entry.type in {"talk", "whisper"} and entry.payload.get("to") == player_id:
             return True
     return False
 
 
 def note_replan(state: WorldState, player_id: str) -> WorldState:
-    world = state.model_copy(deep=True)
+    world = fork(state)
     world.replans[player_id] = world.replans.get(player_id, 0) + 1
     return world
 
@@ -194,13 +246,13 @@ def note_replan_capped(state: WorldState, player_id: str) -> WorldState:
     Without this the ledger would show a character standing still and give no
     reason, which reads exactly like a choice. It is not one.
     """
-    world = state.model_copy(deep=True)
+    world = fork(state)
     player = world.players[player_id]
     append(
         world,
         type="replan_capped",
         text=(
-            f"{player.name} had no plan left and no decisions remaining this "
+            f"{player.name} needed a new plan with no decisions left this "
             f"{_phase_label(world.phase)}."
         ),
         actor_id=player_id,
@@ -216,12 +268,14 @@ def note_replan_capped(state: WorldState, player_id: str) -> WorldState:
 def valid_actions(state: WorldState, player_id: str) -> list[str]:
     """Step kinds this player could legally submit right now."""
     player = state.players[player_id]
-    if not player.alive:
+    if not player.alive or player.asleep:
         return []
     room_id = player.room_id
     if room_id is None:
         return ["wait"]
     actions = ["wait", "talk", "tool:search"]
+    if any(other != player_id for other in awake_in(state, room_id)):
+        actions.append("whisper")
     actions.extend(f"move:{neighbor}" for neighbor in state.map.neighbors(room_id))
     here = visible_things(state, player_id, room_id)
     portable = {thing.id for thing in state.map.things if not thing.container}
@@ -256,6 +310,8 @@ def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
         _do_take(world, player, room_id, step)
     elif isinstance(step, Talk):
         _do_talk(world, player, room_id, step)
+    elif isinstance(step, Whisper):
+        _do_whisper(world, player, room_id, step)
     elif isinstance(step, ToolStep):
         _do_tool(world, player, room_id, step)
     elif isinstance(step, Use):
@@ -487,7 +543,7 @@ def _do_talk(
     room_id: str,
     step: Talk,
 ) -> None:
-    listeners = [other for other in occupants(world, room_id) if other != player.id]
+    listeners = [other for other in awake_in(world, room_id) if other != player.id]
     if not listeners:
         _blocked(world, player, room_id, "there is nobody here to talk to")
         return
@@ -514,6 +570,54 @@ def _do_talk(
         room_id=room_id,
         quote=step.text,
         payload={"to": step.to or "", "words": str(len(step.text.split()))},
+    )
+
+
+def _do_whisper(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    step: Whisper,
+) -> None:
+    """Words at one person's ear. Only they catch the words, and they know whose
+    they are even in the dark; nobody else in the room notices, and nothing
+    carries through a wall."""
+    if step.to == player.id or step.to not in awake_in(world, room_id):
+        _blocked(world, player, room_id, "that person is not here to whisper to")
+        return
+    listener = world.players[step.to]
+    append(
+        world,
+        type="whisper",
+        text=f"{player.name} whispered to {listener.name}:",
+        actor_id=player.id,
+        room_id=room_id,
+        quote=step.text,
+        payload={"to": step.to, "words": str(len(step.text.split()))},
+        witnesses=[
+            WitnessRecord(
+                player_id=player.id,
+                sense="own",
+                confidence="clear",
+                channel="whisper",
+                text=f"I whispered to {listener.name}:",
+                quote=step.text,
+                author=player.id,
+                recorded_actor=player.id,
+                from_room=room_id,
+            ),
+            WitnessRecord(
+                player_id=step.to,
+                sense="saw",
+                confidence="clear",
+                channel="whisper",
+                text=f"{player.name} whispered to me:",
+                quote=step.text,
+                author=player.id,
+                recorded_actor=player.id,
+                from_room=room_id,
+            ),
+        ],
     )
 
 
@@ -749,38 +853,60 @@ def _summon(world: WorldState) -> None:
         player = world.players[player_id]
         if not player.alive:
             continue
-        route = _route(world, player, target)
         player.plan = Plan(
             goal=f"answer the call to the {world.map.room(target).name}",
-            steps=[Move(room_id=room_id) for room_id in route],
+            steps=route_steps(world, player_id, target),
         )
 
 
-def _route(world: WorldState, player: PlayerState, target: str) -> list[str]:
-    """Shortest hop path to ``target`` from wherever this player will next stand."""
-    position = player.position
+def route_steps(state: WorldState, player_id: str, target: str) -> list[Step]:
+    """Moves along the quickest way to ``target`` from wherever this player will
+    next stand, as many as one plan can hold."""
+    position = state.players[player_id].position
     origin = position.room_id if isinstance(position, AtRoom) else position.destination
-    if origin == target:
-        return []
-    previous: dict[str, str] = {origin: origin}
-    queue = deque([origin])
-    while queue:
-        room_id = queue.popleft()
-        if room_id == target:
-            break
-        for neighbor in world.map.neighbors(room_id):
-            if neighbor not in previous:
-                previous[neighbor] = room_id
-                queue.append(neighbor)
-    if target not in previous:
-        return []
-    path: list[str] = []
-    cursor = target
-    while cursor != origin:
-        path.append(cursor)
-        cursor = previous[cursor]
-    path.reverse()
-    return path[:5]
+    route = state.map.route(origin, target)
+    return [Move(room_id=room_id) for room_id in route[:MAX_PLAN_STEPS]]
+
+
+def fall_asleep(state: WorldState, player_id: str) -> WorldState:
+    """Put a player to sleep where they stand. A sleeper takes no steps and
+    records nothing until woken."""
+    world = fork(state)
+    player = world.players[player_id]
+    if not player.alive or player.asleep or player.room_id is None:
+        return world
+    player.plan = Plan()
+    player.asleep = True
+    room = world.map.room(player.room_id)
+    append(
+        world,
+        type="sleep",
+        text=f"{player.name} fell asleep in the {room.name}.",
+        actor_id=player_id,
+        room_id=room.id,
+        witnesses=[
+            _own_record(player_id, room.id, f"I fell asleep in the {room.name}.")
+        ],
+    )
+    return world
+
+
+def wake_up(state: WorldState, player_id: str) -> WorldState:
+    world = fork(state)
+    player = world.players[player_id]
+    if not player.alive or not player.asleep:
+        return world
+    player.asleep = False
+    room_id = player.room_id
+    append(
+        world,
+        type="wake",
+        text=f"{player.name} woke.",
+        actor_id=player_id,
+        room_id=room_id,
+        witnesses=[_own_record(player_id, room_id, "I woke.")],
+    )
+    return world
 
 
 def _own_record(
@@ -829,14 +955,18 @@ def _thing(world: WorldState, thing_id: str) -> Thing:
 
 __all__ = [
     "advance_phase",
+    "fall_asleep",
+    "fork",
     "interrupted",
     "note_replan",
     "note_replan_capped",
     "phase_complete",
     "replans_left",
+    "route_steps",
     "start",
     "submit_plan",
     "tick",
     "valid_actions",
+    "wake_up",
     "would_interrupt",
 ]

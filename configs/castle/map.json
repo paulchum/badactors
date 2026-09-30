@@ -100,7 +100,8 @@
     { "rooms": ["gallery", "armoury"], "travel_ticks": 2, "description": "a back passage" },
     { "rooms": ["library", "chambers"], "travel_ticks": 2, "description": "the east stair" },
     { "rooms": ["chapel", "crypt"], "travel_ticks": 3, "description": "the long descent" },
-    { "rooms": ["cellar", "crypt"], "travel_ticks": 2, "description": "a breach in the wall" }
+    { "rooms": ["cellar", "crypt"], "travel_ticks": 2, "description": "a breach in the wall" },
+    { "rooms": ["chambers", "crypt"], "travel_ticks": 1, "description": "the servants' stair" }
   ],
   "things": [
     {
@@ -161,6 +162,27 @@
       "kind": "vessel",
       "name": "dusty bottle",
       "properties": { "vintage": "1899" }
+    },
+    {
+      "id": "cipher_chest",
+      "kind": "mechanism",
+      "name": "cipher chest",
+      "properties": { "dials": "five brass rings" },
+      "container": true
+    },
+    {
+      "id": "supply_crates",
+      "kind": "cargo",
+      "name": "supply crates",
+      "properties": { "stencil": "GREYWATER STORES" },
+      "container": true
+    },
+    {
+      "id": "clock_case",
+      "kind": "mechanism",
+      "name": "clock case",
+      "properties": { "state": "in pieces" },
+      "container": true
     }
   ],
   "placements": {
@@ -171,7 +193,10 @@
     "letter_opener": { "where": "container", "thing_id": "cabinet" },
     "ledger_page": { "where": "room", "room_id": "crypt", "hidden": true },
     "candle_stub": { "where": "room", "room_id": "cellar" },
-    "wine_bottle": { "where": "room", "room_id": "cellar", "hidden": true }
+    "wine_bottle": { "where": "room", "room_id": "cellar", "hidden": true },
+    "cipher_chest": { "where": "room", "room_id": "chapel" },
+    "supply_crates": { "where": "room", "room_id": "dining_room" },
+    "clock_case": { "where": "room", "room_id": "great_hall" }
   },
   "facts": [
     {

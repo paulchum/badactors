@@ -18,6 +18,7 @@ from pathlib import Path
 from badactors.castle.contracts import (
     AtRoom,
     CastleMap,
+    HeldBy,
     InContainer,
     InRoom,
     Placement,
@@ -204,8 +205,13 @@ def _lint_placement(
         if placement.thing_id not in containers:
             raise MapError(f"Object {thing_id!r} starts in a non-container.")
         return
+    where = (
+        f"held by {placement.player_id!r}"
+        if isinstance(placement, HeldBy)
+        else placement.where
+    )
     raise MapError(
-        f"Object {thing_id!r} starts held by {placement.player_id!r}; "
+        f"Object {thing_id!r} starts {where}; "
         "authored maps place objects in rooms or containers."
     )
 

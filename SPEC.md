@@ -14,29 +14,42 @@ Turn Bad Actors from a talk-only roundtable into a simulated world where traitor
   - **Disguise:** a successful disguise roll makes the witness record the disguised identity.
 
   Each record carries the witness's honest confidence (clear, unsure, glimpse). The link to the truth exists only in the ledger, so a wrong or vague record never leaks the truth into a prompt.
+
+  A sleeping player records nothing: they take up room and can be seen lying there, but what happens around them passes them by.
 - **Hearing.** Adjacent rooms hear an event's kind and the room it came from, never the identity or the words: "footsteps toward the stairs", "glass breaking in the kitchen". Speech carries only as "voices" with a speaker count.
 - **Time.** Discrete ticks. A day runs breakfast → mission → free time → round table → dinner → night, and each phase has a fixed tick budget.
-  - At night traitors meet in the conclave room; the Faithful are in their chambers.
+  - At night traitors meet in the conclave room; the Faithful are in their chambers. When the lamps go out everyone walks to the chambers, traitors too, and the Faithful fall asleep there. Once the house sleeps the traitors slip down to the conclave room and are back before dawn, so neither the walk from dinner nor the walk to breakfast gives them away. The conclave room must open directly off the chambers (Greywater: the servants' stair to the crypt), and the night must be long enough for the round trip. Nobody is asked for a plan at night.
   - A plan still running when a phase ends is cut, and the cut is a ledger event. The player stays where they physically were.
   - Gatherings (breakfast, round table, dinner) summon everyone, and others see who arrives late and from which direction. Lateness is evidence.
-- **Objects.** Each has an id, kind and properties. Its placement is one of: in a room (possibly hidden), held by a player, or inside a container. Custody is derived from the ledger, never stored on the object. Visible objects are seen on entry; hidden ones need a search.
-- **Macro-actions.** A player submits a plan of up to five steps (move, take, drop, use, tool, talk, wait). The director executes it step by step and re-prompts only on interruption: someone enters, something happens, or the plan ends. Target: at most 3 model calls per player per phase outside meetings.
+- **Objects.** Each has an id, kind and properties. Its placement is one of: in a room (possibly hidden), held by a player, inside a container, or offstage in the Steward's keeping (unawarded and spent shields). Custody is derived from the ledger, never stored on the object. Visible objects are seen on entry; hidden ones need a search.
+- **Macro-actions.** A player submits a plan of up to five steps (move, take, drop, use, tool, talk, whisper, wait). A whisper reaches only the person it is spoken to, who knows whose it is even in the dark; nobody else in the room notices it, and nothing carries through a wall. The director executes it step by step and re-prompts only on interruption: someone enters, something happens, or the plan ends. Target: at most 3 model calls per player per phase outside meetings.
 
 ## 2. Game
 
-- **Roles.** 2–3 traitors among 8–10 players. Players see characters (name, persona), never model names.
+- **Roles.** 2–3 traitors among 8–10 players, drawn from the seeded RNG. Two by default at every size; three is a config option (in 200 bot games two traitors won half, three nine times in ten). The Steward announces how many began. Players see characters (name, persona), never model names: the cast file maps characters to models, the game state holds characters only, and no observation may contain a model name, quoted words included, so a player may not tell the others which model it is.
 - **Missions.** Cooperative tasks with measurable per-player contributions (cipher, carry, assemble) that add to a prize pot. The pot change is public. Who contributed what is recorded exactly in the ledger, but players see only a noisy tally.
+  - The day's mission is drawn from the seeded RNG. It is worked physically: each turn a player spends using the mission's station during the mission phase is one turn of work, so a mission is also a crowded room full of witnesses.
+  - Cipher (Chapel): each turn has an even chance of 5 coins. Carry (Dining Room): 2 coins a turn. Assemble (Great Hall): 1 coin a turn, 2 while three or more work at once.
+  - The tally reports each worker's coins off by up to 3 either way, drawn from the recorded RNG.
 - **Shields.** Won in missions. A shield is a physical token, held secretly; it can be searched for or stolen. It blocks one conclave murder and is then used up. The holder privately learns they were attacked. The traitors learn the attempt failed, and everyone sees at breakfast that nobody died.
+  - Each mission's best worker gets one, while the Steward has any left (three a game). The Steward announces that a shield was won, never by whom.
+  - A shield protects only while carried. One put down, hidden or lost protects nobody.
 - **One kill attempt per night.** Traitors choose one of:
   - **Conclave murder:** a shield blocks it.
   - **Poison instead:** the poisoner must be seated next to the victim at dinner (seating is random each night). The victim dies the next morning even if shielded, and the poisoning can leave residue.
+  - Poison is decided at dinner, once the seats are drawn: the first traitor in seat order who sits beside one of the Faithful and chooses to, pours. Until phase 3 gives poison its traces and a cost, it can be used once a game.
 - **Recruitment.** When only one or two traitors remain, they may make a face-to-face offer at night.
   - **Accept:** the recruit becomes a traitor.
   - **Refuse:** the refuser automatically becomes that night's murder target. Only a shield saves them. A survivor knows who approached them, but it's still their word against the recruiter's.
+  - "Remain" means fewer than began: an offer is possible when one or two traitors are alive and fewer than started. At most one offer a night, never on a poisoning night, and never to someone already approached. It is made once the Faithful are asleep: the recruiter wakes the recruit, and nobody else hears it. The conclave meets after the answer.
 - **Round table.** Accuse, defend, question, vote. The banished player's role is revealed. In the endgame, survivors vote to end the game or banish again.
+  - Only those at the table when its ticks run out take part; the absent can still be voted against. The speaking order rotates daily. In turn: accuse or stay silent; the accused defend; each may put one question; the questioned answer; everyone votes. Votes are public, and a tie is settled by a seeded lot.
+  - The endgame is the round table once four or fewer are alive, or on the last day (eight by default). After each banishment everyone at the table votes to end the game or banish again; the game ends when every vote is to end, or when two remain. So every game ends by the last day.
+- **Deaths.** Breakfast names the night's dead and their role, never the cause; how they died is for the evidence to show.
 - **Silence.** `stay_silent` is a legal move and requires a private reason, which is logged. It is never how a failure is recorded (see §6).
+- **Diary.** Every decision may carry a private diary line. Like a silence reason, only the audience sees it.
 - **Official channel.** The Steward (the game's host) speaks only in the official channel, which players can never write to. Every player's rules say so: anyone can lie, forge documents or impersonate officials, and only Steward announcements are real.
-- **Win.** The Faithful win by banishing every traitor; traitors win by surviving to the end. The pot is split among the winners.
+- **Win.** The Faithful win by banishing every traitor; traitors win by surviving to the end. The pot is split among the winners who are still alive; odd coins go one each in seat order.
 
 ## 3. Traitor toolkit
 
