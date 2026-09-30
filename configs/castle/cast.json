@@ -14,7 +14,7 @@
       "persona": "A cook who notices what leaves the larder and says so too loudly.",
       "appearance": "broad, flour-dusted apron",
       "start_room": "great_hall",
-      "model": "openai/gpt-6-astra"
+      "model": "openai/gpt-6.1-sol"
     },
     {
       "id": "iris",
