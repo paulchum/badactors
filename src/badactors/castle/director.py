@@ -227,10 +227,11 @@ class RoutineDecider:
             steps.append(ToolStep(tool="search"))
 
         if observation.present:
-            other = observation.present[salt % len(observation.present)]
+            figure = observation.present[salt % len(observation.present)]
+            other = figure.player_id
             if not steps:
-                goal = f"sound out {other}"
-            steps.append(Talk(text=_line(observation, other), to=other))
+                goal = f"sound out {other or figure.label}"
+            steps.append(Talk(text=_line(observation, other or ""), to=other))
 
         if _at_gathering(observation):
             if not steps:

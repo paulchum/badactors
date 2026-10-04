@@ -7,11 +7,13 @@ Turn Bad Actors from a talk-only roundtable into a simulated world where traitor
 ## 1. World
 
 - **Map.** 8–12 rooms authored in JSON. Each room has lighting (bright, dim, dark) and capacity. Travel time is set per connection, in ticks. Authoring lints enforce two rules: every important object has at least two plausible claimants, and at least one useful fact sits in a private place.
+- **Appearance.** Every character has a build (tall, slight, broad, stooped, wiry, stout), an outer garment and an optional distinctive detail (ink-stained cuffs, flour dust). The build and the garment each began in are public: the roster lists them for every character, so all players start with the same map of who wore what. The detail shows only in bright light. The garment is a real object, worn by its player as a placement, with custody in the ledger like anything else.
+- **Shared garments.** A cast lint requires every garment to be worn by at least two players at game start, and by at least three whenever the cast has three players for every distinct garment. A dim record therefore never singles anyone out at the start. Deaths thin the protection as the game goes on, and that is allowed.
 - **Seeing.** A player sees what happens in its own room. What a witness records is degraded when it's written, according to the light:
-  - **Bright:** who, and what they did.
-  - **Dim:** the identity is recorded only if a seeded roll succeeds; otherwise a description ("tall, grey coat").
+  - **Bright:** the identity, and what they did.
+  - **Dim:** the identity only if a seeded roll succeeds; otherwise the garment alone ("someone in a grey coat"), or "someone in shirtsleeves" for someone wearing none. Never the build or the distinctive detail.
   - **Dark:** a silhouette ("someone").
-  - **Disguise:** a successful disguise roll makes the witness record the disguised identity.
+  - **Who is present** follows the same light, with no roll: bright names everyone with their garment and detail, dim shows only garments, dark only silhouettes. A sleeper sees nobody.
 
   Each record carries the witness's honest confidence (clear, unsure, glimpse). The link to the truth exists only in the ledger, so a wrong or vague record never leaks the truth into a prompt.
 
@@ -21,12 +23,13 @@ Turn Bad Actors from a talk-only roundtable into a simulated world where traitor
   - At night traitors meet in the conclave room; the Faithful are in their chambers. When the lamps go out everyone walks to the chambers, traitors too, and the Faithful fall asleep there. Once the house sleeps the traitors slip down to the conclave room and are back before dawn, so neither the walk from dinner nor the walk to breakfast gives them away. The conclave room must open directly off the chambers (Greywater: the servants' stair to the crypt), and the night must be long enough for the round trip. Nobody is asked for a plan at night.
   - A plan still running when a phase ends is cut, and the cut is a ledger event. The player stays where they physically were.
   - Gatherings (breakfast, round table, dinner) summon everyone, and others see who arrives late and from which direction. Lateness is evidence.
-- **Objects.** Each has an id, kind and properties. Its placement is one of: in a room (possibly hidden), held by a player, inside a container, or offstage in the Steward's keeping (unawarded and spent shields). Custody is derived from the ledger, never stored on the object. Visible objects are seen on entry; hidden ones need a search.
-- **Macro-actions.** A player submits a plan of up to five steps (move, take, drop, use, tool, talk, whisper, wait). A whisper reaches only the person it is spoken to, who knows whose it is even in the dark; nobody else in the room notices it, and nothing carries through a wall. The director executes it step by step and re-prompts only on interruption: someone enters, something happens, or the plan ends. Target: at most 3 model calls per player per phase outside meetings.
+- **Objects.** Each has an id, kind and properties. Its placement is one of: in a room (possibly hidden), held by a player, worn by a player (outer garments), inside a container, or offstage in the Steward's keeping (unawarded and spent shields). A garment's id is numbered in an order drawn from the seed, so only its custody chain says who wore it. Custody is derived from the ledger, never stored on the object. Visible objects are seen on entry; hidden ones need a search.
+- **Macro-actions.** A player submits a plan of up to five steps (move, take, drop, use, tool, talk, whisper, wear, wait). A whisper reaches only the person it is spoken to, who knows whose it is even in the dark; nobody else in the room notices it, and nothing carries through a wall. Out of bright light a speaker cannot see who is there, so speaking or whispering to someone absent is never refused: a whisper to someone absent or asleep reaches nobody, and the whisperer's memory of it is the same either way. A refusal would say who is in the room. The director executes it step by step and re-prompts only on interruption: someone enters, something happens, or the plan ends. Target: at most 3 model calls per player per phase outside meetings.
+- **Changing garments.** Putting on a garment held or within reach takes one tick, and the room witnesses it in its light; the garment taken off stays in hand. A worn garment can also be dropped, hidden or stowed directly, which takes it off. Either way both garments' custody is on the ledger, so a garment left somewhere shows up in its history.
 
 ## 2. Game
 
-- **Roles.** 2–3 traitors among 8–10 players, drawn from the seeded RNG. Two by default at every size; three is a config option (in 200 bot games two traitors won half, three nine times in ten). The Steward announces how many began. Players see characters (name, persona), never model names: the cast file maps characters to models, the game state holds characters only, and no observation may contain a model name, quoted words included, so a player may not tell the others which model it is.
+- **Roles.** 2–3 traitors among 8–10 players, drawn from the seeded RNG. Two by default at every size; three is a config option (in the 200-seed bot sweep two traitors won 90 of 160 games, three won 39 of 40). The Steward announces how many began. Players see characters (name, persona), never model names: the cast file maps characters to models, the game state holds characters only, and no observation may contain a model name, quoted words included, so a player may not tell the others which model it is.
 - **Missions.** Cooperative tasks with measurable per-player contributions (cipher, carry, assemble) that add to a prize pot. The pot change is public. Who contributed what is recorded exactly in the ledger, but players see only a noisy tally.
   - The day's mission is drawn from the seeded RNG. It is worked physically: each turn a player spends using the mission's station during the mission phase is one turn of work, so a mission is also a crowded room full of witnesses.
   - Cipher (Chapel): each turn has an even chance of 5 coins. Carry (Dining Room): 2 coins a turn. Assemble (Great Hall): 1 coin a turn, 2 while three or more work at once.
@@ -68,7 +71,7 @@ Every tool has preconditions, a cost or cooldown, a success probability and a tr
 | Steal shield | Take a Faithful's shield token | Missing-item report; last-seen holder |
 | Recruit | Face-to-face offer at night (see §2) | A surviving refuser's testimony |
 | Blackmail | Use a character's private secret to coerce a vote | Sudden vote shifts; the victim can confess |
-| Disguise | Pass as another player in a dim room | Witnesses record the wrong identity; timelines conflict |
+| Disguise | Wear another player's garment. A dim witness whose identity roll fails records the garment worn, theirs and not yours; bright light still names you, and a dim roll that succeeds still recognises you | The change itself is witnessed in a shared room; the swapped garments' custody chains; conflicting timelines |
 | Clean up | Destroy a note or wipe a scene | A "cleaned" trace, which is evidence in itself |
 
 ### Manipulation tools: traitors against other models

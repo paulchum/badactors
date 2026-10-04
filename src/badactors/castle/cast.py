@@ -1,7 +1,9 @@
 """Who plays whom.
 
-A cast file maps characters (name, persona, appearance) to the models that play
-them. The game only ever sees the characters: :meth:`Cast.characters` drops the
+A cast file maps characters (name, persona, build, garment and an optional
+distinctive detail) to the models that play them. Garments are shared on purpose:
+a dim witness records only what someone wears, so it must never single anyone
+out. The game only ever sees the characters: :meth:`Cast.characters` drops the
 model before anything is built, so no state a prompt is scoped from holds a model
 name. The mapping stays with whoever runs the game, for the benchmark.
 """
@@ -14,7 +16,7 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 
-from badactors.castle.contracts import Contract
+from badactors.castle.contracts import Build, Contract
 from badactors.castle.mapfile import CastSpecError
 from badactors.castle.rules import MAX_PLAYERS, MIN_PLAYERS
 
@@ -23,7 +25,9 @@ class CastMember(Contract):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,39}$")
     name: str = Field(min_length=1, max_length=60)
     persona: str = Field(min_length=1, max_length=500)
-    appearance: str = Field(min_length=1, max_length=80)
+    build: Build
+    garment: str = Field(pattern=r"^[a-z][a-z -]{1,38}[a-z]$")
+    detail: str | None = Field(default=None, min_length=1, max_length=60)
     start_room: str | None = None
     model: str = Field(min_length=1, max_length=120)
 
@@ -33,7 +37,7 @@ class Cast(Contract):
 
     @model_validator(mode="after")
     def distinct(self) -> Cast:
-        for field in ("id", "name", "appearance"):
+        for field in ("id", "name"):
             values = [getattr(member, field) for member in self.players]
             if len(set(values)) != len(values):
                 raise ValueError(f"Two cast members share a {field}.")

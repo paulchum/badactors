@@ -23,16 +23,18 @@ from badactors.castle.contracts import (
     RngDraw,
     WitnessRecord,
     WorldState,
+    WornBy,
 )
 from badactors.castle.perceive import Perception
 
 CUSTODY_TYPES: frozenset[str] = frozenset(
-    {"placed", "take", "drop", "stow", "awarded", "spent"}
+    {"placed", "take", "drop", "stow", "awarded", "spent", "take_off", "wear"}
 )
 """Entry types that move an object. Nothing else may change a placement.
 
 ``awarded`` and ``spent`` are the Steward's: an object handed out of its keeping
-into a player's hands, and one taken back out of play once used up.
+into a player's hands, and one taken back out of play once used up. ``take_off``
+and ``wear`` are the two halves of changing an outer garment.
 """
 
 
@@ -211,6 +213,8 @@ def _placement_from_payload(entry: LedgerEntry) -> Placement:
         )
     if where == "offstage":
         return Offstage()
+    if where == "worn":
+        return WornBy(player_id=entry.payload["wearer_id"])
     raise ValueError(f"Custody entry {entry.seq} has no usable placement.")
 
 
@@ -224,6 +228,8 @@ def placement_payload(thing_id: str, placement: Placement) -> dict[str, str]:
         payload["holder_id"] = placement.player_id
     elif isinstance(placement, InContainer):
         payload["container_id"] = placement.thing_id
+    elif isinstance(placement, WornBy):
+        payload["wearer_id"] = placement.player_id
     return payload
 
 
@@ -250,6 +256,8 @@ def _where_phrase(state: WorldState, placement: Placement) -> str:
         return f"in {state.players[placement.player_id].name}'s hands"
     if isinstance(placement, Offstage):
         return "in the Steward's keeping"
+    if isinstance(placement, WornBy):
+        return f"worn by {state.players[placement.player_id].name}"
     container = next(item for item in state.map.things if item.id == placement.thing_id)
     return f"inside the {container.name}"
 

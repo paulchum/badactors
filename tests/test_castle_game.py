@@ -146,7 +146,8 @@ def test_a_game_seats_eight_to_ten(size: int) -> None:
                 id=f"{extra.id}x{len(members)}",
                 name=f"{extra.name}{len(members)}",
                 persona=extra.persona,
-                appearance=f"{extra.appearance} {len(members)}",
+                build=extra.build,
+                garment=extra.garment,
                 model=extra.model,
             )
         )

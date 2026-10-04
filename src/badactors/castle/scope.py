@@ -8,7 +8,7 @@ leak is therefore not a suspicious-looking string but a line with no provenance 
 which is why a new kind of leak cannot slip past a checker that was written before
 it existed.
 
-Seven classes of leak have their own guard, because each is a mistake a plausible
+Eight classes of leak have their own guard, because each is a mistake a plausible
 refactor could make:
 
 * **foreign room** — an object or memory from somewhere the viewer has not been;
@@ -20,6 +20,9 @@ refactor could make:
 * **laundered channel** — words shown through a channel, or under an author, other
   than the ones they arrived by, and above all a player's words in the Steward's
   channel, which only the host may use;
+* **presence** — who else is in the room beyond what the light shows: a name in
+  dim or dark, a garment in the dark, a build or distinctive detail anywhere but
+  bright light;
 * **private field** — anything from a ledger entry's ``private`` intentions, which
   only the audience sees. No builder reads ``private``, and every other source a
   player may be shown is checked against the ledger, including the entry text a
@@ -36,6 +39,7 @@ from badactors.castle.contracts import (
     LedgerEntry,
     ObservationItem,
     PlayerState,
+    Presence,
     RoomView,
     ScopedObservation,
     ThingView,
@@ -44,7 +48,13 @@ from badactors.castle.contracts import (
     WorldState,
 )
 from badactors.castle.ledger import custody_chain, entry_at, recent_records
-from badactors.castle.perceive import carried_things, occupants, visible_things
+from badactors.castle.perceive import (
+    carried_things,
+    occupants,
+    presence,
+    visible_things,
+    worn_garment,
+)
 from badactors.castle.world import valid_actions
 
 RECENT_LIMIT = 40
@@ -68,7 +78,7 @@ def build_observation(
     position = viewer.position
     room_view: RoomView | None = None
     transit_view: TransitView | None = None
-    present: list[str] = []
+    present: list[Presence] = []
     visible: list[ThingView] = []
     facts: list[str] = []
     searched_here = False
@@ -82,7 +92,7 @@ def build_observation(
             lighting=room.lighting,
             exits=state.map.neighbors(room.id),
         )
-        present = [other for other in occupants(state, room.id) if other != viewer_id]
+        present = presence(state, viewer_id, room.id)
         visible = [
             _thing_view(state, viewer_id, thing_id)
             for thing_id in visible_things(state, viewer_id, room.id)
@@ -116,6 +126,7 @@ def build_observation(
             _thing_view(state, viewer_id, thing_id)
             for thing_id in carried_things(state, viewer_id)
         ],
+        wearing=_wearing(state, viewer_id),
         known_facts=facts,
         recent=[item_for(entry, record) for entry, record in records],
         plan_remaining=list(viewer.plan.steps),
@@ -137,6 +148,8 @@ def assert_no_leak(observation: ScopedObservation, state: WorldState) -> None:
     _assert_plan(observation, state, viewer_id)
     _assert_facts(observation, state, viewer_id)
     _assert_searched(observation, state, viewer_id)
+    _assert_presence(observation, state, viewer)
+    _assert_wearing(observation, state, viewer_id)
 
 
 # ------------------------------------------------------------------- leak guards
@@ -327,6 +340,87 @@ def _assert_plan(
     shown = [step.model_dump(mode="json") for step in observation.plan_remaining]
     if shown != own:
         raise LeakageError("Observation shows a plan that is not the viewer's own.")
+
+
+def _assert_presence(
+    observation: ScopedObservation,
+    state: WorldState,
+    viewer: PlayerState,
+) -> None:
+    """Who else is here, as far as the light shows and no further.
+
+    Checked against the true occupants directly, not against the builder: in
+    bright light each is named with what they wear; in dim light nobody is named
+    and only garments show; in the dark there are only silhouettes.
+    """
+    room = observation.room
+    if room is None or viewer.asleep:
+        if observation.present:
+            raise LeakageError(
+                "A viewer in a passage, or asleep, sees nobody around them."
+            )
+        return
+    others = [pid for pid in occupants(state, room.id) if pid != viewer.id]
+    truth = []
+    for pid in others:
+        player = state.players[pid]
+        garment = worn_garment(state, pid)
+        truth.append((pid, player, garment.name if garment is not None else None))
+    lighting = state.map.room(room.id).lighting
+    shown = observation.present
+    if lighting == "bright":
+        expected = sorted(
+            (pid, player.name, worn, player.detail, player.asleep)
+            for pid, player, worn in truth
+        )
+        actual = sorted(
+            (p.player_id or "", p.label, p.garment, p.detail, p.asleep) for p in shown
+        )
+        if actual != expected:
+            raise LeakageError("Observation misstates who is in this bright room.")
+        return
+    if any(p.player_id is not None or p.detail is not None for p in shown):
+        raise LeakageError(
+            "Observation names someone, or shows a distinctive detail, in a room "
+            "too dim to see it."
+        )
+    if lighting == "dim":
+        dim = sorted(
+            (
+                f"someone in a {worn}" if worn else "someone in shirtsleeves",
+                worn,
+                player.asleep,
+            )
+            for _, player, worn in truth
+        )
+        if sorted((p.label, p.garment, p.asleep) for p in shown) != dim:
+            raise LeakageError(
+                "Observation shows more than garments in a dim room, or the wrong ones."
+            )
+        return
+    dark = sorted(("someone", None, player.asleep) for _, player, _worn in truth)
+    if sorted((p.label, p.garment, p.asleep) for p in shown) != dark:
+        raise LeakageError("Observation shows more than silhouettes in the dark.")
+
+
+def _assert_wearing(
+    observation: ScopedObservation,
+    state: WorldState,
+    viewer_id: str,
+) -> None:
+    garment = worn_garment(state, viewer_id)
+    shown = observation.wearing
+    if (shown.id if shown is not None else None) != (
+        garment.id if garment is not None else None
+    ):
+        raise LeakageError("Observation misstates what the viewer is wearing.")
+    if shown is not None:
+        _assert_custody(shown, state, set(state.inspected.get(viewer_id, [])))
+
+
+def _wearing(state: WorldState, viewer_id: str) -> ThingView | None:
+    garment = worn_garment(state, viewer_id)
+    return _thing_view(state, viewer_id, garment.id) if garment is not None else None
 
 
 def _assert_searched(

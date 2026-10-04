@@ -10,12 +10,15 @@ reason to go somewhere private.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections import deque
-from collections.abc import Mapping, Sequence
+import re
+from collections import Counter, deque
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from badactors.castle.contracts import (
+    GARMENT,
     AtRoom,
     CastleMap,
     HeldBy,
@@ -23,7 +26,9 @@ from badactors.castle.contracts import (
     InRoom,
     Placement,
     PlayerState,
+    Thing,
     WorldState,
+    WornBy,
 )
 
 
@@ -87,7 +92,9 @@ def build_world(
                 "id": member.get("id"),
                 "name": member.get("name"),
                 "persona": member.get("persona"),
-                "appearance": member.get("appearance"),
+                "build": member.get("build"),
+                "starting_garment": member.get("garment"),
+                "detail": member.get("detail"),
                 "position": AtRoom(room_id=start).model_dump(mode="json"),
             }
         )
@@ -98,14 +105,68 @@ def build_world(
 
     _lint_claimants(castle, set(players))
     _lint_capacity(castle, players)
+    lint_shared_garments(players.values())
+    dressed, worn = _dress(castle, players, seed)
     return WorldState(
         id=world_id,
         seed=seed,
-        map=castle,
+        map=dressed,
         seats=seats,
         players=players,
-        placements=dict(castle.placements),
+        placements={**castle.placements, **worn},
     )
+
+
+def lint_shared_garments(players: Iterable[PlayerState]) -> None:
+    """Every garment must be worn by several people when the game starts.
+
+    A dim witness whose roll fails records only a garment, so a garment one
+    person wears would name them. Two wearers is the floor; three whenever the
+    cast is big enough for every garment to have three. Deaths thin this out as
+    the game goes on, and that is allowed.
+    """
+    seated = list(players)
+    counts = Counter(player.starting_garment for player in seated)
+    least = 3 if 3 * len(counts) <= len(seated) else 2
+    for name, count in sorted(counts.items()):
+        if count < least:
+            raise CastSpecError(
+                f"Only {count} of the cast start in a {name}; every garment needs "
+                f"at least {least} wearers, so a dim witness who sees it cannot "
+                "tell who it was."
+            )
+
+
+def _dress(
+    castle: CastleMap,
+    players: Mapping[str, PlayerState],
+    seed: int,
+) -> tuple[CastleMap, dict[str, Placement]]:
+    """Put a real garment on every back.
+
+    Each garment is an object with its own custody. Ids are numbered in an order
+    drawn from the seed, so an id found on a coat left in the cellar says
+    nothing about who first wore it; only its custody chain does.
+    """
+    by_name: dict[str, list[str]] = {}
+    for pid, player in players.items():
+        by_name.setdefault(player.starting_garment, []).append(pid)
+    taken = {thing.id for thing in castle.things}
+    things = list(castle.things)
+    worn: dict[str, Placement] = {}
+    for name in sorted(by_name):
+        slug = re.sub(r"[^a-z0-9]+", "_", name.casefold()).strip("_")
+        wearers = sorted(
+            by_name[name],
+            key=lambda pid: hashlib.sha256(f"{seed}:{pid}".encode()).hexdigest(),
+        )
+        for number, pid in enumerate(wearers, start=1):
+            thing_id = f"{slug}_{number}"
+            if thing_id in taken:
+                raise MapError(f"Garment id {thing_id!r} clashes with an object.")
+            things.append(Thing(id=thing_id, kind=GARMENT, name=name))
+            worn[thing_id] = WornBy(player_id=pid)
+    return castle.model_copy(update={"things": things}), worn
 
 
 def load_world(

@@ -14,7 +14,7 @@ import textwrap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from badactors.castle.contracts import CastlePhase, LedgerEntry
+from badactors.castle.contracts import CastlePhase, LedgerEntry, PlayerState
 from badactors.castle.game import GameState, name, names
 
 WIDTH = 96
@@ -64,11 +64,13 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
         + "."
     )
     out.append("")
+    looks = {pid: _look(world.players[pid]) for pid in world.seats}
+    width = max(len(look) for look in looks.values())
     for pid in world.seats:
         player = world.players[pid]
         model = f"  {models[pid]}" if models and pid in models else ""
         mark = "T" if pid in starting else " "
-        out.append(f"  {mark} {player.name:<7} {player.appearance:<30}{model}")
+        out.append(f"  {mark} {player.name:<7} {looks[pid]:<{width}}{model}")
 
     for day, phase, entries in _grouped(world.ledger):
         if phase == "breakfast":
@@ -88,6 +90,11 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
 
 
 # ------------------------------------------------------------------- structure
+
+
+def _look(player: PlayerState) -> str:
+    look = f"{player.build}, {player.starting_garment}"
+    return f"{look}, {player.detail}" if player.detail else look
 
 
 def _grouped(

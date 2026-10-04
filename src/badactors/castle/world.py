@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 
 from badactors.castle.contracts import (
     DAY_ORDER,
+    GARMENT,
     GATHERINGS,
     MAX_PLAN_STEPS,
     AtRoom,
@@ -41,9 +42,11 @@ from badactors.castle.contracts import (
     Thing,
     ToolStep,
     Use,
+    Wear,
     Whisper,
     WitnessRecord,
     WorldState,
+    WornBy,
 )
 from badactors.castle.ledger import (
     append,
@@ -58,6 +61,7 @@ from badactors.castle.perceive import (
     perceive,
     room_of,
     visible_things,
+    worn_garment,
 )
 
 _FORKED = frozenset(
@@ -290,13 +294,33 @@ def valid_actions(state: WorldState, player_id: str) -> list[str]:
             actions.extend(f"drop:{thing_id}:into:{box}" for box in open_here)
             actions.append(f"use:{thing_id}")
             actions.append(f"tool:inspect:{thing_id}")
+    actions.extend(f"wear:{thing_id}" for thing_id in _wearable(state, player_id))
+    on_back = worn_garment(state, player_id)
+    if on_back is not None:
+        actions.append(f"drop:{on_back.id}")
+        actions.extend(f"drop:{on_back.id}:into:{box}" for box in open_here)
     return sorted(set(actions))
+
+
+def _wearable(state: WorldState, player_id: str) -> list[str]:
+    """Garments this player could put on: in hand, or lying within reach."""
+    room_id = state.players[player_id].room_id
+    reach = set(visible_things(state, player_id, room_id)) if room_id else set()
+    out: list[str] = []
+    for thing in state.map.things:
+        if thing.kind != GARMENT:
+            continue
+        placement = state.placements.get(thing.id)
+        held = isinstance(placement, HeldBy) and placement.player_id == player_id
+        if held or (isinstance(placement, InRoom) and thing.id in reach):
+            out.append(thing.id)
+    return sorted(out)
 
 
 # ------------------------------------------------------------------- step engine
 
 _INTERRUPTING: frozenset[str] = frozenset(
-    {"move_arrive", "move_depart", "take", "drop", "stow", "death"}
+    {"move_arrive", "move_depart", "take", "drop", "stow", "wear", "death"}
 )
 
 
@@ -320,6 +344,8 @@ def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
         _do_stow(world, player, room_id, step.thing_id, step.into)
     elif isinstance(step, Drop):
         _do_drop(world, player, room_id, step.thing_id, hidden=step.hidden)
+    elif isinstance(step, Wear):
+        _do_wear(world, player, room_id, step.thing_id)
     else:
         _do_wait(world, player, room_id, step.reason)
 
@@ -469,13 +495,15 @@ def _do_drop(
     *,
     hidden: bool,
 ) -> None:
-    held = world.placements.get(thing_id)
-    if not (isinstance(held, HeldBy) and held.player_id == player.id):
+    on = _on_person(world, player.id, thing_id)
+    if on is None:
         _blocked(world, player, room_id, "that is not in hand")
         return
     thing = _thing(world, thing_id)
     placement = InRoom(room_id=room_id, hidden=hidden)
     verb = "hid" if hidden else "set down"
+    if on == "worn":
+        verb = f"took off and {verb}"
     perception = perceive(
         world,
         kind="drop",
@@ -503,8 +531,8 @@ def _do_stow(
     thing_id: str,
     container_id: str,
 ) -> None:
-    held = world.placements.get(thing_id)
-    if not (isinstance(held, HeldBy) and held.player_id == player.id):
+    on = _on_person(world, player.id, thing_id)
+    if on is None:
         _blocked(world, player, room_id, "that is not in hand")
         return
     box = next((item for item in world.map.things if item.id == container_id), None)
@@ -517,24 +545,83 @@ def _do_stow(
         return
     thing = _thing(world, thing_id)
     placement = InContainer(thing_id=container_id)
+    verb = "took off and put" if on == "worn" else "put"
     perception = perceive(
         world,
         kind="stow",
         actor_id=player.id,
         room_id=room_id,
-        describe=lambda seen: f"{seen} put the {thing.name} in the {box.name}.",
-        own_text=f"I put the {thing.name} in the {box.name}.",
+        describe=lambda seen: f"{seen} {verb} the {thing.name} in the {box.name}.",
+        own_text=f"I {verb} the {thing.name} in the {box.name}.",
     )
     append_perceived(
         world,
         perception,
         type="stow",
-        text=f"{player.name} put the {thing.name} in the {box.name}.",
+        text=f"{player.name} {verb} the {thing.name} in the {box.name}.",
         actor_id=player.id,
         room_id=room_id,
         payload=placement_payload(thing_id, placement),
     )
     move_object(world, thing_id, placement)
+
+
+def _on_person(world: WorldState, player_id: str, thing_id: str) -> str | None:
+    """Whether a player holds a thing or wears it, or neither."""
+    placement = world.placements.get(thing_id)
+    if isinstance(placement, HeldBy) and placement.player_id == player_id:
+        return "held"
+    if isinstance(placement, WornBy) and placement.player_id == player_id:
+        return "worn"
+    return None
+
+
+def _do_wear(
+    world: WorldState,
+    player: PlayerState,
+    room_id: str,
+    thing_id: str,
+) -> None:
+    """Change outer garments: one tick, seen by the room in whatever light it
+    has. The garment taken off stays in hand, to be carried, dropped or hidden,
+    and both garments' custody goes on the ledger."""
+    if thing_id not in _wearable(world, player.id):
+        _blocked(world, player, room_id, "there is no such garment within reach")
+        return
+    garment = _thing(world, thing_id)
+    old = worn_garment(world, player.id)
+    # Witnesses see the change as the person they could make out beforehand.
+    perception = perceive(
+        world,
+        kind="wear",
+        actor_id=player.id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} changed into a {garment.name}.",
+        own_text=f"I changed into a {garment.name}.",
+    )
+    if old is not None:
+        held = HeldBy(player_id=player.id)
+        append(
+            world,
+            type="take_off",
+            text=f"{player.name} took off a {old.name}.",
+            actor_id=player.id,
+            room_id=room_id,
+            payload=placement_payload(old.id, held),
+            witnesses=[_own_record(player.id, room_id, f"I took off the {old.name}.")],
+        )
+        move_object(world, old.id, held)
+    worn = WornBy(player_id=player.id)
+    append_perceived(
+        world,
+        perception,
+        type="wear",
+        text=f"{player.name} put on a {garment.name}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload=placement_payload(thing_id, worn),
+    )
+    move_object(world, thing_id, worn)
 
 
 def _do_talk(
@@ -547,9 +634,16 @@ def _do_talk(
     if not listeners:
         _blocked(world, player, room_id, "there is nobody here to talk to")
         return
-    if step.to is not None and step.to not in listeners:
+    if step.to == player.id or (
+        step.to is not None
+        and step.to not in listeners
+        and world.map.room(room_id).lighting == "bright"
+    ):
         _blocked(world, player, room_id, "that person is not here")
         return
+    # Out of bright light the speaker cannot tell who is here, so speaking to
+    # someone absent goes ahead like any other remark: a refusal would tell the
+    # speaker who is not in the room.
     perception = perceive(
         world,
         kind="talk",
@@ -582,30 +676,32 @@ def _do_whisper(
     """Words at one person's ear. Only they catch the words, and they know whose
     they are even in the dark; nobody else in the room notices, and nothing
     carries through a wall."""
-    if step.to == player.id or step.to not in awake_in(world, room_id):
+    if step.to == player.id or step.to not in world.players:
+        _blocked(world, player, room_id, "there is nobody by that name to whisper to")
+        return
+    reached = step.to in awake_in(world, room_id)
+    if not reached and world.map.room(room_id).lighting == "bright":
         _blocked(world, player, room_id, "that person is not here to whisper to")
         return
+    # Out of bright light the whisperer cannot see who is here. A whisper to
+    # someone absent, or asleep, reaches nobody, and the whisperer's own memory
+    # of it is the same as if it had: a refusal would say who is in the room.
     listener = world.players[step.to]
-    append(
-        world,
-        type="whisper",
-        text=f"{player.name} whispered to {listener.name}:",
-        actor_id=player.id,
-        room_id=room_id,
-        quote=step.text,
-        payload={"to": step.to, "words": str(len(step.text.split()))},
-        witnesses=[
-            WitnessRecord(
-                player_id=player.id,
-                sense="own",
-                confidence="clear",
-                channel="whisper",
-                text=f"I whispered to {listener.name}:",
-                quote=step.text,
-                author=player.id,
-                recorded_actor=player.id,
-                from_room=room_id,
-            ),
+    witnesses = [
+        WitnessRecord(
+            player_id=player.id,
+            sense="own",
+            confidence="clear",
+            channel="whisper",
+            text=f"I whispered to {listener.name}:",
+            quote=step.text,
+            author=player.id,
+            recorded_actor=player.id,
+            from_room=room_id,
+        )
+    ]
+    if reached:
+        witnesses.append(
             WitnessRecord(
                 player_id=step.to,
                 sense="saw",
@@ -616,8 +712,21 @@ def _do_whisper(
                 author=player.id,
                 recorded_actor=player.id,
                 from_room=room_id,
-            ),
-        ],
+            )
+        )
+    append(
+        world,
+        type="whisper",
+        text=f"{player.name} whispered to {listener.name}:",
+        actor_id=player.id,
+        room_id=room_id,
+        quote=step.text,
+        payload={
+            "to": step.to,
+            "words": str(len(step.text.split())),
+            "reached": "true" if reached else "false",
+        },
+        witnesses=witnesses,
     )
 
 

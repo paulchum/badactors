@@ -57,7 +57,7 @@ def witness_digest(
     """One player's memory of recent time, exactly as a prompt would receive it."""
     player = state.players[player_id]
     records = witnessed_by(state.ledger, player_id)[-limit:]
-    head = f"{player.name} ({player.appearance}) remembers:"
+    head = f"{player.name} ({player.build}, {player.starting_garment}) remembers:"
     if not records:
         return f"{head}\n  nothing yet."
     lines = [head]

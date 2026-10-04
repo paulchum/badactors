@@ -677,7 +677,11 @@ class Mind:
         obs = self.obs
         world = obs.world
         room = world.room
-        present = [pid for pid in world.present if pid in obs.living]
+        present = [
+            figure.player_id
+            for figure in world.present
+            if figure.player_id is not None and figure.player_id in obs.living
+        ]
         if present:
             whom = self.pick(present, "company")
             mood = self.roll("mood")

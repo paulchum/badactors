@@ -1,11 +1,17 @@
 """Turn one thing that happened into the records each player keeps of it.
 
-Degradation happens here, at write time, and never later. A witness in a dark
-room records "someone", and that string is the only thing a prompt will ever see;
-the actor's real name stays on the ledger entry beside it. A witness in a dim room
-gets a seeded roll: on a success it records the name but still labels the memory
-``unsure``, because the person genuinely isn't certain. Confidence is honest — it
-tracks how the record was made, not whether it happens to be right.
+Degradation happens here, at write time, and never later. Bright light records
+who it was. A witness in a dim room gets a seeded roll: on a success it records
+the name but still labels the memory ``unsure``, because the person genuinely
+isn't certain; on a failure it records only the outer garment — "someone in a
+grey coat" — never the build or a distinctive detail, and every garment is shared
+by several of the household, so a dim record never names one person. A dark room
+records a silhouette, "someone". That string is the only thing a prompt will ever
+see; the actor's real name stays on the ledger entry beside it. Confidence is
+honest — it tracks how the record was made, not whether it happens to be right.
+
+Disguise is nothing more than this: wear someone else's garment, and a dim witness
+whose roll fails writes down their coat, not yours.
 
 Hearing is deliberately thin. An adjacent room learns an event's kind and the room
 it came from, never who did it or what was said, because a leaked identity through
@@ -21,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from badactors.castle.contracts import (
+    GARMENT,
     AtRoom,
     CastleMap,
     Channel,
@@ -28,9 +35,12 @@ from badactors.castle.contracts import (
     InContainer,
     InRoom,
     Lighting,
+    Presence,
     RngDraw,
+    Thing,
     WitnessRecord,
     WorldState,
+    WornBy,
 )
 from badactors.castle.rng import draw
 
@@ -43,6 +53,7 @@ _AUDIBLE: dict[str, str] = {
     "take": "something being lifted",
     "drop": "something set down",
     "stow": "a lid closing",
+    "wear": "cloth rustling",
     "use": "something being handled",
     "search": "furniture being moved",
     "talk": "voices",
@@ -125,7 +136,6 @@ def perceive(
         return perception
 
     lighting = state.map.room(room_id).lighting
-    seen_as = actor.disguised_as
     for witness_id in awake_in(state, room_id):
         if witness_id == actor_id:
             continue
@@ -135,19 +145,15 @@ def perceive(
             witness_id=witness_id,
             actor_id=actor_id,
             lighting=lighting,
-            seen_as=seen_as,
         )
         if roll is not None:
             perception.rolls.append(roll)
             perception.cursor += 1
-        if identity is not None:
-            label = state.players[identity].name
-        elif lighting == "dark":
-            # A silhouette. A description in the dark would name the actor as
-            # surely as daylight to anyone who knows what the household wears.
-            label = "someone"
-        else:
-            label = actor.appearance
+        label = (
+            state.players[identity].name
+            if identity is not None
+            else unnamed(state, actor_id, lighting)
+        )
         perception.records.append(
             WitnessRecord(
                 player_id=witness_id,
@@ -182,12 +188,10 @@ def _identify(
     witness_id: str,
     actor_id: str,
     lighting: Lighting,
-    seen_as: str | None,
 ) -> tuple[str | None, RngDraw | None]:
     """Who this witness writes down, and the roll that decided it."""
-    apparent = seen_as if seen_as is not None and seen_as in state.players else actor_id
     if lighting == "bright":
-        return apparent, None
+        return actor_id, None
     if lighting == "dark":
         return None, None
     roll = draw(
@@ -196,7 +200,72 @@ def _identify(
         f"recognize:{witness_id}:{actor_id}",
         threshold=DIM_RECOGNITION,
     )
-    return (apparent if roll.success else None), roll
+    return (actor_id if roll.success else None), roll
+
+
+def unnamed(state: WorldState, player_id: str, lighting: Lighting) -> str:
+    """How someone not recognised is written down: their garment in dim light, a
+    silhouette in the dark. Never their build or a distinctive detail."""
+    if lighting == "dark":
+        return "someone"
+    garment = worn_garment(state, player_id)
+    if garment is None:
+        return "someone in shirtsleeves"
+    return f"someone in a {garment.name}"
+
+
+def worn_garment(state: WorldState, player_id: str) -> Thing | None:
+    for thing in state.map.things:
+        placement = state.placements.get(thing.id)
+        if isinstance(placement, WornBy) and placement.player_id == player_id:
+            return thing
+    return None
+
+
+def garments(state: WorldState) -> list[Thing]:
+    return [thing for thing in state.map.things if thing.kind == GARMENT]
+
+
+def presence(state: WorldState, viewer_id: str, room_id: str) -> list[Presence]:
+    """Everyone else in the room, as far as the light lets ``viewer_id`` see.
+
+    No rolls: a standing look at the room never names anyone in dim light, even
+    someone a roll recognised a moment ago. Unnamed figures are listed in label
+    order, so not even seat order hints at who is who.
+    """
+    if state.players[viewer_id].asleep:
+        return []
+    lighting = state.map.room(room_id).lighting
+    others = [pid for pid in occupants(state, room_id) if pid != viewer_id]
+    seen: list[Presence] = []
+    for pid in others:
+        player = state.players[pid]
+        garment = worn_garment(state, pid)
+        if lighting == "bright":
+            seen.append(
+                Presence(
+                    player_id=pid,
+                    label=player.name,
+                    garment=garment.name if garment is not None else None,
+                    detail=player.detail,
+                    asleep=player.asleep,
+                )
+            )
+        else:
+            seen.append(
+                Presence(
+                    label=unnamed(state, pid, lighting),
+                    garment=(
+                        garment.name
+                        if lighting == "dim" and garment is not None
+                        else None
+                    ),
+                    asleep=player.asleep,
+                )
+            )
+    if lighting != "bright":
+        seen.sort(key=lambda figure: (figure.label, figure.asleep))
+    return seen
 
 
 def _overheard(
@@ -303,8 +372,12 @@ __all__ = [
     "awake_in",
     "carried_things",
     "describe_room",
+    "garments",
     "occupants",
     "perceive",
+    "presence",
     "room_of",
+    "unnamed",
     "visible_things",
+    "worn_garment",
 ]

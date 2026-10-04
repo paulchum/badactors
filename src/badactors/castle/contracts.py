@@ -35,6 +35,12 @@ nothing communicated; every other channel carries quoted words. ``steward`` is t
 official channel, and only the host writes to it."""
 
 QUOTE_LIMIT = 400
+
+Build = Literal["tall", "slight", "broad", "stooped", "wiry", "stout"]
+"""A character's frame. Public: on the roster, and plain in bright light."""
+
+GARMENT = "garment"
+"""The ``kind`` of a worn outer garment: a real object with a custody history."""
 """The most words one message may carry. Filibuster will be the only exception."""
 
 CastlePhase = Literal[
@@ -143,8 +149,15 @@ class Offstage(Contract):
     where: Literal["offstage"] = "offstage"
 
 
+class WornBy(Contract):
+    """An outer garment on someone's back."""
+
+    where: Literal["worn"] = "worn"
+    player_id: str
+
+
 type Placement = Annotated[
-    InRoom | HeldBy | InContainer | Offstage,
+    InRoom | HeldBy | InContainer | Offstage | WornBy,
     Field(discriminator="where"),
 ]
 
@@ -289,8 +302,15 @@ class Wait(Contract):
     reason: str = Field(default="", max_length=200)
 
 
+class Wear(Contract):
+    """Put on a garment held or within reach; the one taken off stays in hand."""
+
+    kind: Literal["wear"] = "wear"
+    thing_id: str
+
+
 type Step = Annotated[
-    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait,
+    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait | Wear,
     Field(discriminator="kind"),
 ]
 
@@ -407,12 +427,16 @@ class PlayerState(Contract):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,39}$")
     name: str = Field(min_length=1, max_length=60)
     persona: str = Field(min_length=1, max_length=500)
-    appearance: str = Field(min_length=1, max_length=80)
+    build: Build
+    starting_garment: str = Field(min_length=1, max_length=40)
+    """What this character was introduced wearing, as the roster says. What
+    they wear now is a placement, and may differ."""
+    detail: str | None = Field(default=None, min_length=1, max_length=60)
+    """A distinctive mark, seen only in bright light and never recorded in dim."""
     position: Position
     alive: bool = True
     asleep: bool = False
     plan: Plan = Field(default_factory=Plan)
-    disguised_as: str | None = None
 
     @property
     def room_id(self) -> str | None:
@@ -466,6 +490,16 @@ class WorldState(Contract):
                     raise ValueError(f"Object {thing_id} cannot contain itself.")
                 if placement.thing_id not in thing_ids:
                     raise ValueError(f"Object {thing_id} sits in an unknown container.")
+            if isinstance(placement, WornBy):
+                if placement.player_id not in self.players:
+                    raise ValueError(f"Object {thing_id} is worn by an unknown player.")
+        worn = [
+            placement.player_id
+            for placement in self.placements.values()
+            if isinstance(placement, WornBy)
+        ]
+        if len(set(worn)) != len(worn):
+            raise ValueError("Nobody wears two outer garments at once.")
         if [entry.seq for entry in self.ledger] != list(range(1, len(self.ledger) + 1)):
             raise ValueError("Ledger sequence numbers must be a gapless run from 1.")
         if self.ledger_seq < len(self.ledger):
@@ -533,6 +567,21 @@ class TransitView(Contract):
     ticks_remaining: int = Field(ge=1)
 
 
+class Presence(Contract):
+    """Someone else in the room, as far as the light lets the viewer make out.
+
+    Bright: who it is, what they wear and any distinctive detail. Dim: only the
+    garment. Dark: a silhouette. ``player_id`` is set only when the viewer can see
+    who it is, so a dim or dark room never hands out a name.
+    """
+
+    player_id: str | None = None
+    label: str = Field(min_length=1, max_length=80)
+    garment: str | None = None
+    detail: str | None = None
+    asleep: bool = False
+
+
 class ScopedObservation(Contract):
     """Everything one player may be told, and nothing else."""
 
@@ -542,7 +591,8 @@ class ScopedObservation(Contract):
     phase: CastlePhase
     room: RoomView | None = None
     transit: TransitView | None = None
-    present: list[str] = Field(default_factory=list)
+    present: list[Presence] = Field(default_factory=list)
+    wearing: ThingView | None = None
     searched_here: bool = False
     visible_objects: list[ThingView] = Field(default_factory=list)
     carrying: list[ThingView] = Field(default_factory=list)

@@ -40,6 +40,7 @@ from functools import lru_cache
 from pydantic import Field
 
 from badactors.castle.contracts import (
+    Build,
     CastleMap,
     CastlePhase,
     Contract,
@@ -72,10 +73,30 @@ from badactors.castle.scope import (
 
 
 class Character(Contract):
+    """One of the household as everyone was introduced to them: the same roster
+    for every player, so all start with the same map of who wore what. It shows
+    the garment each began in, not what they wear now, and no distinctive
+    detail, which only bright light shows."""
+
     id: str
     name: str
     persona: str
-    appearance: str
+    build: Build
+    garment: str
+
+
+def roster(game: GameState) -> list[Character]:
+    world = game.world
+    return [
+        Character(
+            id=player.id,
+            name=player.name,
+            persona=player.persona,
+            build=player.build,
+            garment=player.starting_garment,
+        )
+        for player in (world.players[pid] for pid in world.seats)
+    ]
 
 
 class CastleView(Contract):
@@ -183,15 +204,7 @@ def observe_game(game: GameState, viewer_id: str, request: Request) -> GameObser
         role=role,
         fellow_traitors=fellows,
         known_roles=known,
-        cast=[
-            Character(
-                id=player.id,
-                name=player.name,
-                persona=player.persona,
-                appearance=player.appearance,
-            )
-            for player in (world.players[pid] for pid in world.seats)
-        ],
+        cast=roster(game),
         living=publicly_living(game),
         fates=list(game.fates),
         pot=game.pot,
@@ -246,6 +259,8 @@ def assert_no_game_leak(
         raise LeakageError(f"{viewer!r} is dead, and the dead take no actions.")
     if observation.world.viewer_id != viewer:
         raise LeakageError("Observation mixes two viewers.")
+    # First, so a model name is reported as what it is, wherever it was put.
+    assert_no_model_names(observation, models)
     assert_no_leak(observation.world, world)
     for item in observation.table:
         assert_item(item, viewer, world)
@@ -263,7 +278,6 @@ def assert_no_game_leak(
             "The rules must tell every player that only the Steward's announcements "
             "are real."
         )
-    assert_no_model_names(observation, models)
 
 
 def assert_no_model_names(observation: GameObservation, models: Iterable[str]) -> None:
@@ -434,6 +448,11 @@ def _assert_public(observation: GameObservation, game: GameState) -> None:
         _assert_announced(ledger, vote.seq, viewer, "a vote")
     if observation.pot != game.pot:
         raise LeakageError("Observation misstates the pot.")
+    if observation.cast != roster(game):
+        raise LeakageError(
+            "Observation's roster is not the household as introduced: it must "
+            "show the garments people began in, and no distinctive details."
+        )
     if observation.castle != castle_view(game.world.map):
         raise LeakageError(
             "Observation describes the castle beyond its public rooms and passages."

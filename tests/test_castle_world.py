@@ -19,6 +19,7 @@ from hypothesis.stateful import (
 
 from badactors.castle.contracts import (
     DAY_ORDER,
+    GARMENT,
     MAX_PLAN_STEPS,
     AtRoom,
     CastleMap,
@@ -38,8 +39,10 @@ from badactors.castle.contracts import (
     ToolStep,
     Use,
     Wait,
+    Wear,
     Whisper,
     WorldState,
+    WornBy,
 )
 from badactors.castle.director import (
     Decider,
@@ -59,9 +62,11 @@ from badactors.castle.mapfile import (
 )
 from badactors.castle.perceive import (
     carried_things,
+    garments,
     occupants,
     room_of,
     visible_things,
+    worn_garment,
 )
 from badactors.castle.rng import draw
 from badactors.castle.scope import assert_no_leak, build_observation
@@ -459,11 +464,13 @@ def test_a_summons_takes_the_quickest_way_not_the_fewest_rooms() -> None:
 
 
 def test_each_light_level_records_what_the_spec_allows() -> None:
-    """Bright names the actor; dim names them or describes them; dark gives only
-    a silhouette, never the description that would identify them anyway."""
+    """Bright names the actor. Dim names them, or records only their garment.
+    Dark gives a bare silhouette. Outside bright light no record ever carries a
+    name, a build or a distinctive detail."""
     world = _world()
     for _ in range(9):
         world = run_phase(world, RoutineDecider(seed=world.seed))
+    worn = {thing.name for thing in garments(world)}
     counted = {"bright": 0, "dim": 0, "dark": 0}
     for entry in world.ledger:
         if entry.actor_id is None or entry.room_id is None:
@@ -476,12 +483,19 @@ def test_each_light_level_records_what_the_spec_allows() -> None:
             counted[lighting] += 1
             if lighting == "bright":
                 assert record.recorded_actor == entry.actor_id
-            elif lighting == "dark":
-                assert record.recorded_actor is None
-                assert record.text.startswith("someone")
-                assert actor.appearance not in record.text
-            elif record.recorded_actor is None:
-                assert record.text.startswith(actor.appearance)
+                continue
+            if record.recorded_actor is not None:
+                assert lighting == "dim"
+                continue
+            for trait in (actor.name, actor.build, actor.detail or actor.name):
+                assert trait not in record.text, (lighting, record.text)
+            if lighting == "dark":
+                assert record.text.startswith("someone ")
+                assert not record.text.startswith("someone in a ")
+            else:
+                assert any(
+                    record.text.startswith(f"someone in a {name} ") for name in worn
+                ), record.text
     assert all(counted.values()), counted
 
 
@@ -714,6 +728,11 @@ def _drop(draw_from: st.DrawFn, thing_ids: list[str], boxes: list[str]) -> Drop:
     return Drop(thing_id=thing_id, hidden=choice == "hide")
 
 
+def _named(observation: ScopedObservation) -> list[str]:
+    """Who the viewer can see well enough to address by name."""
+    return [p.player_id for p in observation.present if p.player_id is not None]
+
+
 def _legal(action: str, present: list[str]) -> st.SearchStrategy[Step]:
     """The step a valid-action string names, with free parts drawn."""
     kind, _, rest = action.partition(":")
@@ -785,7 +804,7 @@ def _step(
     if kind == "illegal":
         return draw_from(illegal)
     action = draw_from(st.sampled_from(kinds[kind]))
-    return draw_from(_legal(action, observation.present))
+    return draw_from(_legal(action, _named(observation)))
 
 
 @dataclass
@@ -812,7 +831,7 @@ class _Drawn:
         ]
         if letting_go and self.data.draw(st.booleans(), label=f"{label} let go"):
             action = self.data.draw(st.sampled_from(letting_go), label=f"{label} how")
-            first = self.data.draw(_legal(action, observation.present))
+            first = self.data.draw(_legal(action, _named(observation)))
             steps = [first, *steps][:MAX_PLAN_STEPS]
         plan = Plan(goal="drawn", steps=steps)
         self.log.append((observation.viewer_id, observation.tick, plan))
@@ -909,12 +928,22 @@ def _play(
 def _assert_custody(world: WorldState) -> None:
     things = {thing.id for thing in world.map.things}
     assert set(world.placements) == things
+    wearers: list[str] = []
     for thing_id, placement in world.placements.items():
         if isinstance(placement, HeldBy):
             assert placement.player_id in world.players
+        elif isinstance(placement, WornBy):
+            assert placement.player_id in world.players
+            assert _thing_kind(world, thing_id) == GARMENT
+            wearers.append(placement.player_id)
         else:
             assert room_of(world, thing_id) in {room.id for room in world.map.rooms}
+    assert len(wearers) == len(set(wearers)), "someone wears two garments"
     assert replay_placements(world.ledger) == world.placements
+
+
+def _thing_kind(world: WorldState, thing_id: str) -> str:
+    return next(thing.kind for thing in world.map.things if thing.id == thing_id)
 
 
 _PROPERTY = settings(
@@ -1168,6 +1197,33 @@ class CastleMachine(RuleBasedStateMachine):
         pid, thing_id, box = data.draw(st.sampled_from(self._packers()), label="pack")
         self._act(pid, Take(thing_id=thing_id), Drop(thing_id=thing_id, into=box))
 
+    def _dressers(self) -> list[tuple[str, str]]:
+        world = self._now()
+        return [
+            (pid, action.removeprefix("wear:"))
+            for pid in self._seated()
+            for action in valid_actions(world, pid)
+            if action.startswith("wear:")
+        ]
+
+    def _shedders(self) -> list[str]:
+        world = self._now()
+        return [pid for pid in self._seated() if worn_garment(world, pid) is not None]
+
+    @precondition(lambda self: self.world is not None and bool(self._dressers()))
+    @rule(data=st.data())
+    def change_garment(self, data: st.DataObject) -> None:
+        pid, garment = data.draw(st.sampled_from(self._dressers()), label="change")
+        self._act(pid, Wear(thing_id=garment))
+
+    @precondition(lambda self: self.world is not None and bool(self._shedders()))
+    @rule(data=st.data())
+    def shed_garment(self, data: st.DataObject) -> None:
+        pid = data.draw(st.sampled_from(self._shedders()), label="who")
+        garment = worn_garment(self._now(), pid)
+        assert garment is not None
+        self._act(pid, Drop(thing_id=garment.id, hidden=data.draw(st.booleans())))
+
     @precondition(lambda self: self.world is not None and bool(self._seated()))
     @rule(data=st.data())
     def talk(self, data: st.DataObject) -> None:
@@ -1211,7 +1267,7 @@ def _custody_kinds(world: WorldState) -> set[str]:
             kinds.add("take-from-container" if " from the " in entry.text else "take")
         elif entry.type == "drop":
             kinds.add("drop-hidden" if entry.payload["hidden"] == "true" else "drop")
-        elif entry.type in {"stow", "search", "inspect", "blocked"}:
+        elif entry.type in {"stow", "search", "inspect", "blocked", "wear", "take_off"}:
             kinds.add(entry.type)
     return kinds
 
@@ -1250,6 +1306,8 @@ def test_the_machine_reaches_every_custody_path() -> None:
         "search",
         "inspect",
         "blocked",
+        "wear",
+        "take_off",
     }
     assert wanted <= set(_COVERED), sorted(wanted - set(_COVERED))
 
