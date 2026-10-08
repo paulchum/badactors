@@ -13,6 +13,7 @@ gatherings route everyone to the table and let them plan once they arrive; the
 night is supervised, with nobody asked for a plan while the house sleeps. The set
 pieces — the mission's bell, the round table, the dinner seating, the conclave —
 run at the end of their phase, or at the night tick the map schedules them for.
+As each phase opens, anything stolen since the last one is missed and reported.
 """
 
 from __future__ import annotations
@@ -42,7 +43,14 @@ from badactors.castle.decisions import (
     check_decision,
 )
 from badactors.castle.director import prompt_everyone, prompt_interrupted
-from badactors.castle.game import GameState, fork_game, name, new_game, night_schedule
+from badactors.castle.game import (
+    GameState,
+    fork_game,
+    missing_items,
+    name,
+    new_game,
+    night_schedule,
+)
 from badactors.castle.ledger import append, append_perceived
 from badactors.castle.missions import close_mission, open_mission
 from badactors.castle.night import (
@@ -203,6 +211,8 @@ class Referee:
             open_mission(self.game)
         elif phase == "night":
             open_night(self.game)
+        if self.game.status == "playing":
+            missing_items(self.game)
 
     def close_phase(self, phase: CastlePhase) -> None:
         game = self.game

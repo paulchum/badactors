@@ -23,26 +23,34 @@ from badactors.castle.contracts import (
     MAX_PLAN_STEPS,
     AtRoom,
     CastleMap,
+    CheckRegister,
+    CompareHands,
     Drop,
     HeldBy,
     InContainer,
     InRoom,
+    Inspect,
+    InspectSeal,
     InTransit,
     LedgerEntry,
     Move,
     Placement,
     Plan,
+    Read,
+    ReadLog,
     ScopedObservation,
+    Search,
+    SearchPerson,
     Step,
     Take,
     Talk,
-    ToolStep,
     Use,
     Wait,
     Wear,
     Whisper,
     WorldState,
     WornBy,
+    Write,
 )
 from badactors.castle.director import (
     Decider,
@@ -168,6 +176,7 @@ def test_fork_copies_every_field_a_transition_may_change() -> None:
         "map",
         "seats",
         "ledger_seq",
+        "balance",
     }
     assert set(WorldState.model_fields) == _FORKED | never_changed_in_place
 
@@ -401,7 +410,7 @@ def test_hidden_objects_need_a_search() -> None:
     assert "brass_key" not in visible_things(world, "june", "library")
     assert "take:brass_key" not in valid_actions(world, "june")
 
-    world = submit_plan(world, "june", Plan(steps=[ToolStep(tool="search")]))
+    world = submit_plan(world, "june", Plan(steps=[Search()]))
     world = tick(world)
     assert "brass_key" in visible_things(world, "june", "library")
     assert "brass_key" not in visible_things(world, "mara", "library")
@@ -516,7 +525,7 @@ def _walk(world: WorldState, player_id: str, *rooms: str) -> WorldState:
 
 _OPEN_THE_CABINET = Plan(
     steps=[
-        ToolStep(tool="search"),
+        Search(),
         Take(thing_id="letter_opener"),
         Drop(thing_id="letter_opener", into="cabinet"),
     ]
@@ -528,7 +537,7 @@ def test_a_search_shows_what_a_container_holds_to_the_searcher_only() -> None:
     world = _walk(world, "knox", "gallery", "armoury")
     assert "letter_opener" not in visible_things(world, "mara", "armoury")
 
-    world = submit_plan(world, "mara", Plan(steps=[ToolStep(tool="search")]))
+    world = submit_plan(world, "mara", Plan(steps=[Search()]))
     world = tick(world)
     assert "letter_opener" in visible_things(world, "mara", "armoury")
     assert "letter_opener" not in visible_things(world, "knox", "armoury")
@@ -631,7 +640,7 @@ def test_overheard_noise_does_not_interrupt() -> None:
     world.players["sol"].position = AtRoom(room_id="kitchen")
     world.players["june"].position = AtRoom(room_id="dining_room")
     world = submit_plan(world, "june", Plan(steps=[Wait(), Wait(), Wait()]))
-    world = submit_plan(world, "sol", Plan(steps=[ToolStep(tool="search"), Wait()]))
+    world = submit_plan(world, "sol", Plan(steps=[Search(), Wait()]))
     before = world.ledger_seq
     world = tick(world)
 
@@ -747,10 +756,8 @@ def _legal(action: str, present: list[str]) -> st.SearchStrategy[Step]:
         if box:
             return st.just(Drop(thing_id=thing_id, into=box))
         return st.builds(Drop, thing_id=st.just(thing_id), hidden=st.booleans())
-    if kind == "tool" and rest == "search":
-        return st.just(ToolStep(tool="search"))
     if kind == "tool":
-        return st.just(ToolStep(tool="inspect", thing_id=rest.removeprefix("inspect:")))
+        return _tool(rest, present)
     if kind == "talk":
         targets = st.sampled_from([None, *present])
         return st.builds(Talk, text=st.sampled_from(_LINES), to=targets)
@@ -770,7 +777,7 @@ def _illegal(world: WorldState) -> st.SearchStrategy[Step]:
         st.builds(Move, room_id=st.sampled_from(rooms)),
         st.builds(Take, thing_id=st.sampled_from(things)),
         _drop(things, [*boxes, "candle_stub"]),
-        st.builds(ToolStep, tool=st.just("inspect"), thing_id=st.sampled_from(things)),
+        st.builds(Inspect, thing_id=st.sampled_from(things)),
         st.builds(
             Talk, text=st.just("Are you there?"), to=st.sampled_from(world.seats)
         ),
@@ -778,10 +785,37 @@ def _illegal(world: WorldState) -> st.SearchStrategy[Step]:
     )
 
 
+def _tool(rest: str, present: list[str]) -> st.SearchStrategy[Step]:
+    """A household tool step from what a valid action names."""
+    tool, _, thing_id = rest.partition(":")
+    whom = st.sampled_from(present) if present else st.none()
+    if tool == "search":
+        return st.just(Search())
+    if tool == "inspect":
+        return st.just(Inspect(thing_id=thing_id))
+    if tool == "read":
+        return st.builds(Read, thing_id=st.just(thing_id), subject=whom)
+    if tool == "read_log":
+        return st.builds(ReadLog, thing_id=st.just(thing_id), subject=whom)
+    if tool == "write":
+        return st.builds(
+            Write, thing_id=st.just(thing_id), text=st.sampled_from(_LINES)
+        )
+    if tool == "compare_hands":
+        return st.just(CompareHands(thing_id=thing_id))
+    if tool == "check_register":
+        return st.just(CheckRegister(thing_id=thing_id))
+    if tool == "inspect_seal":
+        return st.just(InspectSeal(thing_id=thing_id))
+    if tool == "search_person" and present:
+        return st.builds(SearchPerson, to=st.sampled_from(present))
+    return st.builds(Wait, reason=st.just("thinking better of it"))
+
+
 def _kind(action: str) -> str:
     verb, _, rest = action.partition(":")
     if verb == "tool":
-        return "search" if rest == "search" else "inspect"
+        return rest.partition(":")[0]
     return verb
 
 
@@ -1155,15 +1189,13 @@ class CastleMachine(RuleBasedStateMachine):
     @precondition(lambda self: self.world is not None and bool(self._seated()))
     @rule(data=st.data())
     def search(self, data: st.DataObject) -> None:
-        self._act(data.draw(st.sampled_from(self._seated())), ToolStep(tool="search"))
+        self._act(data.draw(st.sampled_from(self._seated())), Search())
 
     @precondition(lambda self: self.world is not None and bool(self._takers()))
     @rule(data=st.data())
     def take(self, data: st.DataObject) -> None:
         pid, thing_id = data.draw(st.sampled_from(self._takers()), label="take")
-        self._act(
-            pid, ToolStep(tool="inspect", thing_id=thing_id), Take(thing_id=thing_id)
-        )
+        self._act(pid, Inspect(thing_id=thing_id), Take(thing_id=thing_id))
 
     @precondition(lambda self: self.world is not None and bool(self._holders()))
     @rule(data=st.data())
@@ -1183,7 +1215,7 @@ class CastleMachine(RuleBasedStateMachine):
     @rule(data=st.data())
     def rummage(self, data: st.DataObject) -> None:
         pid, thing_id = data.draw(st.sampled_from(self._rummagers()), label="dig")
-        self._act(pid, ToolStep(tool="search"), Take(thing_id=thing_id))
+        self._act(pid, Search(), Take(thing_id=thing_id))
 
     @precondition(lambda self: self.world is not None and bool(self._takers()))
     @rule(data=st.data())

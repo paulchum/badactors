@@ -27,6 +27,18 @@ refactor could make:
   only the audience sees. No builder reads ``private``, and every other source a
   player may be shown is checked against the ledger, including the entry text a
   custody link quotes.
+
+The toolkits add four more:
+
+* **a declared intent** — what a manipulation was meant to achieve, which no
+  observation may show, its author's included: not in a plan step, not in any
+  record of the entry that carries it;
+* **a finding seen by someone else** — what a search, a reading or a comparison
+  turned up belongs to the one who made it; anyone watching saw only the act;
+* **a covert act seen by its victim** — a pocket picked or a coat slipped into
+  leaves its victim no record unless they caught the hand;
+* **a notebook** — every noted item must cite a record its viewer noted, and a
+  secret may only be the viewer's own.
 """
 
 from __future__ import annotations
@@ -35,6 +47,7 @@ import re
 
 from badactors.castle.contracts import (
     AtRoom,
+    Intent,
     InTransit,
     LedgerEntry,
     ObservationItem,
@@ -43,11 +56,14 @@ from badactors.castle.contracts import (
     RoomView,
     ScopedObservation,
     ThingView,
+    ToolUse,
     TransitView,
     WitnessRecord,
     WorldState,
+    without_intent,
 )
 from badactors.castle.ledger import custody_chain, entry_at, recent_records
+from badactors.castle.papers import WRITING_TOOLS
 from badactors.castle.perceive import (
     carried_things,
     occupants,
@@ -57,11 +73,14 @@ from badactors.castle.perceive import (
 )
 from badactors.castle.world import valid_actions
 
-RECENT_LIMIT = 40
-"""How many of a player's most recent records reach a prompt."""
+FINDINGS: frozenset[str] = frozenset({"search", "inspect", "read", "search_person"})
+"""Entry types whose result belongs to the player who made them."""
 
-CUSTODY_LIMIT = 4
-"""How much of an inspected object's history an inspection reveals."""
+COVERT: frozenset[str] = frozenset({"plant", "steal"})
+"""Covert acts that went unnoticed: only their actor has a record."""
+
+CAUGHT: frozenset[str] = frozenset({"plant_caught", "pickpocket"})
+"""Covert acts that their target may know of, if they caught the hand."""
 
 
 class LeakageError(AssertionError):
@@ -72,9 +91,11 @@ def build_observation(
     state: WorldState,
     viewer_id: str,
     *,
-    recent_limit: int = RECENT_LIMIT,
+    recent_limit: int | None = None,
 ) -> ScopedObservation:
     viewer = state.players[viewer_id]
+    if recent_limit is None:
+        recent_limit = state.balance.recent_limit
     position = viewer.position
     room_view: RoomView | None = None
     transit_view: TransitView | None = None
@@ -127,11 +148,24 @@ def build_observation(
             for thing_id in carried_things(state, viewer_id)
         ],
         wearing=_wearing(state, viewer_id),
+        secret=viewer.secret,
         known_facts=facts,
         recent=[item_for(entry, record) for entry, record in records],
-        plan_remaining=list(viewer.plan.steps),
+        evidence=notebook_items(state, viewer_id),
+        plan_remaining=[without_intent(step) for step in viewer.plan.steps],
         valid_actions=valid_actions(state, viewer_id),
     )
+
+
+def notebook_items(state: WorldState, viewer_id: str) -> list[ObservationItem]:
+    """The viewer's most recent noted records, however long ago they were made."""
+    items: list[ObservationItem] = []
+    for seq in state.notebook.get(viewer_id, [])[-state.balance.notebook_limit :]:
+        entry = state.ledger[seq - 1]
+        record = entry.record_for(viewer_id)
+        if record is not None:
+            items.append(item_for(entry, record))
+    return items
 
 
 def assert_no_leak(observation: ScopedObservation, state: WorldState) -> None:
@@ -143,7 +177,13 @@ def assert_no_leak(observation: ScopedObservation, state: WorldState) -> None:
 
     _assert_position(observation, viewer)
     for item in observation.recent:
-        assert_item(item, viewer_id, state)
+        _assert_tool_audience(assert_item(item, viewer_id, state), item, viewer_id)
+    _assert_notebook(observation, state, viewer_id)
+    if observation.secret != viewer.secret:
+        raise LeakageError(
+            f"Observation shows {viewer_id!r} a secret that is not their own: a "
+            "notebook holds only what its viewer found."
+        )
     _assert_objects(observation, state, viewer_id)
     _assert_plan(observation, state, viewer_id)
     _assert_facts(observation, state, viewer_id)
@@ -206,7 +246,7 @@ def assert_item(
             f"Observation item for entry {entry.seq} misstates what was said, by "
             "whom, or through which channel."
         )
-    if item.tick != entry.tick:
+    if (item.tick, item.day, item.phase) != (entry.tick, entry.day, entry.phase):
         raise LeakageError(f"Observation item for entry {entry.seq} moves it in time.")
     if item.kind != entry.type:
         raise LeakageError(
@@ -306,6 +346,10 @@ def _assert_custody(
     state: WorldState,
     inspected: set[str],
 ) -> None:
+    thing = next(item for item in state.map.things if item.id == view.id)
+    honest = _written(state, view.id) if thing.kind == "paper" else None
+    if view.written != honest:
+        raise LeakageError(f"Observation misstates whether {view.id!r} is written on.")
     if view.custody is None:
         return
     if view.id not in inspected:
@@ -336,10 +380,78 @@ def _assert_plan(
     state: WorldState,
     viewer_id: str,
 ) -> None:
-    own = [step.model_dump(mode="json") for step in state.players[viewer_id].plan.steps]
+    for step in observation.plan_remaining:
+        if isinstance(step, ToolUse) and getattr(step, "intent", None) is not None:
+            raise LeakageError(
+                "Observation shows a plan step with its declared intent: a declared "
+                "intent is the audience's alone."
+            )
+    own = [
+        without_intent(step).model_dump(mode="json")
+        for step in state.players[viewer_id].plan.steps
+    ]
     shown = [step.model_dump(mode="json") for step in observation.plan_remaining]
     if shown != own:
         raise LeakageError("Observation shows a plan that is not the viewer's own.")
+
+
+def _assert_notebook(
+    observation: ScopedObservation, state: WorldState, viewer_id: str
+) -> None:
+    noted = set(state.notebook.get(viewer_id, []))
+    for item in observation.evidence:
+        entry = assert_item(item, viewer_id, state)
+        record = entry.record_for(viewer_id)
+        if record is None or not record.noted or entry.seq not in noted:
+            raise LeakageError(
+                f"Notebook item for entry {entry.seq} cites a record {viewer_id!r} "
+                "never noted: a notebook holds only what its viewer found."
+            )
+        _assert_tool_audience(entry, item, viewer_id)
+
+
+def _assert_tool_audience(
+    entry: LedgerEntry, item: ObservationItem, viewer_id: str
+) -> None:
+    """The leak classes the toolkits add, checked for one line of memory."""
+    rendered = entry.private.get("intent")
+    if rendered is not None:
+        shown = f"{item.text}\n{item.quote or ''}"
+        intent = Intent.parse(rendered)
+        free = intent.effect == "belief" and len(intent.want) >= 12
+        if rendered in shown or (
+            free and intent.want in item.text and intent.want not in (entry.quote or "")
+        ):
+            raise LeakageError(
+                f"Entry {entry.seq} shows {viewer_id!r} what its actor meant it to do: "
+                "a declared intent is the audience's alone."
+            )
+    if entry.actor_id == viewer_id:
+        return
+    if entry.type in COVERT:
+        raise LeakageError(
+            f"Entry {entry.seq} ({entry.type}) reached {viewer_id!r}: a covert act "
+            "seen by its victim, who never caught the hand."
+        )
+    if entry.type in CAUGHT and not (
+        entry.payload.get("caught") == "true" and entry.payload.get("to") == viewer_id
+    ):
+        raise LeakageError(
+            f"Entry {entry.seq} ({entry.type}) reached {viewer_id!r}: a covert act "
+            "seen by someone who never caught the hand."
+        )
+    if entry.type in FINDINGS:
+        record = entry.record_for(viewer_id)
+        own = entry.record_for(entry.actor_id or "")
+        if record is not None and (
+            record.quote is not None
+            or record.channel != "direct"
+            or (own is not None and own.text in record.text)
+        ):
+            raise LeakageError(
+                f"Entry {entry.seq} ({entry.type}) shows {viewer_id!r} what "
+                f"{entry.actor_id!r} found: a finding seen by someone else."
+            )
 
 
 def _assert_presence(
@@ -472,11 +584,27 @@ def _thing_view(state: WorldState, viewer_id: str, thing_id: str) -> ThingView:
         name=thing.name,
         properties=dict(thing.properties),
         custody=(
-            custody_chain(state.ledger, thing_id, limit=CUSTODY_LIMIT)
+            custody_chain(
+                state.ledger, thing_id, limit=state.balance.tools.inspect.links
+            )
             if inspected
             else None
         ),
+        written=_written(state, thing.id) if thing.kind == "paper" else None,
     )
+
+
+def _written(state: WorldState, thing_id: str) -> bool:
+    """Whether a sheet has writing on it: a backward scan to the first entry
+    that wrote on it, since a sheet is written at most once."""
+    for entry in reversed(state.ledger):
+        if (
+            entry.type == "write"
+            and entry.payload.get("thing_id") == thing_id
+            and entry.payload.get("tool") in WRITING_TOOLS
+        ):
+            return True
+    return False
 
 
 def item_for(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
@@ -484,6 +612,8 @@ def item_for(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
     return ObservationItem(
         ledger_seq=entry.seq,
         tick=entry.tick,
+        day=entry.day,
+        phase=entry.phase,
         kind=entry.type,
         sense=record.sense,
         confidence=record.confidence,
@@ -498,11 +628,13 @@ def item_for(entry: LedgerEntry, record: WitnessRecord) -> ObservationItem:
 
 
 __all__ = [
-    "CUSTODY_LIMIT",
-    "RECENT_LIMIT",
+    "CAUGHT",
+    "COVERT",
+    "FINDINGS",
     "LeakageError",
     "assert_item",
     "assert_no_leak",
     "build_observation",
     "item_for",
+    "notebook_items",
 ]

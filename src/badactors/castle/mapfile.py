@@ -17,6 +17,7 @@ from collections import Counter, deque
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
+from badactors.castle.balance import Balance, default_balance
 from badactors.castle.contracts import (
     GARMENT,
     AtRoom,
@@ -70,6 +71,7 @@ def lint_map(castle: CastleMap) -> None:
     _lint_connected(castle)
     _lint_things(castle)
     _lint_private_fact(castle)
+    _lint_stores(castle)
 
 
 def build_world(
@@ -78,8 +80,11 @@ def build_world(
     *,
     world_id: str,
     seed: int,
+    balance: Balance | None = None,
 ) -> WorldState:
-    """Seat an authored cast in an authored castle."""
+    """Seat an authored cast in an authored castle, with paper in the paper
+    store and a glass in the glass store for every place at dinner."""
+    numbers = balance if balance is not None else default_balance()
     room_ids = {room.id for room in castle.rooms}
     players: dict[str, PlayerState] = {}
     seats: list[str] = []
@@ -95,6 +100,7 @@ def build_world(
                 "build": member.get("build"),
                 "starting_garment": member.get("garment"),
                 "detail": member.get("detail"),
+                "secret": member.get("secret"),
                 "position": AtRoom(room_id=start).model_dump(mode="json"),
             }
         )
@@ -106,14 +112,16 @@ def build_world(
     _lint_claimants(castle, set(players))
     _lint_capacity(castle, players)
     lint_shared_garments(players.values())
-    dressed, worn = _dress(castle, players, seed)
+    stocked, stock = _stock(castle, places=len(seats), paper=numbers.paper)
+    dressed, worn = _dress(stocked, players, seed)
     return WorldState(
         id=world_id,
         seed=seed,
         map=dressed,
         seats=seats,
         players=players,
-        placements={**castle.placements, **worn},
+        placements={**castle.placements, **stock, **worn},
+        balance=numbers,
     )
 
 
@@ -167,6 +175,64 @@ def _dress(
             things.append(Thing(id=thing_id, kind=GARMENT, name=name))
             worn[thing_id] = WornBy(player_id=pid)
     return castle.model_copy(update={"things": things}), worn
+
+
+ORDINALS = (
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+)
+
+
+def _stock(
+    castle: CastleMap, *, places: int, paper: int
+) -> tuple[CastleMap, dict[str, Placement]]:
+    """Mint the castle's consumables into their stores: sheets of notepaper, and
+    one dinner glass for each place at the table. The glass at a place is the one
+    its diner drinks from, so the seating plan says whose glass is whose."""
+    things = list(castle.things)
+    placements: dict[str, Placement] = {}
+    taken = {thing.id for thing in castle.things}
+    minted: list[tuple[str, Thing]] = []
+    if castle.paper_store is not None:
+        minted += [
+            (
+                castle.paper_store,
+                Thing(id=f"paper_{n}", kind="paper", name="sheet of notepaper"),
+            )
+            for n in range(1, paper + 1)
+        ]
+    if castle.glass_store is not None:
+        minted += [
+            (
+                castle.glass_store,
+                Thing(
+                    id=f"glass_{n}",
+                    kind="glass",
+                    name=f"glass from the {_ordinal(n)} place",
+                ),
+            )
+            for n in range(1, places + 1)
+        ]
+    for store, item in minted:
+        if item.id in taken:
+            raise MapError(f"Minted object id {item.id!r} clashes with an object.")
+        things.append(item)
+        placements[item.id] = InContainer(thing_id=store)
+    return castle.model_copy(update={"things": things}), placements
+
+
+def _ordinal(n: int) -> str:
+    return ORDINALS[n - 1] if n <= len(ORDINALS) else f"{n}th"
 
 
 def load_world(
@@ -289,6 +355,25 @@ def _lint_reaches_a_room(placements: Mapping[str, Placement], thing_id: str) -> 
         if not isinstance(placement, InContainer):
             return
         current = placement.thing_id
+
+
+def _lint_stores(castle: CastleMap) -> None:
+    things = {thing.id: thing for thing in castle.things}
+    for label, store in (
+        ("paper_store", castle.paper_store),
+        ("glass_store", castle.glass_store),
+    ):
+        if store is None:
+            continue
+        if store not in things or not things[store].container:
+            raise MapError(f"{label} {store!r} must be a container in this castle.")
+    for room in castle.rooms:
+        if room.camera and room.lighting == "dark":
+            raise MapError(f"A camera in the dark {room.id!r} would record nothing.")
+    if any(room.camera for room in castle.rooms) and not any(
+        thing.kind == "camera_log" for thing in castle.things
+    ):
+        raise MapError("Rooms have cameras, but there is no camera log to read.")
 
 
 def _lint_private_fact(castle: CastleMap) -> None:

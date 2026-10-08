@@ -58,6 +58,7 @@ from badactors.castle.scope import LeakageError
 from badactors.castle.world import phase_complete, tick
 from castle_scenes import (
     MODELS,
+    NO_POISON,
     of_type,
     pause_at,
     plant_record,
@@ -146,7 +147,7 @@ def test_a_referee_that_tells_everyone_every_role_is_caught(
 def _conclave() -> tuple[GameState, GameObservation]:
     return pause_at(
         lambda observation, game: observation.request.kind == "nominate",
-        poisons=0,
+        tools=NO_POISON,
     )
 
 
@@ -178,7 +179,7 @@ def test_a_referee_that_opens_the_conclave_to_everyone_is_caught(
 
     monkeypatch.setattr(night_module, "tell", loud)
     with pytest.raises(LeakageError, match="conclave content"):
-        referee(seed=3, poisons=0).run()
+        referee(seed=3, tools=NO_POISON).run()
 
 
 def _dawn(game: GameState) -> None:
@@ -250,7 +251,7 @@ def test_a_referee_that_lets_the_house_hear_the_kill_is_caught(
 
     monkeypatch.setattr(night_module, "note", loud)
     with pytest.raises(LeakageError, match="the night's target"):
-        referee(seed=3, poisons=0).run()
+        referee(seed=3, tools=NO_POISON).run()
 
 
 # --------------------------------------------- another player's diary or reason

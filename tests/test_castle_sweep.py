@@ -1,9 +1,10 @@
 """Two hundred seeded games, every invariant checked on every one.
 
-The games are played once, by the heuristic bot in every seat, across eight,
-nine and ten players, with every fifth game run with three traitors instead of
-two. Every observation any bot was given passed the leak checker, model names
-included, before the bot saw it — a leak anywhere would have stopped the sweep.
+The games are the ones ``castle-sweep`` reports on: played once, by the heuristic
+bot in every seat, across eight, nine and ten players, with every fifth game run
+with three traitors instead of two. Every observation any bot was given passed
+the leak checker, model names included, before the bot saw it — a leak anywhere
+would have stopped the sweep.
 
 Each game depends on nothing but its seed, so they are played in a process pool;
 anything a worker raises, a leak included, fails the sweep with its traceback.
@@ -14,55 +15,19 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from math import sqrt
 
 import pytest
 
-from badactors.castle.bots import HeuristicBot
-from badactors.castle.cast import Cast
 from badactors.castle.contracts import Offstage
-from badactors.castle.game import GameState, shield_ids
-from badactors.castle.ledger import replay_placements
-from badactors.castle.play import (
-    GameRecord,
-    Played,
-    record,
-    replay,
-    run_game,
-    start_game,
-)
-from badactors.castle.rules import GameConfig
-from castle_scenes import CAST, CASTLE, MODELS
+from badactors.castle.game import shield_ids
+from badactors.castle.kit import SPECS
+from badactors.castle.ledger import replay_notebook, replay_placements
+from badactors.castle.play import GameRecord, record, replay
+from badactors.castle.sweep import Swept, play_seed, usage
+from castle_scenes import CASTLE
 
 SEEDS = range(200)
-
-
-@dataclass
-class Swept:
-    seed: int
-    cast: Cast
-    played: Played
-
-    @property
-    def game(self) -> GameState:
-        return self.played.game
-
-
-def _config(seed: int) -> GameConfig:
-    return GameConfig(traitors=3) if seed % 5 == 4 else GameConfig()
-
-
-def _play(seed: int) -> Swept:
-    cast = CAST.first(8 + seed % 3)
-    game = start_game(CASTLE, cast, seed=seed, config=_config(seed))
-    bot = HeuristicBot(seed=seed)
-    played = run_game(
-        game,
-        {pid: bot for pid in game.world.seats},
-        check_leaks=True,
-        models=MODELS,
-    )
-    return Swept(seed=seed, cast=cast, played=played)
 
 
 def _replays_identically(swept: Swept) -> bool:
@@ -82,7 +47,7 @@ def pool() -> Iterator[ProcessPoolExecutor]:
 
 @pytest.fixture(scope="module")
 def sweep(pool: ProcessPoolExecutor) -> list[Swept]:
-    return list(pool.map(_play, SEEDS, chunksize=5))
+    return list(pool.map(play_seed, SEEDS, chunksize=5))
 
 
 def test_every_game_ends_in_time_and_the_winner_matches_the_roles(
@@ -152,25 +117,73 @@ def test_a_shield_is_used_at_most_once(sweep: list[Swept]) -> None:
 
 
 def test_the_pot_is_conserved(sweep: list[Swept]) -> None:
+    """Each mission adds what its workers earned less what was sabotaged, and
+    never takes money out: a spoiled mission adds nothing."""
     for swept in sweep:
         game = swept.game
         ledger = game.world.ledger
-        earned = sum(
-            int(entry.payload["coins"])
-            for entry in ledger
-            if entry.type == "contribution"
-        )
-        announced = sum(
-            int(entry.payload["pot_change"])
+        made: Counter[int] = Counter()
+        for entry in ledger:
+            if entry.type == "contribution":
+                made[entry.day] += int(entry.payload["coins"])
+        announced = {
+            entry.day: int(entry.payload["pot_change"])
             for entry in ledger
             if entry.type == "mission_result"
-        )
-        assert game.pot == earned == announced, swept.seed
+        }
+        assert set(made) <= set(announced), swept.seed
+        for day, change in announced.items():
+            assert change == max(0, made[day]), (swept.seed, day)
+        assert game.pot == sum(announced.values()), swept.seed
         assert sum(tally.pot_change for tally in game.tallies) == game.pot
         assert sum(game.payouts.values()) == game.pot, swept.seed
         for pid in game.payouts:
             assert game.world.players[pid].alive, swept.seed
             assert game.roles[pid] == game.winner, swept.seed
+
+
+def test_every_notebook_is_the_ledgers_own_index(sweep: list[Swept]) -> None:
+    for swept in sweep:
+        world = swept.game.world
+        assert replay_notebook(world.ledger) == world.notebook, swept.seed
+
+
+def test_every_tool_is_used_somewhere_in_the_sweep(sweep: list[Swept]) -> None:
+    """Guards the sweep: a tool no bot reaches is a tool these games never test."""
+    used = usage([swept.game for swept in sweep])
+    assert not [name for name in SPECS if not used[name]], used
+
+
+def test_every_tool_roll_is_drawn_at_its_configured_chance(sweep: list[Swept]) -> None:
+    """Every roll a tool drew in two hundred games used the number its game was
+    configured with, came up exactly when its value fell under it, and came up
+    at that rate overall, within four standard errors."""
+    hits: Counter[str] = Counter()
+    drawn: Counter[str] = Counter()
+    chance: dict[str, float] = {}
+    for swept in sweep:
+        tools = swept.game.config.tools
+        for entry in swept.game.world.ledger:
+            for roll in entry.rolls:
+                head, _, rest = roll.purpose.partition(":")
+                if head == "disguise":
+                    key, number = "disguise:success", tools.disguise.success
+                elif head in SPECS:
+                    what = rest.split(":")[0]
+                    key, number = f"{head}:{what}", getattr(tools.of(head), what)
+                else:
+                    continue
+                assert roll.threshold == number, (swept.seed, roll.purpose)
+                assert roll.success is (roll.value < number), (swept.seed, roll)
+                chance[key] = number
+                drawn[key] += 1
+                hits[key] += bool(roll.success)
+    assert {"forge:trace", "poison:trace", "steal:success"} <= set(drawn)
+    for key, n in drawn.items():
+        if n < 30:
+            continue
+        p = chance[key]
+        assert abs(hits[key] / n - p) <= 4 * sqrt(p * (1 - p) / n), (key, hits[key], n)
 
 
 def test_the_dead_take_no_actions(sweep: list[Swept]) -> None:
@@ -243,6 +256,13 @@ def test_the_sweep_reaches_every_part_of_the_game(sweep: list[Swept]) -> None:
         "whisper",
         "endgame_vote",
         "endgame_result",
+        "report",
+        "alibi",
+        "vouch",
+        "missing_notice",
+        "plant_caught",
+        "floor_out",
+        "forfeit",
         "players:8",
         "players:9",
         "players:10",

@@ -15,15 +15,16 @@ import pytest
 from badactors.castle.contracts import (
     AtRoom,
     CustodyLink,
+    Inspect,
     LedgerEntry,
     Move,
     ObservationItem,
     Plan,
     ScopedObservation,
+    Search,
     Take,
     Talk,
     ThingView,
-    ToolStep,
     Wait,
     WitnessRecord,
     WorldState,
@@ -181,6 +182,8 @@ def test_planted_leak_unwitnessed_action() -> None:
                 ObservationItem(
                     ledger_seq=unseen.seq,
                     tick=unseen.tick,
+                    day=unseen.day,
+                    phase=unseen.phase,
                     kind=unseen.type,
                     sense=other.sense,
                     confidence=other.confidence,
@@ -206,6 +209,8 @@ def test_planted_leak_invented_ledger_reference() -> None:
                 ObservationItem(
                     ledger_seq=world.ledger_seq + 500,
                     tick=world.tick,
+                    day=world.day,
+                    phase=world.phase,
                     kind="talk",
                     sense="saw",
                     confidence="clear",
@@ -372,7 +377,7 @@ def test_inspection_reveals_a_slice_of_the_real_chain() -> None:
     world = submit_plan(
         world,
         "mara",
-        Plan(steps=[ToolStep(tool="inspect", thing_id="silver_decanter")]),
+        Plan(steps=[Inspect(thing_id="silver_decanter")]),
     )
     world = tick(world)
     after = build_observation(world, "mara")
@@ -409,7 +414,7 @@ def test_planted_leak_invented_custody_link() -> None:
     world = submit_plan(
         world,
         "mara",
-        Plan(steps=[ToolStep(tool="inspect", thing_id="silver_decanter")]),
+        Plan(steps=[Inspect(thing_id="silver_decanter")]),
     )
     world = tick(world)
     observation = build_observation(world, "mara")
@@ -551,7 +556,7 @@ def test_planted_leak_intent_quoted_in_a_custody_link() -> None:
     world = submit_plan(
         world,
         "mara",
-        Plan(steps=[ToolStep(tool="inspect", thing_id="silver_decanter")]),
+        Plan(steps=[Inspect(thing_id="silver_decanter")]),
     )
     world = tick(world)
     observation = build_observation(world, "mara")
@@ -603,7 +608,7 @@ def test_a_search_is_remembered_only_by_the_searcher() -> None:
     world = _world()
     world.players["mara"].position = AtRoom(room_id="library")
     world.players["sol"].position = AtRoom(room_id="library")
-    world = submit_plan(world, "mara", Plan(steps=[ToolStep(tool="search")]))
+    world = submit_plan(world, "mara", Plan(steps=[Search()]))
     world = tick(world)
     assert build_observation(world, "mara").searched_here is True
     assert build_observation(world, "sol").searched_here is False

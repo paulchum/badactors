@@ -28,13 +28,28 @@ from badactors.castle.contracts import (
 from badactors.castle.perceive import Perception
 
 CUSTODY_TYPES: frozenset[str] = frozenset(
-    {"placed", "take", "drop", "stow", "awarded", "spent", "take_off", "wear"}
+    {
+        "placed",
+        "take",
+        "drop",
+        "stow",
+        "awarded",
+        "spent",
+        "take_off",
+        "wear",
+        "plant",
+        "steal",
+        "destroyed",
+    }
 )
 """Entry types that move an object. Nothing else may change a placement.
 
 ``awarded`` and ``spent`` are the Steward's: an object handed out of its keeping
 into a player's hands, and one taken back out of play once used up. ``take_off``
-and ``wear`` are the two halves of changing an outer garment.
+and ``wear`` are the two halves of changing an outer garment. ``plant`` and
+``steal`` move something covertly into or out of a pocket, and their text names
+nobody, so the chain shows a gap rather than a culprit. ``destroyed`` is a sheet
+burned to ash, out of play.
 """
 
 
@@ -56,7 +71,8 @@ def append(
 
     ``cursor`` advances the world's roll cursor; pass the value a
     :class:`~badactors.castle.perceive.Perception` reached so consumed rolls are
-    never handed out twice.
+    never handed out twice. Every record marked ``noted`` files the entry in its
+    holder's notebook.
     """
     state.ledger_seq += 1
     entry = LedgerEntry(
@@ -75,6 +91,9 @@ def append(
         rolls=list(rolls),
     )
     state.ledger.append(entry)
+    for record in entry.witnesses:
+        if record.noted:
+            state.notebook.setdefault(record.player_id, []).append(entry.seq)
     if cursor is not None:
         state.rng_cursor = cursor
     return entry
@@ -91,8 +110,10 @@ def append_perceived(
     quote: str | None = None,
     payload: Mapping[str, str] | None = None,
     private: Mapping[str, str] | None = None,
+    rolls: Sequence[RngDraw] = (),
 ) -> LedgerEntry:
-    """Append an entry carrying the records and rolls a perception produced."""
+    """Append an entry carrying the records and rolls a perception produced.
+    ``rolls`` are any drawn before it, such as a tool's own, and come first."""
     return append(
         state,
         type=type,
@@ -103,7 +124,7 @@ def append_perceived(
         payload=payload,
         private=private,
         witnesses=perception.records,
-        rolls=perception.rolls,
+        rolls=[*rolls, *perception.rolls],
         cursor=perception.cursor,
     )
 
@@ -190,6 +211,16 @@ def recent_records(
     return out
 
 
+def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
+    """Rebuild every player's notebook from the ledger alone."""
+    notebook: dict[str, list[int]] = {}
+    for entry in ledger:
+        for record in entry.witnesses:
+            if record.noted:
+                notebook.setdefault(record.player_id, []).append(entry.seq)
+    return notebook
+
+
 def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
     """The entry with this sequence number. Sequence numbers are a gapless run
     from 1, so this is an index, not a search."""
@@ -271,6 +302,7 @@ __all__ = [
     "move_object",
     "placement_payload",
     "recent_records",
+    "replay_notebook",
     "replay_placements",
     "seed_placements",
     "witnessed_by",

@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CASTLE = load_map(ROOT / "configs/castle/map.json")
 CAST = load_cast_file(ROOT / "configs/castle/cast.json")
 MODELS = sorted(set(CAST.models().values()))
+NO_POISON = {"poison": {"per_game": 0}}
+"""Tool overrides for a game where nobody may poison."""
 
 type Script = Callable[[GameObservation, GameState], Decision | None]
 
@@ -48,7 +50,7 @@ def referee(
     """A referee for a fresh game, every seat played by the bot unless the
     script answers first."""
     cast = CAST.first(players)
-    game = start_game(CASTLE, cast, seed=seed, config=GameConfig(**config))
+    game = start_game(CASTLE, cast, seed=seed, config=GameConfig.shipped(**config))
     ref = Referee(fork_game(game), {}, models=tuple(MODELS))
     bot = HeuristicBot(seed=seed)
 
@@ -166,6 +168,7 @@ __all__ = [
     "CAST",
     "CASTLE",
     "MODELS",
+    "NO_POISON",
     "Pause",
     "Script",
     "of_type",

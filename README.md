@@ -4,7 +4,7 @@ Frontier AI models play a hidden-role social-deduction game. The audience sees e
 
 ## Status
 
-- **The Castle (in progress):** a ten-room castle with per-passage travel times, mixed lighting, objects whose custody is derived from an append-only ledger, and perception that degrades a witness's record as it is written. The game is played in it: traitors drawn from a seed, missions worked at stations for a noisily tallied pot, secret shields, one kill a night (a conclave murder or dinner poison), recruitment, a structured round table and endgame, all refereed through scoped, leak-checked observations and replayable from a stored log. Seeded bots play it end to end; the traitor toolkit and the model harness are next. Specified in [SPEC.md](SPEC.md).
+- **The Castle (in progress):** an eleven-room castle with per-passage travel times, mixed lighting, objects whose custody is derived from an append-only ledger, and perception that degrades a witness's record as it is written. The game is played in it: traitors drawn from a seed, missions worked at stations for a noisily tallied pot, secret shields, one kill a night (a conclave murder or dinner poison), recruitment, a structured round table and endgame, all refereed through scoped, leak-checked observations and replayable from a stored log. Both toolkits run on one machinery with every number in `configs/castle/balance.json`: traitors forge, plant, tamper, poison, steal, disguise and manipulate; the Faithful search, inspect, read the logs and report. Seeded bots play it end to end; the model harness is next. Specified in [SPEC.md](SPEC.md).
 - **Hidden-role game:** deterministic engine, scoped prompts with a leakage test, OpenRouter and mock providers, SQLite persistence, spectator UI, seasons, OpenSkill ratings and clip detection. The game is talk-only: speak, nominate, vote, murder. The Castle replaces it.
 - **Persistent village:** residents with needs, places, trade and memories, advanced by a background worker. Residents can enter the hidden-role game and carry the result home. The Castle replaces it.
 - **Not done yet:** no games against real models so far; every stored decision came from the demo provider.
@@ -49,6 +49,18 @@ bot was given passed the leak checker first. `--save` writes a record that
 replays to the identical ledger; `--ledger` adds the raw ledger with its rolls.
 The cast is `configs/castle/cast.json`: characters and the models that will play
 them, though no model name ever reaches a player.
+
+Two hundred such games, and how the tools fared in them:
+
+```sh
+uv run castle-sweep
+uv run castle-sweep --seeds 50 --no-leak-check
+```
+
+It reports, from the finished ledgers, how often each tool was used, how often
+each roll came up against its number in `configs/castle/balance.json`, how often
+someone else found a tool's trace, how often each manipulation worked, was
+reported or backfired, and the wins by side.
 
 Open the Vite URL, create a demo world and run some ticks. Games from the command line use the mock provider:
 

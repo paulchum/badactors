@@ -5,6 +5,14 @@ dinner by a traitor seated beside the victim, or a murder the conclave chooses i
 the crypt. The poisoned die at dawn whatever they carry; a murder is turned aside
 by a shield in the victim's hands, which crumbles doing it.
 
+Poison and recruitment are tools, and run on the same machinery as the rest: the
+kit gates them, the balance sets their limits, and their rolls are drawn and
+recorded the same way. Each place at dinner has its own glass, the one in the
+glass store numbered for that place, and the glasses are washed and set before
+the seats are drawn. A poisoning may leave residue in the victim's glass, and
+whoever sits on the poisoner's other side may notice the reach; the poisoner is
+told neither.
+
 The night is walked, not narrated. When the lamps go out everybody walks to the
 chambers, traitors included, so leaving dinner tells nobody anything. The
 Faithful fall asleep there, and a sleeper records nothing. Once the house is
@@ -52,6 +60,7 @@ from badactors.castle.game import (
     living,
     living_faithful,
     living_traitors,
+    make_traitor,
     name,
     names,
     present_at,
@@ -60,13 +69,14 @@ from badactors.castle.game import (
     tell_role,
     victor,
 )
+from badactors.castle.kit import Attempt, refusal
 from badactors.castle.ledger import (
     append,
     append_perceived,
     move_object,
     placement_payload,
 )
-from badactors.castle.perceive import perceive
+from badactors.castle.perceive import perceive, seen_as
 from badactors.castle.rng import draw
 from badactors.castle.steward import announce, note, tell
 from badactors.castle.world import fall_asleep, route_steps, wake_up
@@ -75,8 +85,15 @@ from badactors.castle.world import fall_asleep, route_steps, wake_up
 
 
 def seat_dinner(game: GameState) -> None:
-    """Draw tonight's seats for whoever came to dinner, and post the plan."""
+    """Wash and set the glasses, draw tonight's seats for whoever came to
+    dinner, and post the plan."""
     world = game.world
+    note(
+        world,
+        type="washed",
+        text="The glasses were washed and set, one at each place.",
+        room_id=world.map.gathering_room,
+    )
     order = present_at(game, world.map.gathering_room)
     cursor = world.rng_cursor
     rolls = []
@@ -113,37 +130,54 @@ def neighbours(seating: list[str], player_id: str) -> list[str]:
     return [left] if left == right else [left, right]
 
 
+def glass_at(game: GameState, player_id: str) -> str | None:
+    """The glass at this diner's place tonight, if they had one."""
+    if player_id not in game.seating:
+        return None
+    glass = f"glass_{game.seating.index(player_id) + 1}"
+    things = {thing.id for thing in game.world.map.things}
+    return glass if glass in things else None
+
+
+def poison_cooling(game: GameState) -> bool:
+    """Whether a poisoning too recent stops the traitors pouring tonight."""
+    wait = game.world.balance.tools.poison.cooldown_days
+    for entry in reversed(game.world.ledger):
+        if entry.payload.get("tool") == "poison":
+            return game.world.day - entry.day < wait
+    return False
+
+
 def poison_turn(game: GameState) -> tuple[str, Request] | None:
-    """The next traitor who sits beside one of the Faithful, while poison is
-    still to be had and nobody has used it tonight."""
+    """The next traitor who sits beside one of the Faithful and may still pour,
+    while nobody has poured tonight and the last poisoning is far enough back."""
     night = game.night
-    if night is None or night.poisoned is not None:
+    if night is None or night.poisoned is not None or poison_cooling(game):
         return None
-    left = game.config.poisons - game.poisons_used
-    if left <= 0:
-        return None
-    for pid in game.world.seats:
+    world = game.world
+    for pid in world.seats:
         if pid in night.asked_poison or pid not in game.seating:
             continue
         if game.roles[pid] != "traitor" or not alive(game, pid):
             continue
+        if refusal(world, pid, "poison") is not None:
+            continue
         beside = neighbours(game.seating, pid)
         victims = [
             other
-            for other in game.world.seats
+            for other in world.seats
             if other in beside
             and game.roles[other] == "faithful"
             and alive(game, other)
         ]
         if victims:
-            times = "once more" if left == 1 else f"{left} more times"
             return pid, Request(
                 kind="poison",
                 options=victims,
                 prompt=(
                     f"You are seated beside {names(game, victims)}. You may slip "
                     "poison into one glass instead of tonight's murder, or pass. "
-                    f"The poisoned die at dawn, shield or no; you can do it {times}."
+                    "The poisoned die at dawn, shield or no."
                 ),
             )
     return None
@@ -157,39 +191,78 @@ def poison_act(
         return
     night.asked_poison.append(player_id)
     if isinstance(decision, Poison):
-        world = game.world
-        room_id = world.map.gathering_room
-        victim = decision.target
-        perception = perceive(
-            world,
-            kind="poison",
-            actor_id=player_id,
-            room_id=room_id,
-            describe=lambda seen: f"{seen} reached across the table.",
-            own_text=f"I tipped the dose into {name(game, victim)}'s glass.",
-            private=True,
-        )
-        append_perceived(
-            world,
-            perception,
-            type="poison",
-            text=f"{name(game, player_id)} poisoned {name(game, victim)}'s glass.",
-            actor_id=player_id,
-            room_id=room_id,
-            payload={"target": victim},
-            private={"diary": decision.diary} if decision.diary else {},
-        )
-        note(
-            world,
-            type="kill_attempt",
-            text=f"Tonight's kill is poison, for {name(game, victim)}.",
-            payload={"method": "poison", "target": victim, "by": player_id},
-        )
-        night.poisoner = player_id
-        night.poisoned = victim
-        game.poisons_used += 1
+        _pour(game, night, player_id, decision)
     elif isinstance(decision, Pass):
         declined(game, player_id, request, decision)
+
+
+def _pour(game: GameState, night: NightState, player_id: str, decision: Poison) -> None:
+    """The dose goes in. Residue is a hidden roll, and so is each neighbour's
+    chance to notice the reach; the poisoner's own memory is the same whatever
+    they came to."""
+    world = game.world
+    room_id = world.map.gathering_room
+    victim = decision.target
+    numbers = world.balance.tools.poison
+    attempt = Attempt(world, player_id, "poison")
+    residue = attempt.roll("trace", numbers.trace, victim)
+    others = [
+        pid
+        for pid in neighbours(game.seating, player_id)
+        if pid != victim and alive(game, pid)
+    ]
+    noticed = [pid for pid in others if attempt.roll("seen", numbers.seen, pid)]
+    perception = perceive(
+        world,
+        kind="poison",
+        actor_id=player_id,
+        room_id=room_id,
+        describe=lambda seen: f"{seen} reached across the table.",
+        own_text=f"I tipped the dose into {name(game, victim)}'s glass.",
+        private=True,
+    )
+    perception.note(player_id)
+    lighting = world.map.room(room_id).lighting
+    for pid in noticed:
+        perception.put(
+            WitnessRecord(
+                player_id=pid,
+                sense="saw",
+                confidence="clear" if lighting == "bright" else "unsure",
+                channel="direct",
+                text=f"{seen_as(world, player_id, lighting)} reached across toward "
+                f"{name(game, victim)}'s glass.",
+                recorded_actor=player_id if lighting == "bright" else None,
+                from_room=room_id,
+                noted=True,
+            )
+        )
+    glass = glass_at(game, victim)
+    append_perceived(
+        world,
+        perception,
+        type="poison",
+        text=f"{name(game, player_id)} poisoned {name(game, victim)}'s glass.",
+        actor_id=player_id,
+        room_id=room_id,
+        payload={
+            "tool": "poison",
+            "target": victim,
+            "glass": glass or "",
+            "residue": "true" if residue and glass else "false",
+            "seen_by": ",".join(noticed),
+        },
+        private={"diary": decision.diary} if decision.diary else {},
+        rolls=attempt.rolls,
+    )
+    note(
+        world,
+        type="kill_attempt",
+        text=f"Tonight's kill is poison, for {name(game, victim)}.",
+        payload={"method": "poison", "target": victim, "by": player_id},
+    )
+    night.poisoner = player_id
+    night.poisoned = victim
 
 
 def declined(game: GameState, player_id: str, request: Request, decision: Pass) -> None:
@@ -283,6 +356,8 @@ def settle_sleepers(game: GameState) -> None:
 
 
 def can_recruit(game: GameState) -> bool:
+    """Whether tonight may see an offer at all: one or two traitors left, fewer
+    than began, nobody poisoned and no offer made yet."""
     night = game.night
     traitors = living_traitors(game)
     return (
@@ -324,6 +399,8 @@ def recruit_turn(game: GameState) -> tuple[str, Request] | None:
     for pid in present_at(game, chambers):
         if game.roles[pid] != "traitor" or pid in night.asked_recruit:
             continue
+        if refusal(game.world, pid, "recruit") is not None:
+            continue
         return pid, Request(
             kind="recruit",
             options=targets,
@@ -355,8 +432,7 @@ def recruit_act(
     if isinstance(decision, Accept):
         seq = _answer(game, offer, decision, "accepted")
         _settle_offer(game, night, offer.model_copy(update={"answer": "accepted"}))
-        game.roles[offer.target] = "traitor"
-        game.traitor_since[offer.target] = seq
+        make_traitor(game, offer.target, seq)
         tell_role(game, offer.target, joined=True)
         game.world.players[offer.target].plan = Plan(
             goal="follow the traitors to the conclave", steps=_conclave_trip(game)
@@ -386,7 +462,7 @@ def _make_offer(
         actor_id=recruiter,
         room_id=room_id,
         quote=decision.text,
-        payload={"target": target},
+        payload={"tool": "recruit", "target": target},
         private={"diary": decision.diary} if decision.diary else {},
         witnesses=[
             WitnessRecord(
@@ -399,6 +475,7 @@ def _make_offer(
                 author=recruiter,
                 recorded_actor=recruiter,
                 from_room=room_id,
+                noted=True,
             ),
             WitnessRecord(
                 player_id=target,
@@ -411,6 +488,7 @@ def _make_offer(
                 author=recruiter,
                 recorded_actor=recruiter,
                 from_room=room_id,
+                noted=True,
             ),
         ],
     )
@@ -719,8 +797,6 @@ def breakfast_news(game: GameState) -> None:
             )
         )
     game.night = None
-    game.seating = []
-    game.seating_seq = None
     game.table = None
     game.mission = None
     game.mission_seq = None

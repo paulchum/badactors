@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
         overrides["traitors"] = args.traitors
     if args.max_days is not None:
         overrides["max_days"] = args.max_days
-    config = GameConfig.model_validate(overrides)
+    config = GameConfig.shipped(**overrides)
 
     game = start_game(castle, cast, seed=args.seed, config=config)
     bot = HeuristicBot(seed=args.seed)

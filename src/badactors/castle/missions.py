@@ -11,9 +11,11 @@ the tally can be a mistake rather than a lie.
 
 The hardest worker is given a shield in secret while the Steward has one left.
 
-Sabotage arrives in phase 3. It hooks in at :func:`sabotaged`: a covert fumble
-will subtract from one worker's yield there, and everything downstream — the
-contribution entries, the pot, the tally — already accounts for it.
+A traitor can sabotage the work: a turn at the station spent spoiling it rather
+than doing it. It looks like work to anyone watching unless the fumble shows, it
+earns nothing, and it costs the pot the balance's ``coins``. A worker's
+contribution is what they earned less what they spoiled, and may be negative;
+the pot never shrinks, so a mission that does more harm than good adds nothing.
 """
 
 from __future__ import annotations
@@ -38,12 +40,6 @@ from badactors.castle.ledger import append, move_object, placement_payload
 from badactors.castle.rng import draw
 from badactors.castle.rules import MissionKind
 from badactors.castle.steward import announce, note
-
-CIPHER_ODDS = 0.5
-CIPHER_PRIZE = 5
-CARRY_LOAD = 2
-TEAM_SIZE = 3
-"""Workers at the clock case in the same tick for each of them to earn double."""
 
 
 def open_mission(game: GameState) -> None:
@@ -87,9 +83,9 @@ def work_done(game: GameState) -> dict[str, list[LedgerEntry]]:
 
 
 def sabotaged(game: GameState, player_id: str, turns: Sequence[LedgerEntry]) -> int:
-    """Coins this worker covertly kept out of the pot. Always zero until the
-    sabotage tool exists; it is the one place that tool will change."""
-    return 0
+    """Coins this worker's spoiled turns cost the pot."""
+    spoiled = sum(1 for entry in turns if entry.payload.get("tool") == "sabotage")
+    return spoiled * game.world.balance.tools.sabotage.coins
 
 
 def close_mission(game: GameState) -> None:
@@ -99,6 +95,7 @@ def close_mission(game: GameState) -> None:
     if mission is None:
         return
     world = game.world
+    yields = game.config.yields
     turns = work_done(game)
     crowd = Counter(entry.tick for entries in turns.values() for entry in entries)
     cursor = world.rng_cursor
@@ -107,20 +104,22 @@ def close_mission(game: GameState) -> None:
         rolls = []
         earned = 0
         for entry in entries:
+            if entry.payload.get("tool") == "sabotage":
+                continue
             if mission.kind == "cipher":
                 roll = draw(
                     world.seed,
                     cursor,
                     f"cipher:{pid}:t{entry.tick}",
-                    threshold=CIPHER_ODDS,
+                    threshold=yields.cipher_odds,
                 )
                 cursor += 1
                 rolls.append(roll)
-                earned += CIPHER_PRIZE if roll.success else 0
+                earned += yields.cipher_prize if roll.success else 0
             else:
-                earned += _flat_yield(mission.kind, crowd[entry.tick])
+                earned += _flat_yield(game, mission.kind, crowd[entry.tick])
         kept_back = sabotaged(game, pid, entries)
-        contributions[pid] = max(0, earned - kept_back)
+        contributions[pid] = earned - kept_back
         note(
             world,
             type="contribution",
@@ -138,7 +137,7 @@ def close_mission(game: GameState) -> None:
             rolls=rolls,
             cursor=cursor,
         )
-    change = sum(contributions.values())
+    change = max(0, sum(contributions.values()))
     game.pot += change
 
     reported, noise, cursor = _rough_tally(game, contributions)
@@ -146,7 +145,7 @@ def close_mission(game: GameState) -> None:
     clerk = ", ".join(
         f"{name(game, pid)} about {coins}" for pid, coins in reported.items()
     )
-    if change:
+    if contributions:
         words = (
             f"The bell. The mission added {change} coins; the pot now holds "
             f"{game.pot}. My clerk's rough tally of the work: {clerk}."
@@ -184,10 +183,13 @@ def close_mission(game: GameState) -> None:
         _award_shield(game, spare, contributions)
 
 
-def _flat_yield(kind: MissionKind, workers_this_tick: int) -> int:
+def _flat_yield(game: GameState, kind: MissionKind, workers_this_tick: int) -> int:
+    yields = game.config.yields
     if kind == "carry":
-        return CARRY_LOAD
-    return 2 if workers_this_tick >= TEAM_SIZE else 1
+        return yields.carry_load
+    if workers_this_tick >= yields.team_size:
+        return yields.assemble_team
+    return yields.assemble_solo
 
 
 def _rough_tally(
@@ -262,10 +264,6 @@ def _award_shield(game: GameState, shield: str, contributions: dict[str, int]) -
 
 
 __all__ = [
-    "CARRY_LOAD",
-    "CIPHER_ODDS",
-    "CIPHER_PRIZE",
-    "TEAM_SIZE",
     "close_mission",
     "open_mission",
     "sabotaged",

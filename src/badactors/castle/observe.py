@@ -25,8 +25,14 @@ first check. Each class of game secret has its guard:
 * **a recruitment offer seen by a non-participant** — the offer and its answer
   are between the recruiter and the recruit;
 * **the night's target before breakfast** — the kill's machinery belongs to the
-  traitors and the target, and a death is public only once announced;
-* **a whisper seen by anyone except its recipient** — and its author.
+  traitors and the target, a death is public only once announced, and a dose
+  poured at dinner is known to the poisoner and to whoever the roll let notice;
+* **a whisper seen by anyone except its recipient** — and its author, whatever
+  tool the words came from;
+* **a stolen shield's owner** — the report of a shield gone missing is the
+  owner's alone, since it says they carried one;
+* **a tool its user does not carry** — a round-table turn offers only the tools
+  in its player's kit, and cites only records they hold.
 
 Model names never enter the game state at all. :func:`assert_no_model_names`
 checks that a model name appears nowhere in an observation, quotes included.
@@ -61,6 +67,7 @@ from badactors.castle.game import (
     publicly_living,
     was_traitor_at,
 )
+from badactors.castle.kit import SPECS, carries
 from badactors.castle.ledger import entry_at
 from badactors.castle.rules import OFFICIAL_ONLY, MissionSpec, Role, rulebook
 from badactors.castle.scope import (
@@ -264,7 +271,11 @@ def assert_no_game_leak(
     assert_no_leak(observation.world, world)
     for item in observation.table:
         assert_item(item, viewer, world)
-    for item in (*observation.world.recent, *observation.table):
+    for item in (
+        *observation.world.recent,
+        *observation.world.evidence,
+        *observation.table,
+    ):
         entry = entry_at(world.ledger, item.ledger_seq)
         assert entry is not None  # assert_item has already proven it exists
         _assert_audience(entry, viewer, game)
@@ -357,7 +368,13 @@ def _audience_of(entry: LedgerEntry, game: GameState) -> tuple[str, Audience] | 
     if kind == "attack_survived":
         return "the night's target", lambda viewer: viewer == payload.get("target")
     if kind == "poison":
-        return "the night's target", lambda viewer: viewer == entry.actor_id
+        noticed = set(payload.get("seen_by", "").split(","))
+        return (
+            "the night's target",
+            lambda viewer: viewer == entry.actor_id or viewer in noticed,
+        )
+    if kind == "missing":
+        return "a stolen shield's owner", lambda viewer: viewer == payload.get("owner")
     if kind in UNSEEN_TYPES:
         return "the night's target", lambda viewer: False
     if kind == "whisper":
@@ -502,6 +519,19 @@ def _assert_request(observation: GameObservation, game: GameState) -> None:
             f"A {request.kind} decision was put to {viewer!r}, one of the Faithful: "
             "conclave content reaching a Faithful."
         )
+    for tool in request.tools:
+        if tool not in SPECS or not carries(game.world, viewer, tool):
+            raise LeakageError(
+                f"{viewer!r} is offered {tool!r}, which their kit does not hold: a "
+                "tool its user does not carry."
+            )
+    for seq in request.evidence:
+        entry = entry_at(game.world.ledger, seq)
+        if entry is None or entry.record_for(viewer) is None:
+            raise LeakageError(
+                f"{viewer!r} is offered entry {seq} to cite, which they never "
+                "witnessed: a tool its user does not carry."
+            )
     if request.kind == "recruit_answer":
         offer = game.night.offer if game.night is not None else None
         if (

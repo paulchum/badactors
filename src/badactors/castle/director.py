@@ -23,13 +23,14 @@ from typing import Protocol
 
 from badactors.castle.contracts import (
     GATHERINGS,
+    Inspect,
     Move,
     Plan,
     ScopedObservation,
+    Search,
     Step,
     Take,
     Talk,
-    ToolStep,
     Wait,
     WorldState,
 )
@@ -220,11 +221,11 @@ class RoutineDecider:
         if loose:
             target = loose[salt % len(loose)]
             goal = f"get hold of the {target.name}"
-            steps.append(ToolStep(tool="inspect", thing_id=target.id))
+            steps.append(Inspect(thing_id=target.id))
             steps.append(Take(thing_id=target.id))
         elif _worth_searching(observation):
             goal = f"turn over the {observation.room.name}"
-            steps.append(ToolStep(tool="search"))
+            steps.append(Search())
 
         if observation.present:
             figure = observation.present[salt % len(observation.present)]

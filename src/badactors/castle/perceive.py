@@ -10,8 +10,11 @@ records a silhouette, "someone". That string is the only thing a prompt will eve
 see; the actor's real name stays on the ledger entry beside it. Confidence is
 honest — it tracks how the record was made, not whether it happens to be right.
 
-Disguise is nothing more than this: wear someone else's garment, and a dim witness
-whose roll fails writes down their coat, not yours.
+Disguise works through both rolls. Wear someone else's kind of garment and a dim
+witness whose roll fails writes down that garment, not yours. Take on their manner
+as well, with the disguise tool, and a dim witness whose roll succeeds — who
+thinks they know who it is — may be fooled by a second roll into writing down the
+person you are passing as. Bright light always names you.
 
 Hearing is deliberately thin. An adjacent room learns an event's kind and the room
 it came from, never who did it or what was said, because a leaked identity through
@@ -44,9 +47,6 @@ from badactors.castle.contracts import (
 )
 from badactors.castle.rng import draw
 
-DIM_RECOGNITION = 0.5
-"""Chance a witness in a dim room pins the identity rather than a description."""
-
 _AUDIBLE: dict[str, str] = {
     "move_depart": "footsteps leaving",
     "move_arrive": "footsteps arriving",
@@ -73,6 +73,21 @@ class Perception:
     records: list[WitnessRecord] = field(default_factory=list)
     rolls: list[RngDraw] = field(default_factory=list)
     cursor: int = 0
+
+    def note(self, *player_ids: str) -> None:
+        """File these holders' records in their notebooks."""
+        wanted = set(player_ids)
+        self.records = [
+            record.model_copy(update={"noted": True})
+            if record.player_id in wanted
+            else record
+            for record in self.records
+        ]
+
+    def put(self, record: WitnessRecord) -> None:
+        """Give one holder this record in place of whatever they had."""
+        kept = [held for held in self.records if held.player_id != record.player_id]
+        self.records = [*kept, record]
 
 
 def occupants(state: WorldState, room_id: str) -> list[str]:
@@ -139,16 +154,15 @@ def perceive(
     for witness_id in awake_in(state, room_id):
         if witness_id == actor_id:
             continue
-        identity, roll = _identify(
+        identity, rolls = _identify(
             state,
             cursor=perception.cursor,
             witness_id=witness_id,
             actor_id=actor_id,
             lighting=lighting,
         )
-        if roll is not None:
-            perception.rolls.append(roll)
-            perception.cursor += 1
+        perception.rolls.extend(rolls)
+        perception.cursor += len(rolls)
         label = (
             state.players[identity].name
             if identity is not None
@@ -188,19 +202,42 @@ def _identify(
     witness_id: str,
     actor_id: str,
     lighting: Lighting,
-) -> tuple[str | None, RngDraw | None]:
-    """Who this witness writes down, and the roll that decided it."""
+) -> tuple[str | None, list[RngDraw]]:
+    """Who this witness writes down, and the rolls that decided it."""
     if lighting == "bright":
-        return actor_id, None
+        return actor_id, []
     if lighting == "dark":
-        return None, None
+        return None, []
     roll = draw(
         state.seed,
         cursor,
         f"recognize:{witness_id}:{actor_id}",
-        threshold=DIM_RECOGNITION,
+        threshold=state.balance.dim_recognition,
     )
-    return (actor_id if roll.success else None), roll
+    if not roll.success:
+        return None, [roll]
+    passing_as = state.disguises.get(actor_id)
+    if (
+        passing_as is None
+        or passing_as == witness_id
+        or not state.players[passing_as].alive
+    ):
+        return actor_id, [roll]
+    fooled = draw(
+        state.seed,
+        cursor + 1,
+        f"disguise:{witness_id}:{actor_id}",
+        threshold=state.balance.tools.disguise.success,
+    )
+    return (passing_as if fooled.success else actor_id), [roll, fooled]
+
+
+def seen_as(state: WorldState, player_id: str, lighting: Lighting) -> str:
+    """How someone looks to a standing glance in this light, with no roll:
+    their name in bright light, otherwise as :func:`unnamed` has it."""
+    if lighting == "bright":
+        return state.players[player_id].name
+    return unnamed(state, player_id, lighting)
 
 
 def unnamed(state: WorldState, player_id: str, lighting: Lighting) -> str:
@@ -366,7 +403,6 @@ def describe_room(castle: CastleMap, room_id: str) -> str:
 
 
 __all__ = [
-    "DIM_RECOGNITION",
     "Perception",
     "audible_kinds",
     "awake_in",
@@ -377,6 +413,7 @@ __all__ = [
     "perceive",
     "presence",
     "room_of",
+    "seen_as",
     "unnamed",
     "visible_things",
     "worn_garment",

@@ -41,7 +41,7 @@ def _write(tmp_path: Path, payload: dict[str, Any]) -> Path:
 
 def test_shipped_castle_loads() -> None:
     castle = load_map(MAP_PATH)
-    assert len(castle.rooms) == 10
+    assert len(castle.rooms) == 11
     assert {room.lighting for room in castle.rooms} == {"bright", "dim", "dark"}
     assert castle.gathering_room == "great_hall"
     assert castle.conclave_room == "crypt"

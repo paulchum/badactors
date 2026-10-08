@@ -1,0 +1,62 @@
+{
+  "max_days": 8,
+  "traitors": 2,
+  "shields": 3,
+  "endgame_at": 4,
+  "tally_noise": 3,
+  "recent_limit": 40,
+  "notebook_limit": 30,
+  "dim_recognition": 0.5,
+  "paper": 12,
+  "yields": {
+    "cipher_odds": 0.5,
+    "cipher_prize": 5,
+    "carry_load": 2,
+    "assemble_solo": 1,
+    "assemble_team": 2,
+    "team_size": 3
+  },
+  "tools": {
+    "search": { "success": 1.0, "trace": 0.0 },
+    "inspect": { "success": 1.0, "trace": 0.0, "links": 4 },
+    "read": { "success": 1.0, "trace": 0.0, "secret": 0.6 },
+    "read_log": { "success": 1.0, "trace": 0.0, "lines": 24 },
+    "write": { "success": 1.0, "trace": 0.0 },
+    "relay": { "success": 1.0, "trace": 1.0, "per_day": 3 },
+    "compare_hands": { "success": 0.8, "trace": 0.0 },
+    "check_register": { "success": 1.0, "trace": 0.0 },
+    "inspect_seal": { "success": 0.9, "trace": 0.0 },
+    "search_person": { "success": 1.0, "trace": 0.0, "per_game": 1 },
+    "demand_alibi": { "success": 1.0, "trace": 0.0 },
+    "cross_examine": { "success": 1.0, "trace": 0.0 },
+    "report": { "success": 1.0, "trace": 0.0 },
+    "forge": { "success": 1.0, "trace": 0.5 },
+    "plant": { "success": 0.75, "trace": 1.0 },
+    "tamper": { "success": 1.0, "trace": 0.5 },
+    "poison": {
+      "success": 1.0,
+      "trace": 0.6,
+      "per_game": 1,
+      "seen": 0.25,
+      "cooldown_days": 2
+    },
+    "rumor": { "success": 1.0, "trace": 1.0, "per_day": 2 },
+    "sabotage": { "success": 1.0, "trace": 0.35, "coins": 3 },
+    "steal": { "success": 0.6, "trace": 1.0, "per_day": 1 },
+    "recruit": { "success": 1.0, "trace": 1.0, "per_day": 1 },
+    "blackmail": { "success": 1.0, "trace": 1.0, "per_day": 1 },
+    "disguise": { "success": 0.6, "trace": 1.0 },
+    "clean_up": { "success": 1.0, "trace": 1.0 },
+    "counterfeit": { "success": 1.0, "trace": 1.0, "per_day": 1 },
+    "hook": { "success": 1.0, "trace": 1.0, "per_day": 1 },
+    "honeypot": { "success": 1.0, "trace": 1.0, "per_day": 1 },
+    "gaslight": { "success": 1.0, "trace": 1.0, "per_day": 2 },
+    "filibuster": {
+      "success": 1.0,
+      "trace": 1.0,
+      "chars": 1600,
+      "floor": 3,
+      "forfeit": 2
+    }
+  }
+}

@@ -44,7 +44,7 @@ from badactors.castle.game import (
     split,
 )
 from badactors.castle.mapfile import CastSpecError
-from badactors.castle.missions import CARRY_LOAD, CIPHER_PRIZE, sabotaged, work_done
+from badactors.castle.missions import sabotaged, work_done
 from badactors.castle.night import (
     can_recruit,
     end_night,
@@ -74,6 +74,7 @@ from castle_scenes import (
     CAST,
     CASTLE,
     MODELS,
+    NO_POISON,
     of_type,
     referee,
     run_until,
@@ -87,7 +88,7 @@ def _game(seed: int = 13, players: int = 10, **config: object) -> GameState:
         CASTLE,
         CAST.first(players),
         seed=seed,
-        config=GameConfig.model_validate(config),
+        config=GameConfig.shipped(**config),
     )
 
 
@@ -98,7 +99,9 @@ def _observe(game: GameState, viewer: str, request: Request = PLAN) -> GameObser
 
 
 def _mission(kind: str) -> list[MissionSpec]:
-    return [mission for mission in GameConfig().missions if mission.kind == kind]
+    return [
+        mission for mission in GameConfig.shipped().missions if mission.kind == kind
+    ]
 
 
 # ------------------------------------------------------------------------ roles
@@ -202,7 +205,7 @@ def test_a_day_runs_every_phase_to_its_tick_budget() -> None:
 
 
 def test_night_sends_the_faithful_to_sleep_and_the_traitors_to_the_conclave() -> None:
-    game = run_until(referee(seed=3, poisons=0), 2, "mission")
+    game = run_until(referee(seed=3, tools=NO_POISON), 2, "mission")
     assert not game.offers
     night = [e for e in game.world.ledger if e.day == 1 and e.phase == "night"]
     retire = next(entry for entry in night if entry.type == "retire")
@@ -235,7 +238,8 @@ def test_the_pot_change_is_announced_exactly_and_the_tally_only_roughly() -> Non
     for entry in contributions:
         assert entry.witnesses == []
         assert (
-            int(entry.payload["coins"]) == len(turns[entry.actor_id or ""]) * CARRY_LOAD
+            int(entry.payload["coins"])
+            == len(turns[entry.actor_id or ""]) * game.config.yields.carry_load
         )
     result = of_type(game, "mission_result")[0]
     change = sum(int(entry.payload["coins"]) for entry in contributions)
@@ -258,7 +262,9 @@ def test_each_mission_kind_pays_by_its_own_rule() -> None:
     cipher = run_until(referee(seed=8, missions=_mission("cipher")), 1, "free_time")
     for entry in of_type(cipher, "contribution"):
         cracked = sum(1 for roll in entry.rolls if roll.success)
-        assert int(entry.payload["coins"]) == cracked * CIPHER_PRIZE
+        assert (
+            int(entry.payload["coins"]) == cracked * cipher.config.yields.cipher_prize
+        )
     clock = run_until(referee(seed=8, missions=_mission("assemble")), 1, "free_time")
     turns = work_done(clock)
     crowd: dict[int, int] = {}
@@ -272,11 +278,15 @@ def test_each_mission_kind_pays_by_its_own_rule() -> None:
         assert int(entry.payload["coins"]) == expected
 
 
-def test_sabotage_has_its_hook_and_holds_nothing_back_yet() -> None:
+def test_every_contribution_accounts_for_sabotage() -> None:
     game = run_until(referee(seed=4), 1, "free_time")
+    turns = work_done(game)
     for entry in of_type(game, "contribution"):
-        assert entry.payload["sabotage"] == "0"
-        assert sabotaged(game, entry.actor_id or "", []) == 0
+        worker = entry.actor_id or ""
+        held_back = sabotaged(game, worker, turns[worker])
+        assert entry.payload["sabotage"] == str(held_back)
+        assert int(entry.payload["coins"]) == int(entry.payload["earned"]) - held_back
+        assert sabotaged(game, worker, []) == 0
 
 
 # ---------------------------------------------------------------------- shields
@@ -292,10 +302,10 @@ def _holder(game: GameState) -> str:
 def _shielded_game(phase: str = "free_time") -> GameState:
     """The first seeded game where one of the Faithful wins the day-one shield."""
     for seed in range(1, 40):
-        game = run_until(referee(seed=seed, poisons=0), 1, "free_time")
+        game = run_until(referee(seed=seed, tools=NO_POISON), 1, "free_time")
         holders = [p for p in living_faithful(game) if shield_held_by(game, p)]
         if holders:
-            return run_until(referee(seed=seed, poisons=0), 1, phase)  # type: ignore[arg-type]
+            return run_until(referee(seed=seed, tools=NO_POISON), 1, phase)  # type: ignore[arg-type]
     raise AssertionError("no seed gave one of the Faithful a shield")
 
 
@@ -346,7 +356,10 @@ def test_a_shield_turns_aside_one_murder_and_is_spent() -> None:
 
 def test_poison_kills_through_a_shield() -> None:
     game = _shielded_game("dinner")
-    game.config = game.config.model_copy(update={"poisons": 1})
+    poison = game.world.balance.tools.poison.model_copy(update={"per_game": 1})
+    game.world.balance = game.world.balance.model_copy(
+        update={"tools": game.world.balance.tools.model_copy(update={"poison": poison})}
+    )
     holder = _holder(game)
     traitor = living_traitors(game)[0]
     seat_dinner(game)
@@ -379,7 +392,7 @@ def test_a_shield_left_behind_protects_nobody() -> None:
 
 
 def test_poison_is_limited_by_the_balance_config() -> None:
-    game = run_until(referee(seed=4, poisons=0), 1, "dinner")
+    game = run_until(referee(seed=4, tools=NO_POISON), 1, "dinner")
     seat_dinner(game)
     assert poison_turn(game) is None
 
@@ -472,7 +485,16 @@ def test_refusing_an_offer_makes_the_refuser_that_nights_target() -> None:
 # ----------------------------------------------------------------- round table
 
 
-_STAGES = ["accuse", "defend", "question", "answer", "vote"]
+# Alibis and vouching are answers: they come in the answer stage.
+_STAGES = {
+    "accuse": 0,
+    "defend": 1,
+    "question": 2,
+    "answer": 3,
+    "alibi": 3,
+    "vouch": 3,
+    "vote": 4,
+}
 
 
 def test_the_round_table_runs_its_turns_in_order() -> None:
@@ -484,7 +506,7 @@ def test_the_round_table_runs_its_turns_in_order() -> None:
         if entry.phase == "round_table" and "stage" in entry.payload
     ]
     assert stages, "the table took no turns"
-    order = [_STAGES.index(stage) for stage in stages]
+    order = [_STAGES[stage] for stage in stages]
     assert order == sorted(order)
     assert {"accuse", "question", "vote"} <= set(stages)
 

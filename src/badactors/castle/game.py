@@ -22,24 +22,30 @@ from pydantic import Field
 
 from badactors.castle.cast import check_size
 from badactors.castle.contracts import (
+    SHIELD,
     AtRoom,
     CastleMap,
+    CastlePhase,
     Contract,
     HeldBy,
+    InContainer,
     InRoom,
     Offstage,
     Placement,
     Plan,
     Thing,
+    WitnessRecord,
     WorldState,
 )
+from badactors.castle.ledger import append
 from badactors.castle.mapfile import MapError, build_world
+from badactors.castle.perceive import room_of
 from badactors.castle.rng import draw
 from badactors.castle.rules import GameConfig, MissionKind, MissionSpec, Role
 from badactors.castle.steward import announce, note, tell
 from badactors.castle.world import fork, start
 
-SHIELD_KIND = "shield"
+SHIELD_KIND = SHIELD
 
 NUMBERS = {
     0: "none",
@@ -111,8 +117,26 @@ TableStage = Literal[
 
 
 class Asked(Contract):
+    """Something put to a player at the table that they must answer: a
+    question, a cross-examination, or a demand for an alibi over one part of a
+    day."""
+
     asker: str
     target: str
+    seq: int = Field(ge=1)
+    kind: Literal["question", "cross", "alibi"] = "question"
+    day: int | None = Field(default=None, ge=1)
+    phase: CastlePhase | None = None
+
+
+class Given(Contract):
+    """An alibi given at the table, which its companion is asked to vouch for."""
+
+    claimant: str
+    room: str
+    companion: str | None
+    day: int = Field(ge=1)
+    phase: CastlePhase
     seq: int = Field(ge=1)
 
 
@@ -128,8 +152,11 @@ class TableState(Contract):
     round: int = Field(default=1, ge=1)
     accused: list[str] = Field(default_factory=list)
     questions: list[Asked] = Field(default_factory=list)
+    alibis: list[Given] = Field(default_factory=list)
     votes: dict[str, str] = Field(default_factory=dict)
     endgame_votes: dict[str, str] = Field(default_factory=dict)
+    floor_lost: int = Field(default=0, ge=0)
+    """Speaking turns at the end of this stage that a filibuster has used up."""
     seqs: list[int] = Field(default_factory=list)
     """Every entry the table produced today, in order."""
 
@@ -173,8 +200,10 @@ class GameState(Contract):
     seating_seq: int | None = None
     table: TableState | None = None
     night: NightState | None = None
-    poisons_used: int = Field(default=0, ge=0)
     shields_spent: list[str] = Field(default_factory=list)
+    forfeits: dict[str, int] = Field(default_factory=dict)
+    """Round-table speaking turns each player has yet to give up for a
+    filibuster."""
     status: Literal["playing", "over"] = "playing"
     winner: Role | None = None
     payouts: dict[str, int] = Field(default_factory=dict)
@@ -271,7 +300,7 @@ def new_game(
     world_id: str = "castle-game",
 ) -> GameState:
     """Seat a cast, mint the shields, draw the traitors and open day one."""
-    rules = config if config is not None else GameConfig()
+    rules = config if config is not None else GameConfig.shipped()
     check_size(len(characters))
     lint_game(castle, rules)
     world = start(
@@ -280,6 +309,7 @@ def new_game(
             characters,
             world_id=world_id,
             seed=seed,
+            balance=rules.balance(),
         )
     )
     game = GameState(
@@ -391,10 +421,16 @@ def _draw_roles(game: GameState) -> None:
     )
     game.starting_traitors = traitors
     for pid in traitors:
-        game.roles[pid] = "traitor"
-        game.traitor_since[pid] = drawn.seq
+        make_traitor(game, pid, drawn.seq)
     for pid in world.seats:
         tell_role(game, pid)
+
+
+def make_traitor(game: GameState, player_id: str, seq: int) -> None:
+    """Turn a player: their role, and the traitor kit in the world."""
+    game.roles[player_id] = "traitor"
+    game.traitor_since[player_id] = seq
+    game.world.kits[player_id] = "traitor"
 
 
 def tell_role(game: GameState, player_id: str, *, joined: bool = False) -> None:
@@ -465,6 +501,99 @@ def remove(game: GameState, player_id: str, *, type: str, cause: str) -> None:
     )
 
 
+# --------------------------------------------------------------- missing items
+
+
+def missing_items(game: GameState) -> None:
+    """Things that went missing are reported as each part of the day begins.
+
+    A shield picked from a pocket is missed by its owner, who files a report
+    only they hold, since it says they carried one; the Steward announces to
+    everyone that a shield token was stolen, never whose. The Steward's own
+    seal, gone from the desk in the study, is announced as missing once each
+    time it leaves. Nothing is reported by anyone who is dead.
+    """
+    world = game.world
+    ledger = world.ledger
+    reported = {
+        int(entry.payload["steal"])
+        for entry in ledger
+        if entry.type == "missing" and "steal" in entry.payload
+    }
+    for entry in list(ledger):
+        if entry.type != "steal" or entry.seq in reported:
+            continue
+        owner = entry.payload["to"]
+        if not alive(game, owner):
+            continue
+        player = world.players[owner]
+        append(
+            world,
+            type="missing",
+            text=f"{player.name} found their shield token gone.",
+            room_id=player.room_id,
+            payload={"steal": str(entry.seq), "owner": owner},
+            witnesses=[
+                WitnessRecord(
+                    player_id=owner,
+                    sense="own",
+                    confidence="clear",
+                    channel="direct",
+                    text="My shield token is gone from my pocket. Someone took it.",
+                    recorded_actor=owner,
+                    from_room=player.room_id,
+                    noted=True,
+                )
+            ],
+        )
+        announce(
+            world,
+            type="missing_notice",
+            words="A shield token has been reported stolen from the one who held it.",
+            payload={"kind": SHIELD_KIND, "steal": str(entry.seq)},
+        )
+    _seal_missing(game)
+
+
+def _seal_missing(game: GameState) -> None:
+    world = game.world
+    seal = next((thing for thing in world.map.things if thing.kind == "seal"), None)
+    if seal is None:
+        return
+    home = world.map.placements.get(seal.id)
+    if world.placements.get(seal.id) == home:
+        return
+    left = max(
+        (
+            entry.seq
+            for entry in world.ledger
+            if entry.payload.get("thing_id") == seal.id and entry.type == "take"
+        ),
+        default=0,
+    )
+    noticed = any(
+        entry.seq > left
+        for entry in world.ledger
+        if entry.type == "missing_notice" and entry.payload.get("thing_id") == seal.id
+    )
+    if left and not noticed:
+        kept = (
+            room_of(world, home.thing_id)
+            if isinstance(home, InContainer)
+            else home.room_id
+            if isinstance(home, InRoom)
+            else None
+        )
+        room = world.map.room(kept or world.map.gathering_room)
+        announce(
+            world,
+            type="missing_notice",
+            words=f"My seal is missing from the {room.name}. Any decree under it "
+            "that is not in my register is not mine.",
+            payload={"thing_id": seal.id},
+        )
+
+
 # ----------------------------------------------------------------------- endings
 
 
@@ -526,6 +655,7 @@ __all__ = [
     "Fate",
     "GameSetupError",
     "GameState",
+    "Given",
     "NightState",
     "Offer",
     "TableStage",
@@ -539,6 +669,8 @@ __all__ = [
     "living",
     "living_faithful",
     "living_traitors",
+    "make_traitor",
+    "missing_items",
     "name",
     "names",
     "new_game",

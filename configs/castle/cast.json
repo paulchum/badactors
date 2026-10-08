@@ -7,6 +7,7 @@
       "build": "tall",
       "garment": "grey coat",
       "detail": "a ring of keys",
+      "secret": "Mara has been quietly altering the household accounts to cover a debt.",
       "start_room": "great_hall",
       "model": "anthropic/claude-opus-5.5"
     },
@@ -17,6 +18,7 @@
       "build": "broad",
       "garment": "dark shawl",
       "detail": "flour dust",
+      "secret": "Sol waters the wine and sells the difference in the village.",
       "start_room": "great_hall",
       "model": "openai/gpt-6.1-sol"
     },
@@ -27,6 +29,7 @@
       "build": "slight",
       "garment": "canvas jacket",
       "detail": "ink-stained cuffs",
+      "secret": "Iris reads other people's letters before she files them.",
       "start_room": "great_hall",
       "model": "google/gemini-3.1-pro-preview"
     },
@@ -37,6 +40,7 @@
       "build": "stout",
       "garment": "grey coat",
       "detail": "heavy boots",
+      "secret": "Knox poached deer from the neighbouring estate last winter.",
       "start_room": "great_hall",
       "model": "x-ai/grok-4.7"
     },
@@ -47,6 +51,7 @@
       "build": "slight",
       "garment": "dark shawl",
       "detail": "spectacles",
+      "secret": "June lost her licence to practise in the city and has never said why.",
       "start_room": "great_hall",
       "model": "deepseek/deepseek-v4-pro-0813"
     },
@@ -57,6 +62,7 @@
       "build": "wiry",
       "garment": "canvas jacket",
       "detail": "mud on the hem",
+      "secret": "Ash sells the household's comings and goings to a newspaper.",
       "start_room": "great_hall",
       "model": "moonshotai/kimi-k3"
     },
@@ -67,6 +73,7 @@
       "build": "slight",
       "garment": "grey coat",
       "detail": "a pale scarf",
+      "secret": "Wren pawned a family heirloom that was not hers to pawn.",
       "start_room": "great_hall",
       "model": "qwen/qwen3.8-27b"
     },
@@ -77,6 +84,7 @@
       "build": "stooped",
       "garment": "dark shawl",
       "detail": "a priest's collar",
+      "secret": "Vale was dismissed from his last parish for drinking.",
       "start_room": "great_hall",
       "model": "z-ai/glm-5.3"
     },
@@ -87,6 +95,7 @@
       "build": "tall",
       "garment": "canvas jacket",
       "detail": "brass buttons",
+      "secret": "Hale never served at the battle he talks about.",
       "start_room": "great_hall",
       "model": "meta/muse-spark-1.3"
     },
@@ -97,6 +106,7 @@
       "build": "wiry",
       "garment": "grey coat",
       "detail": "a starched cap",
+      "secret": "Nell has been taking food from the larder for her brother.",
       "start_room": "great_hall",
       "model": "mistralai/mistral-medium-3-5"
     }

@@ -1,11 +1,12 @@
 """Who plays whom.
 
-A cast file maps characters (name, persona, build, garment and an optional
-distinctive detail) to the models that play them. Garments are shared on purpose:
-a dim witness records only what someone wears, so it must never single anyone
-out. The game only ever sees the characters: :meth:`Cast.characters` drops the
-model before anything is built, so no state a prompt is scoped from holds a model
-name. The mapping stays with whoever runs the game, for the benchmark.
+A cast file maps characters (name, persona, build, garment, an optional
+distinctive detail and a secret) to the models that play them. Garments are
+shared on purpose: a dim witness records only what someone wears, so it must
+never single anyone out. The game only ever sees the characters:
+:meth:`Cast.characters` drops the model before anything is built, so no state a
+prompt is scoped from holds a model name. The mapping stays with whoever runs the
+game, for the benchmark.
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ class CastMember(Contract):
     build: Build
     garment: str = Field(pattern=r"^[a-z][a-z -]{1,38}[a-z]$")
     detail: str | None = Field(default=None, min_length=1, max_length=60)
+    secret: str | None = Field(default=None, min_length=1, max_length=200)
+    """Something the character would rather nobody knew; it is written in their
+    letters, where a blackmailer can find it."""
     start_room: str | None = None
     model: str = Field(min_length=1, max_length=120)
 

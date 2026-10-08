@@ -1,17 +1,21 @@
-"""The game's balance knobs, and the rulebook every player is handed.
+"""The rules a game is played under, and the rulebook every player is handed.
 
-Everything a balance pass might tune sits in :class:`GameConfig`, so a stored
-game carries the exact rules it was played under. The rulebook is written from the
-same config, so what a player is told and what the referee enforces cannot drift
-apart.
+:class:`GameConfig` is every number in ``configs/castle/balance.json`` plus the
+missions on offer, so a stored game carries the exact rules it was played under.
+Built without arguments it is the shipped balance; any field given overrides
+the file, nested sections merging key by key, so a test can change one tool's
+odds without restating the rest. The rulebook is written from the same config,
+so what a player is told and what the referee enforces cannot drift apart.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from badactors.castle.balance import Balance, ToolName, default_balance_data
 from badactors.castle.contracts import Contract
 
 Role = Literal["faithful", "traitor"]
@@ -68,22 +72,22 @@ def _default_missions() -> list[MissionSpec]:
     ]
 
 
-class GameConfig(Contract):
-    max_days: int = Field(default=8, ge=2, le=30)
-    traitors: int = Field(default=2, ge=2, le=3)
-    """Two by default at every size. Three is allowed, but among eight to ten
-    bots, three traitors won nine games in ten; two won half."""
-    shields: int = Field(default=3, ge=0, le=8)
-    """Shield tokens the Steward holds for the whole game."""
-    endgame_at: int = Field(default=4, ge=2, le=MAX_PLAYERS)
-    """At this many living players the round table becomes the final one."""
-    tally_noise: int = Field(default=3, ge=0, le=10)
-    """Each worker's reported contribution is off by up to this many coins."""
-    poisons: int = Field(default=1, ge=0, le=10)
-    """Poisonings the traitors may use in a game, until phase 3 gives poison
-    its traces and a proper cost."""
-    recent_limit: int = Field(default=40, ge=1, le=200)
+class GameConfig(Balance):
+    """Every number from the balance file, and the missions on offer."""
+
     missions: list[MissionSpec] = Field(default_factory=_default_missions)
+
+    @classmethod
+    def shipped(cls, **overrides: Any) -> GameConfig:
+        """The shipped balance, with any fields given overriding it."""
+        return cls.model_validate(overrides)
+
+    @model_validator(mode="before")
+    @classmethod
+    def balance_from_the_file(cls, data: Any) -> Any:
+        if isinstance(data, Mapping):
+            return _merged(default_balance_data(), data)
+        return data
 
     @model_validator(mode="after")
     def distinct_missions(self) -> GameConfig:
@@ -93,6 +97,20 @@ class GameConfig(Contract):
         if len(set(kinds)) != len(kinds):
             raise ValueError("Each mission kind may be configured once.")
         return self
+
+    def balance(self) -> Balance:
+        """The numbers alone, as the world holds them."""
+        return Balance.model_validate(self.model_dump(exclude={"missions"}))
+
+
+def _merged(base: Mapping[str, Any], over: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in over.items():
+        if isinstance(value, Mapping) and isinstance(out.get(key), Mapping):
+            out[key] = _merged(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 OFFICIAL_ONLY = (
@@ -113,12 +131,14 @@ def rulebook(
     missions = "\n".join(
         f"  - {mission.title}: {mission.briefing}" for mission in config.missions
     )
+    dose = config.tools.poison
     poison = (
-        "or, at most "
-        + ("once" if config.poisons == 1 else f"{config.poisons} times")
-        + " a game, poison slipped into a dinner neighbour's glass: the victim "
-        "dies the next morning even if they carry a shield"
-        if config.poisons
+        "or poison slipped into a dinner neighbour's glass: the victim dies the "
+        "next morning even if they carry a shield. Each traitor may poison "
+        + ("once" if dose.per_game == 1 else f"{dose.per_game} times")
+        + " a game, and never within "
+        + f"{dose.cooldown_days} days of the last poisoning"
+        if dose.per_game
         else "and never by poison"
     )
     return f"""THE RULES OF {castle_name.upper()}
@@ -154,10 +174,40 @@ lasts a fixed number of ticks. In a tick you take one step of your plan.
   the end. The winners still alive split the pot.
 - When it is your turn to speak you may stay silent; give a private reason.
 
+{toolkit(config)}
+
 WHO TO BELIEVE
 Everything you learn says how it reached you: your own senses, speech, a whisper,
 a note, a book, a log, or the Steward. {OFFICIAL_ONLY} No player can write to the
 Steward's channel."""
+
+
+def toolkit(config: GameConfig) -> str:
+    """The tools, as the rulebook lists them: what each does and what it costs,
+    from the same specs and numbers the referee enforces."""
+    from badactors.castle.kit import FAITHFUL_TOOLS, SPECS, TRAITOR_TOOLS
+
+    def line(name: ToolName) -> str:
+        numbers = config.tools.of(name)
+        limits = []
+        if numbers.per_day is not None:
+            limits.append(f"{numbers.per_day} a day")
+        if numbers.per_game is not None:
+            limits.append(f"{numbers.per_game} a game")
+        limit = f" ({', '.join(limits)})" if limits else ""
+        rule = SPECS[name].rule.format(**numbers.model_dump())
+        return f"  - {name}: {rule}{limit}."
+
+    household = "\n".join(line(name) for name in FAITHFUL_TOOLS)
+    traitor = "\n".join(line(name) for name in TRAITOR_TOOLS)
+    return f"""TOOLS
+Everyone carries the household's tools. Most are a step in your plan; demand an
+alibi, cross-examine and report are your turn at the round table. Nobody can
+read, write or compare hands in the dark.
+{household}
+The traitors also carry these. Poison is chosen at dinner and recruitment at
+night; filibuster is a turn at the round table; the rest are plan steps.
+{traitor}"""
 
 
 __all__ = [
@@ -169,4 +219,5 @@ __all__ = [
     "MissionSpec",
     "Role",
     "rulebook",
+    "toolkit",
 ]
