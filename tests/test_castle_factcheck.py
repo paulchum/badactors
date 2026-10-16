@@ -44,6 +44,7 @@ from castle_scenes import (
     misreported,
     rumour_scene,
     tally_scene,
+    tampered_log_scene,
 )
 
 
@@ -155,6 +156,30 @@ def test_a_rumour_relayed_three_hops_names_its_origin() -> None:
     assert all(relay.payload["rumor"] == str(start.seq) for relay in relays)
     relayed = {relay.seq for relay in relays}
     assert not any(verdict.claim.seq in relayed for verdict in found)
+
+
+def test_a_line_tampered_into_a_log_is_traced_to_the_tamperer() -> None:
+    staged = tampered_log_scene()
+    subject, reader = staged.faithful[0], staged.faithful[1]
+    tamper = staged.last("write", staged.traitor)
+    assert tamper.payload["tool"] == "tamper"
+    read = staged.last("read", reader)
+    assert read.seq > tamper.seq
+    backdated = int(tamper.payload["tick"])
+    claim = Claim(
+        speaker=reader,
+        seq=staged.last("vote", reader).seq,
+        kind="location",
+        subject=subject,
+        room="chapel",
+        tick_from=backdated,
+        tick_to=backdated,
+        text="The guest book has her in the Chapel then.",
+    )
+    [verdict] = verdicts(staged.game, [claim], log=staged.log)
+    assert (verdict.truth, verdict.label) == ("false", "implanted")
+    assert verdict.planted_by == staged.traitor
+    assert verdict.path == [tamper.seq, read.seq]
 
 
 def test_a_bluff_is_invented_and_the_diary_owns_up() -> None:

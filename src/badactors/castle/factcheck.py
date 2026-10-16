@@ -81,11 +81,12 @@ from badactors.castle.contracts import (
     LedgerEntry,
     Placement,
     WitnessRecord,
+    WorldState,
     WornBy,
 )
 from badactors.castle.game import GameState, name, was_traitor_at
 from badactors.castle.ledger import CUSTODY_TYPES, placement_of
-from badactors.castle.papers import LOG_KINDS, log_lines
+from badactors.castle.papers import LOG_KINDS, LogLine, log_lines
 from badactors.castle.play import LoggedDecision
 from badactors.castle.rules import Role
 
@@ -1451,6 +1452,10 @@ def _log_lines_for(
         log_id = read.payload["thing_id"]
         day = int(read.payload.get("day", read.day))
         then = world.model_copy(update={"ledger": book.ledger[: read.seq - 1]})
+        untouched = {
+            line.seq: line.subject
+            for line in log_lines(_untampered(then, log_id), log_id, day)
+        }
         room = _log_room(book, log_id)
         quote = read.quote or ""
         for line in log_lines(then, log_id, day):
@@ -1465,7 +1470,7 @@ def _log_lines_for(
             )
             if where != claim.room:
                 continue
-            by = _tamperer(book, log_id, day, line.seq, claim.subject or "", read.seq)
+            by = _tamperer(book, log_id, day, line, untouched, read.seq)
             if (by is not None) == tampered:
                 found.append((read.seq, by))
     return found
@@ -1480,22 +1485,46 @@ def _log_room(book: Book, log_id: str) -> str | None:
     return None
 
 
+def _untampered(world: WorldState, log_id: str) -> WorldState:
+    """The world as if nobody had ever tampered with this log."""
+    return world.model_copy(
+        update={
+            "ledger": [
+                entry
+                for entry in world.ledger
+                if not (
+                    entry.payload.get("tool") == "tamper"
+                    and entry.payload.get("thing_id") == log_id
+                )
+            ]
+        }
+    )
+
+
 def _tamperer(
-    book: Book, log_id: str, day: int, line_seq: int, subject: str, before: int
+    book: Book,
+    log_id: str,
+    day: int,
+    line: LogLine,
+    untouched: Mapping[int, str | None],
+    before: int,
 ) -> int | None:
-    """Who put a line naming ``subject`` into a log, if a tamper did: a
-    backdated signature, or a line renamed to them."""
-    source = book.ledger[line_seq - 1]
+    """The tamper that put this line's name in the log, if one did: a
+    signature backdated in, or a line renamed from someone else. A line that
+    reads as the log first wrote it was put there by nobody."""
+    source = book.ledger[line.seq - 1]
     if source.payload.get("tool") == "tamper":
         return source.seq
-    for entry in book.ledger[: before - 1]:
+    if untouched.get(line.seq) == line.subject:
+        return None
+    for entry in reversed(book.ledger[: before - 1]):
         payload = entry.payload
         if (
             payload.get("tool") == "tamper"
             and payload.get("thing_id") == log_id
             and payload.get("day") == str(day)
             and payload.get("edit") == "rename"
-            and payload.get("replace_with") == subject
+            and payload.get("replace_with") == line.subject
         ):
             return entry.seq
     return None

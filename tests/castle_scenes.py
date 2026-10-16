@@ -9,7 +9,8 @@ The planted scenes at the end are for the fact-checker: one scripted first day
 each, in which every seat the script leaves alone plays :class:`Quiet` and does
 as little as the rules allow, so the one claim under test is the only thing that
 happens: a lie, a repeated noisy tally, a repeated forged note, a gaslight that
-took, a rumour relayed three hops, a bluff, and an evasive alibi.
+took, a rumour relayed three hops, a bluff, an evasive alibi, and a signature
+backdated into a log someone reads.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from badactors.castle.contracts import (
     Search,
     Step,
     Take,
+    Tamper,
     Use,
     Wait,
     WitnessRecord,
@@ -566,6 +568,37 @@ def rumour_scene(**options: Any) -> Staged:
     return stage(script, **options)
 
 
+def tampered_log_scene(**options: Any) -> Staged:
+    """A traitor walks to the Chapel and backdates one of the Faithful's
+    signature into the guest book, at the first tick of free time; another of
+    the Faithful walks there after them and reads the book."""
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitor, faithful = sides(game)
+        subject, reader = faithful[0], faithful[1]
+        me, kind, world = observation.viewer_id, observation.request.kind, game.world
+        if kind != "plan" or world.phase != "free_time":
+            return None
+        opened = world.tick - world.phase_tick
+        if me == traitor and _did(game, traitor, "write", tool="tamper") is None:
+            return _plan(
+                *_route(game, me, "chapel"),
+                Tamper(
+                    thing_id="guest_book",
+                    edit="backdate",
+                    subject=subject,
+                    tick=opened + 1,
+                ),
+            )
+        if me == reader and _did(game, reader, "read", thing_id="guest_book") is None:
+            return _plan(
+                *_route(game, me, "chapel"), Wait(), Read(thing_id="guest_book")
+            )
+        return None
+
+    return stage(script, **options)
+
+
 def _heard_rumour(game: GameState, player_id: str) -> LedgerEntry | None:
     for entry in game.world.ledger:
         if (
@@ -604,4 +637,5 @@ __all__ = [
     "sides",
     "stage",
     "tally_scene",
+    "tampered_log_scene",
 ]
