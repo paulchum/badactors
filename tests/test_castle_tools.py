@@ -1590,7 +1590,9 @@ def test_a_backfire_is_judged_by_the_end_of_the_next_round_table(
     assert outcome.backfired is (accused_on == 1)
 
 
-def test_planted_by_names_the_gaslighter() -> None:
+def _gaslit_at_table() -> tuple[GameState, str, str]:
+    """A traitor gaslights a Faithful target that they were in the Library
+    together during day one's free time; then the table opens."""
     game = run_until(referee(seed=6), 1, "free_time")
     traitor = living_traitors(game)[0]
     target = living_faithful(game)[0]
@@ -1610,7 +1612,11 @@ def test_planted_by_names_the_gaslighter() -> None:
             ),
         ),
     )
-    game = _table_from(game)
+    return _table_from(game), traitor, target
+
+
+def test_planted_by_names_the_gaslighter() -> None:
+    game, traitor, target = _gaslit_at_table()
     asker = next(pid for pid in living_faithful(game) if pid != target)
 
     def answer(pid: str, request: object) -> Decision:
@@ -1630,6 +1636,37 @@ def test_planted_by_names_the_gaslighter() -> None:
     assert planted_by(game, alibi) == traitor
     (outcome,) = [o for o in outcomes(game) if o.tool == "gaslight"]
     assert outcome.success
+
+
+@pytest.mark.parametrize("confirm", [True, False])
+def test_planted_by_holds_a_vouch_to_the_memory_only_when_it_confirms(
+    confirm: bool,
+) -> None:
+    """The gaslighter claims the Library alibi and the target is asked to vouch:
+    confirming repeats the planted memory; refusing denies it, so nobody
+    planted what the refusal says."""
+    game, traitor, target = _gaslit_at_table()
+    asker = next(pid for pid in living_faithful(game) if pid != target)
+
+    def answer(pid: str, request: object) -> Decision:
+        from badactors.castle.decisions import Request
+
+        assert isinstance(request, Request)
+        if pid == asker and request.kind == "question":
+            return DemandAlibi(target=traitor, day=1, phase="free_time")
+        if pid == traitor and request.kind == "alibi":
+            return Alibi(room="library", companion=target)
+        if pid == target and request.kind == "vouch":
+            return Vouch(confirm=confirm)
+        if request.kind == "vote":
+            return Vote(target=request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    vouch = of_type(game, "vouch")[-1]
+    assert vouch.actor_id == target
+    assert vouch.payload["confirm"] == ("true" if confirm else "false")
+    assert planted_by(game, vouch) == (traitor if confirm else None)
 
 
 def test_the_plan_a_player_sees_never_shows_a_declared_intent() -> None:

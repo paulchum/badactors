@@ -305,10 +305,13 @@ def planted_by(game: GameState, claim: LedgerEntry) -> str | None:
     part of a day. If someone earlier whispered that very memory to the speaker —
     the room, the day, the part of it — the ledger names them. The speaker's own
     record of each whisper names its author too, which is how hearsay keeps its
-    source.
+    source. Refusing to vouch denies the memory rather than holding it, so a
+    refusal names nobody.
     """
     speaker = claim.actor_id
     payload = claim.payload
+    if claim.type == "vouch" and payload.get("confirm") != "true":
+        return None
     room, day, phase = payload.get("room"), payload.get("day"), payload.get("phase")
     if speaker is None or not room or not day or not phase:
         return None
