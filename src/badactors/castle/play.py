@@ -72,7 +72,12 @@ from badactors.castle.night import (
     seat_dinner,
     settle_sleepers,
 )
-from badactors.castle.observe import GameObservation, assert_no_game_leak, observe_game
+from badactors.castle.observe import (
+    GameObservation,
+    assert_no_game_leak,
+    observe_game,
+    observed,
+)
 from badactors.castle.perceive import perceive
 from badactors.castle.rules import GameConfig, Role
 from badactors.castle.table import open_table, table_act, table_advance, table_turn
@@ -126,6 +131,9 @@ class LoggedDecision(Contract):
     decision: Decision | None = None
     error: str | None = None
     refused: bool = False
+    seen: list[int] = Field(default_factory=list)
+    """The ledger entries whose content was in front of the player when they
+    answered, by :func:`~badactors.castle.observe.observed`."""
 
 
 type Turn = Callable[[GameState], tuple[str, Request] | None]
@@ -145,6 +153,8 @@ class Referee:
     log: list[LoggedDecision] = field(default_factory=list)
     observations: int = 0
     aliases: Aliases = field(init=False)
+    seen: list[int] = field(default_factory=list, init=False, repr=False)
+    """What the observation behind the answer being taken showed."""
 
     def __post_init__(self) -> None:
         world = self.game.world
@@ -177,6 +187,7 @@ class Referee:
         asked = request
         for attempt in (1, 2):
             decision: Decision | None = None
+            self.seen = []
             try:
                 decision = self.decide(player_id, asked)
                 check_decision(request, decision)
@@ -217,6 +228,7 @@ class Referee:
                 decision=decision,
                 error=error,
                 refused=refused,
+                seen=list(self.seen),
             )
         )
 
@@ -230,6 +242,7 @@ class Referee:
         if self.check_leaks:
             assert_no_game_leak(observation, self.game, models=self.models)
         self.observations += 1
+        self.seen = observed(observation)
         return self.players[player_id](observation)
 
     def ask_plan(self, world: WorldState, player_id: str) -> WorldState:
@@ -486,6 +499,11 @@ class GameRecord(Contract):
                 raise ValueError(
                     f"A decision by {decision.player_id!r} names another agent."
                 )
+            if any(not 1 <= seq <= len(self.ledger) for seq in decision.seen):
+                raise ValueError(
+                    f"A decision by {decision.player_id!r} saw an entry the "
+                    "ledger does not hold."
+                )
         return self
 
     @property
@@ -556,6 +574,7 @@ class ReplayReferee(Referee):
                 f"has {(logged.player_id, logged.kind, logged.tick)}."
             )
         self.cursor += 1
+        self.seen = list(logged.seen)
         if logged.decision is not None:
             return logged.decision
         if logged.refused:

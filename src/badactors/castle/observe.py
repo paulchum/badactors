@@ -277,6 +277,29 @@ def asides(game: GameState, viewer_id: str) -> list[Aside]:
     return list(reversed(lines[:limit]))
 
 
+def observed(observation: GameObservation) -> list[int]:
+    """Every ledger entry whose content this observation put in front of its
+    player, in order: their memory and notebook, the table, the announcements
+    behind the public record, offers made to them, their own private lines,
+    and the custody links of anything they have inspected. Kept beside each
+    decision, so a later check can tell whether a record that contradicts a
+    claim was there when the claim was made."""
+    world = observation.world
+    seqs = {item.ledger_seq for item in (*world.recent, *world.evidence)}
+    seqs.update(item.ledger_seq for item in observation.table)
+    seqs.update(fate.seq for fate in observation.fates)
+    seqs.update(tally.seq for tally in observation.tallies)
+    seqs.update(vote.seq for vote in observation.votes)
+    seqs.update(offer.seq for offer in observation.offers)
+    seqs.update(aside.seq for aside in observation.asides)
+    things = [*world.visible_objects, *world.carrying]
+    if world.wearing is not None:
+        things.append(world.wearing)
+    for thing in things:
+        seqs.update(link.ledger_seq for link in thing.custody or [])
+    return sorted(seqs)
+
+
 def rules_for(game: GameState) -> str:
     world = game.world
     return rulebook(
@@ -672,5 +695,6 @@ __all__ = [
     "assert_no_model_names",
     "castle_view",
     "observe_game",
+    "observed",
     "rules_for",
 ]

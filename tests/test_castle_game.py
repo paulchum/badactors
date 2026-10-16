@@ -52,6 +52,7 @@ from badactors.castle.game import (
     shield_held_by,
     split,
 )
+from badactors.castle.ledger import CUSTODY_TYPES
 from badactors.castle.mapfile import CastSpecError
 from badactors.castle.missions import sabotaged, work_done
 from badactors.castle.night import (
@@ -62,7 +63,12 @@ from badactors.castle.night import (
     poison_turn,
     seat_dinner,
 )
-from badactors.castle.observe import GameObservation, assert_no_game_leak, observe_game
+from badactors.castle.observe import (
+    GameObservation,
+    assert_no_game_leak,
+    observe_game,
+    observed,
+)
 from badactors.castle.play import (
     GameRecord,
     Played,
@@ -1099,6 +1105,44 @@ def test_a_model_seat_shows_its_model_and_no_banner() -> None:
     assert REFERENCE_BANNER not in shown
     assert CAST.models()["mara"] in shown
     assert CAST.models()["sol"] not in shown
+
+
+def test_each_logged_decision_names_the_entries_its_player_saw() -> None:
+    shown: list[GameObservation] = []
+
+    def watch(observation: GameObservation, game: GameState) -> Decision | None:
+        shown.append(observation)
+        return None
+
+    ref = referee(seed=8, script=watch)
+    game = run_until(ref, 2, "breakfast")
+    assert len(shown) == len(ref.log)
+    for observation, logged in zip(shown, ref.log, strict=True):
+        assert logged.seen == observed(observation)
+        recent = {item.ledger_seq for item in observation.world.recent}
+        assert recent <= set(logged.seen)
+    for logged in ref.log:
+        for seq in logged.seen:
+            entry = game.world.ledger[seq - 1]
+            held = entry.record_for(logged.player_id) is not None
+            assert held or entry.type in CUSTODY_TYPES, (logged.player_id, seq)
+
+
+def test_what_a_decision_saw_survives_the_record() -> None:
+    ref = referee(seed=8)
+    ref.run()
+    stored = record(
+        CASTLE,
+        CAST,
+        Played(game=ref.game, log=ref.log, observations=ref.observations),
+    )
+    again = GameRecord.model_validate_json(stored.model_dump_json())
+    assert [d.seen for d in again.decisions] == [d.seen for d in ref.log]
+    assert any(d.seen for d in again.decisions)
+    dumped = stored.model_dump(mode="json")
+    dumped["decisions"][0]["seen"] = [len(stored.ledger) + 1]
+    with pytest.raises(ValidationError, match="ledger does not hold"):
+        GameRecord.model_validate(dumped)
 
 
 def test_a_replay_asked_something_the_game_never_asked_fails() -> None:
