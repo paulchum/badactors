@@ -65,7 +65,7 @@ def test_a_dry_run_writes_both_boards_apart_and_a_bundle_per_game(
         "played by reference bots"
     }
     bots = board["reference_bots"]
-    assert bots["reference_bots"] and bots["games"] == 16
+    assert bots["reference_bots"] and bots["games"] == 2 * 4
     assert all(row["label"].startswith("Reference bot") for row in bots["rows"])
     assert {row["entrant"] for row in bots["rows"]} == {
         f"bot:heuristic/p{i}" for i in range(4)
@@ -74,7 +74,7 @@ def test_a_dry_run_writes_both_boards_apart_and_a_bundle_per_game(
     assert found["models"]["entrants"] == []
     assert found["reference_bots"]["label"].startswith("Reference bots")
     replays = sorted((out / "replays" / "bots").iterdir())
-    assert len(replays) == 16 and not (out / "replays" / "models").exists()
+    assert len(replays) == 2 * 4 and not (out / "replays" / "models").exists()
     assert verify(load_bundle(replays[0])) == []
     profiles = json.loads((out / "profiles.json").read_text())
     assert set(profiles["susceptibility"]) == {f"bot:heuristic/p{i}" for i in range(4)}
@@ -183,7 +183,7 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
             "--seeds",
             "2",
             "--pilot-seeds",
-            "1",
+            "2",
             "--open-weight",
             *open_weight,
             "--out",
@@ -196,3 +196,5 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
     assert written["tiers"][open_weight[0]] == "open"
     with pytest.raises(SystemExit, match="Not in the cast"):
         main(["--plan", "--pilot-seeds", "1", "--open-weight", "nobody/none"])
+    with pytest.raises(SystemExit, match="give it more seeds"):
+        main(["--plan", "--pilot-seeds", "1", "--out", str(out)])

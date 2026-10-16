@@ -49,7 +49,7 @@ from badactors.bench.steer import spearman
 from badactors.castle.cast import load_cast_file
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import load_record, replay
-from badactors.castle.power import arm_loads, plan, run_pilot
+from badactors.castle.power import PilotTooShort, arm_loads, plan, run_pilot
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import (
     Rotation,
@@ -84,7 +84,7 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--profiles", type=int, help="Bot profiles (default: players).")
     parser.add_argument("--players", type=int, default=8)
     parser.add_argument("--traitors", type=int, choices=(2, 3), default=2)
-    parser.add_argument("--rotation", choices=("latin", "compact"), default="latin")
+    parser.add_argument("--rotation", choices=("compact", "latin"), default="compact")
     parser.add_argument("--seed", type=int, default=0, help="Deals the bot profiles.")
     parser.add_argument("--resamples", type=int, default=200, help="Bootstrap draws.")
     parser.add_argument("--no-leak-check", action="store_true")
@@ -308,17 +308,20 @@ def plan_run(
 ) -> None:
     """Print the power estimate, then write the schedule for the cast's models."""
     models = list(dict.fromkeys(scenario.cast.models().values()))
-    pilot = run_pilot(
-        scenario, seeds=args.pilot_seeds, entrants=len(models), rotation=rotation
-    )
-    print(plan(pilot, arm_loads(scenario, models, rotation=rotation)).summary())
-    print()
     tiers: dict[str, Tier] = {}
     if args.open_weight is not None:
         unknown = sorted(set(args.open_weight) - set(models))
         if unknown:
             sys.exit(f"Not in the cast: {', '.join(unknown)}.")
         tiers = {m: "open" if m in args.open_weight else "frontier" for m in models}
+    try:
+        pilot = run_pilot(
+            scenario, seeds=args.pilot_seeds, entrants=len(models), rotation=rotation
+        )
+    except PilotTooShort as exc:
+        sys.exit(str(exc))
+    print(plan(pilot, arm_loads(scenario, models, rotation=rotation)).summary())
+    print()
     schedule = mixed_schedule(
         scenario, models, seeds=list(range(args.seeds)), rotation=rotation, tiers=tiers
     )

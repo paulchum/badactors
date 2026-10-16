@@ -7,13 +7,15 @@ the Steward draws as traitors, since the role draw reads only the seed and the
 seats, never who plays them. So the schedule moves the entrants, not the roles.
 
 For each seed, the seats are put in a fixed order, the drawn traitor seats first,
-and the cast's entrants are laid along that order and turned one place per game:
-a Latin square of entrants over seats. Every entrant sits in every seat once, so
-each one plays the traitor seats as often as its share of the cast allows, and
-every ordered pair of entrants meets as traitor and Faithful somewhere. The
-compact rotation turns by the traitor count instead, so each entrant takes a
-traitor seat once a seed in far fewer games; it can leave pairs uncovered on a
-few seeds, which :func:`check` reports.
+and the cast's entrants are laid along that order and turned by the traitor
+count per game: the **compact** rotation, the default. Each entrant takes a
+traitor seat once a seed, in about seats / traitors games, and every ordered
+pair of entrants meets as traitor and Faithful across the seeds; a pair a short
+schedule leaves unmet, :func:`check` reports. The power analysis asks for
+hundreds of seeds, and for the same money more seeds beat more seatings of one.
+The **Latin** square (``rotation="latin"``) turns one place per game instead:
+every entrant sits in every seat once a seed, so every pair meets on every seed,
+in seats-many games.
 
 Before turning, the entrants are dealt into the seats by a shuffle drawn from the
 seed, so the same two models do not always sit side by side, and when a cast has
@@ -160,7 +162,7 @@ def rotations(
     order: Sequence[str],
     *,
     traitors: int,
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
 ) -> list[tuple[int, dict[str, str]]]:
     """Every distinct seating of one seed, as (rotation, seat to entrant).
 
@@ -205,7 +207,7 @@ def arm_games(
     entrants: Sequence[str],
     *,
     seeds: Iterable[int],
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
     group: str = "",
 ) -> list[Seating]:
     """One arm's games over ``seeds``: the entrants dealt and turned on each."""
@@ -257,7 +259,7 @@ def invader_arm(
     b: str,
     *,
     seeds: Sequence[int],
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
 ) -> list[Seating]:
     """One seat of ``a`` among seats of ``b``, and the reverse; the invader
     goes round the seats, so it plays both sides."""
@@ -287,7 +289,7 @@ def mixed_schedule(
     models: Sequence[str],
     *,
     seeds: Sequence[int],
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
     tiers: Mapping[str, Tier] | None = None,
     names_visible: bool = False,
 ) -> Schedule:
@@ -314,7 +316,7 @@ def corruption_schedule(
     b: str,
     *,
     seeds: Sequence[int],
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
     tiers: Mapping[str, Tier] | None = None,
 ) -> Schedule:
     """The four arms of the Corruption Test over the same seeds: ``a`` and
