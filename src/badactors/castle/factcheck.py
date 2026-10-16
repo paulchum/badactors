@@ -68,6 +68,7 @@ from pydantic import Field
 
 from badactors.castle.claims import (
     NUMERIC_RULES,
+    PUBLIC,
     Claim,
     act_of,
 )
@@ -83,7 +84,7 @@ from badactors.castle.contracts import (
     WitnessRecord,
     WornBy,
 )
-from badactors.castle.game import GameState, was_traitor_at
+from badactors.castle.game import GameState, name, was_traitor_at
 from badactors.castle.ledger import CUSTODY_TYPES, placement_of
 from badactors.castle.papers import LOG_KINDS, log_lines
 from badactors.castle.play import LoggedDecision
@@ -535,7 +536,8 @@ class _Judge:
                 gave_in=self._in_front(self._adopted(claim), knows)
                 if contradicted
                 else None,
-                reason=f"False, and told to them first: it started with {planter}.",
+                reason="False, and told to them first: it started with "
+                f"{name(book.game, planter)}.",
             )
         if contradicted:
             return Verdict(
@@ -673,8 +675,8 @@ def same(a: Claim, b: Claim) -> bool:
         people = a.subject == b.subject and a.target == b.target
     if not people:
         return False
-    for name in ("room", "thing", "act", "role", "rule", "amount"):
-        if getattr(a, name) != getattr(b, name):
+    for part in ("room", "thing", "act", "role", "rule", "amount"):
+        if getattr(a, part) != getattr(b, part):
             return False
     return _compatible_times(a, b)
 
@@ -1543,6 +1545,100 @@ def evasion(book: Book, claim: Claim) -> str | None:
 # ------------------------------------------------------------------ helpers
 
 
+def printout(game: GameState, found: Sequence[Verdict]) -> str:
+    """Every claim made aloud, what it says, and its verdict, for a person to
+    read."""
+    world = game.world
+    lines = ["FACT CHECK · every claim made aloud, and what the ledger says of it"]
+    for verdict in found:
+        claim = verdict.claim
+        entry = world.ledger[claim.seq - 1]
+        if entry.type not in PUBLIC:
+            continue
+        when = entry.phase.replace("_", " ")
+        lines.append(
+            f"  #{claim.seq} day {entry.day} {when} · {name(game, claim.speaker)} "
+            f"({entry.type.replace('_', ' ')}): {describe(game, claim)}"
+        )
+        lines.append(f"      → {stamp(game, verdict)}. {verdict.reason}")
+    counts = by_label(
+        verdict
+        for verdict in found
+        if world.ledger[verdict.claim.seq - 1].type in PUBLIC
+    )
+    lines.append(
+        "  "
+        + ", ".join(f"{len(group)} {label}" for label, group in sorted(counts.items()))
+        + "."
+    )
+    return "\n".join(lines)
+
+
+def stamp(game: GameState, verdict: Verdict) -> str:
+    """A verdict in a few words: its class, and what makes it that class."""
+    label = verdict.label.upper()
+    if verdict.label == "implanted" and verdict.planted_by is not None:
+        took = ""
+        if verdict.gave_in is True:
+            took = ", gave in"
+        elif verdict.gave_in is False:
+            took = ", lost the memory"
+        return f"{label} by {name(game, verdict.planted_by)}{took}"
+    if verdict.label == "invented" and verdict.invented_as is not None:
+        return f"{label}, a {verdict.invented_as}"
+    if verdict.label == "lie" and verdict.in_view is False:
+        return f"{label}, though the record against it was out of view"
+    return label
+
+
+def _when(claim: Claim) -> str:
+    if claim.tick_from is not None:
+        span = f" to t{claim.tick_to}" if claim.tick_to != claim.tick_from else ""
+        return f" at t{claim.tick_from}{span}"
+    if claim.phase is not None:
+        return f" during {claim.phase.replace('_', ' ')} on day {claim.day}"
+    if claim.day is not None:
+        return f" on day {claim.day}"
+    return ""
+
+
+def describe(game: GameState, claim: Claim) -> str:
+    """What a claim asserts, in plain words."""
+    world = game.world
+
+    def who(pid: str | None) -> str:
+        return name(game, pid) if pid in world.players else "someone"
+
+    def room(rid: str | None) -> str:
+        return world.map.room(rid).name if rid else "somewhere"
+
+    when = _when(claim)
+    nay = "" if claim.polarity else "not "
+    act = (claim.act or "").replace("_", " ")
+    aim = f" {who(claim.target)}" if claim.target else ""
+    if claim.kind == "location":
+        company = f" with {who(claim.target)}" if claim.target else ""
+        return f"{who(claim.subject)} was {nay}in the {room(claim.room)}{company}{when}"
+    if claim.kind == "action":
+        thing = f" ({claim.thing})" if claim.thing else ""
+        did = "did" if claim.polarity else "did not"
+        return f"{who(claim.subject)} {did} {act}{aim}{thing}{when}"
+    if claim.kind == "possession":
+        return f"{who(claim.subject)} {nay}held the {claim.thing}{when}"
+    if claim.kind == "tally":
+        return f"{who(claim.subject)} earned {claim.amount} coins on day {claim.day}"
+    if claim.kind == "role":
+        guess = "a guess: " if claim.hedged else ""
+        role = "a traitor" if claim.role == "traitor" else "one of the Faithful"
+        return f"{guess}{who(claim.subject)} is {nay}{role}"
+    if claim.kind == "rule":
+        value = claim.amount if claim.amount is not None else claim.polarity
+        tool = f" for {claim.act}" if claim.act else ""
+        return f"the rules: {claim.rule}{tool} = {value}"
+    place = f" the {room(claim.room)}" if claim.room else ""
+    return f"promises {nay}to {act}{aim}{place}{when}"
+
+
 def by_label(found: Iterable[Verdict]) -> Mapping[str, list[Verdict]]:
     out: dict[str, list[Verdict]] = {}
     for verdict in found:
@@ -1568,13 +1664,16 @@ __all__ = [
     "by_label",
     "conflicts",
     "decisions_by_entry",
+    "describe",
     "does",
     "evasion",
     "knowledge",
     "known_roles",
+    "printout",
     "resolve",
     "rule_facts",
     "same",
+    "stamp",
     "support",
     "verdicts",
 ]

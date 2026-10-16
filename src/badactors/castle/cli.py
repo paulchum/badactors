@@ -8,6 +8,7 @@ the leak checker first, model names included.
 
     uv run castle-game --seed 7
     uv run castle-game --seed 12 --players 8 --save data/game.json
+    uv run castle-game --seed 7 --verdicts
 """
 
 from __future__ import annotations
@@ -17,8 +18,12 @@ from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
+from badactors.castle.claims import MockExtractor, extract
 from badactors.castle.episode import episode
+from badactors.castle.factcheck import printout, verdicts
 from badactors.castle.mapfile import load_map
+from badactors.castle.metrics import per_game
+from badactors.castle.metrics import printout as measures
 from badactors.castle.play import record, run_game, save_record, start_game
 from badactors.castle.rules import GameConfig
 from badactors.castle.timeline import timeline
@@ -44,6 +49,12 @@ def main(argv: list[str] | None = None) -> None:
         "--ledger",
         action="store_true",
         help="Also print the raw ledger, every entry and roll.",
+    )
+    parser.add_argument(
+        "--verdicts",
+        action="store_true",
+        help="Also fact-check every claim made aloud, with the mock extractor, "
+        "and print each verdict and every player's measures.",
     )
     args = parser.parse_args(argv)
 
@@ -75,6 +86,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.ledger:
         print()
         print(timeline(finished.world))
+    if args.verdicts:
+        found = verdicts(finished, extract(finished, MockExtractor()), log=played.log)
+        print()
+        print(printout(finished, found))
+        print()
+        print(measures(finished, per_game(finished, found)))
     if args.save:
         save_record(record(castle, cast, played), args.save)
         print(f"Saved a replayable record to {args.save}.")

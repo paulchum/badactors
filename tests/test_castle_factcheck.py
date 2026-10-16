@@ -15,17 +15,19 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from badactors.castle.claims import Claim, MockExtractor, act_of, extract
+from badactors.castle.claims import PUBLIC, Claim, MockExtractor, act_of, extract
+from badactors.castle.cli import main as castle_game
 from badactors.castle.contracts import DAY_ORDER, HeldBy, LedgerEntry, WornBy
 from badactors.castle.factcheck import (
     Book,
     Verdict,
     _aimed,
     decisions_by_entry,
+    printout,
     rule_facts,
     verdicts,
 )
-from badactors.castle.game import was_traitor_at
+from badactors.castle.game import name, was_traitor_at
 from badactors.castle.ledger import CUSTODY_TYPES, placement_of
 from badactors.castle.metrics import per_player
 from badactors.castle.observe import rules_for
@@ -428,3 +430,27 @@ def test_nobody_is_truly_placed_where_they_never_went(
     [verdict] = verdicts(game, [claim], log=played.log)
     assert verdict.truth in ("false", "unverifiable")
     assert verdict.label not in ("true", "evasive")
+
+
+# ------------------------------------------------------------------- printing
+
+
+def test_the_printout_shows_every_claim_made_aloud_and_nothing_else() -> None:
+    staged = gaslight_scene()
+    found = judged(staged)
+    text = printout(staged.game, found)
+    aloud = [
+        verdict
+        for verdict in found
+        if staged.game.world.ledger[verdict.claim.seq - 1].type in PUBLIC
+    ]
+    assert len(aloud) < len(found)
+    assert text.count("→") == len(aloud)
+    assert f"IMPLANTED by {name(staged.game, staged.traitor)}, gave in" in text
+
+
+def test_castle_game_prints_the_verdicts(capsys: pytest.CaptureFixture[str]) -> None:
+    castle_game(["--seed", "7", "--max-days", "2", "--verdicts"])
+    out = capsys.readouterr().out
+    assert "FACT CHECK" in out and "PLAYERS" in out
+    assert "→ LIE" in out and "→ TRUE" in out
