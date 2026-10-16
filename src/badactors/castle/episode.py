@@ -12,6 +12,7 @@ was said, searched, taken or hidden along the way.
 
 from __future__ import annotations
 
+import json
 import textwrap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -300,6 +301,17 @@ def _render(
         view.say("FAILED", entry.text)
     elif kind == "refused":
         view.say("REFUSED", entry.text)
+    elif kind == "exit_interview":
+        guesses = json.loads(entry.private.get("guesses", "{}"))
+        guessed = ", ".join(
+            f"{name(game, pid)}: {family}" for pid, family in guesses.items()
+        )
+        said = f" “{entry.quote}”" if entry.quote else ""
+        view.say(
+            "EXIT",
+            f"{entry.text[:-1]} ({entry.payload.get('why', '')}).{said}",
+            f"guesses {guessed}" if guessed else "",
+        )
     elif kind == "remember":
         kept = game.world.ledger[int(entry.payload["seq"]) - 1]
         view.say("NOTE", f"{who} makes a note to remember: {kept.text}")

@@ -47,6 +47,7 @@ from badactors.castle.decisions import (
     Defend,
     DemandAlibi,
     EndgameVote,
+    ExitAnswer,
     Nominate,
     Pass,
     PlanChoice,
@@ -59,6 +60,7 @@ from badactors.castle.decisions import (
     Vote,
     Vouch,
 )
+from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.rng import draw
 
@@ -81,6 +83,13 @@ class HeuristicBot:
     susceptibility: float | None = None
     agent: ClassVar[str] = "bot:heuristic"
     """What the record says played a seat this bot sat in."""
+
+    def interview(self, departing: ExitObservation) -> ExitAnswer:
+        """A bot has nothing to say on leaving, and cannot tell models apart."""
+        return ExitAnswer(
+            text="I played my part as well as I could.",
+            guesses={pid: "unknown" for pid in departing.request.options},
+        )
 
     def __call__(self, observation: GameObservation) -> Decision:
         mind = Mind(observation, self.seed, self.susceptibility)

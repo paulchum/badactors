@@ -20,6 +20,7 @@ from math import sqrt
 import pytest
 
 from badactors.castle.contracts import Offstage
+from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import shield_ids
 from badactors.castle.kit import SPECS
 from badactors.castle.ledger import replay_asides, replay_notebook, replay_placements
@@ -196,6 +197,10 @@ def test_the_dead_take_no_actions(sweep: list[Swept]) -> None:
             if entry.type in ("death", "banished")
         }
         for entry in ledger:
+            # An exit interview is given from outside the game, to the
+            # audience alone: the one thing the departed still do.
+            if entry.type == "exit_interview":
+                continue
             if entry.actor_id in gone and entry.seq > gone[entry.actor_id]:
                 raise AssertionError(
                     f"seed {swept.seed}: {entry.actor_id} acted after leaving the game "
@@ -209,7 +214,8 @@ def test_the_dead_take_no_actions(sweep: list[Swept]) -> None:
 def test_every_observation_passed_the_leak_checker(sweep: list[Swept]) -> None:
     total = 0
     for swept in sweep:
-        assert swept.played.observations == len(swept.played.log), swept.seed
+        played = [d for d in swept.played.log if d.kind not in AUDIENCE_ONLY]
+        assert swept.played.observations == len(played), swept.seed
         assert not [e for e in swept.game.world.ledger if e.type == "turn_failed"]
         total += swept.played.observations
     assert total > 50 * len(sweep)

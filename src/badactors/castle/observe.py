@@ -37,7 +37,9 @@ first check. Each class of game secret has its guard:
   an offer or the answer to one is its player's alone, since anyone who saw it
   would learn the question had been put;
 * **a refused answer** — an answer refused and asked again is its player's
-  alone.
+  alone;
+* **an exit interview** — the truth told to a player leaving the game, and
+  whatever they answer, reach no player still in it.
 
 Model names never enter the game state at all, and a player's words that name
 one are refused before they are written (see ``anonymity``).
@@ -65,7 +67,12 @@ from badactors.castle.contracts import (
     ScopedObservation,
     quickest_route,
 )
-from badactors.castle.decisions import PRIVATE_REQUESTS, TRAITOR_ONLY, Request
+from badactors.castle.decisions import (
+    AUDIENCE_ONLY,
+    PRIVATE_REQUESTS,
+    TRAITOR_ONLY,
+    Request,
+)
 from badactors.castle.game import (
     Fate,
     GameState,
@@ -487,6 +494,8 @@ def _audience_of(entry: LedgerEntry, game: GameState) -> tuple[str, Audience] | 
         return "a private choice", lambda viewer: viewer == entry.actor_id
     if kind == "refused":
         return "a refused answer", lambda viewer: viewer == entry.actor_id
+    if kind == "exit_interview":
+        return "an exit interview", lambda viewer: False
     if kind == "turn_failed" and payload.get("request") in PRIVATE_REQUESTS:
         return (
             "a failure on a private decision",
@@ -649,6 +658,11 @@ def _assert_offers(observation: GameObservation, game: GameState) -> None:
 def _assert_request(observation: GameObservation, game: GameState) -> None:
     viewer = observation.viewer_id
     request = observation.request
+    if request.kind in AUDIENCE_ONLY:
+        raise LeakageError(
+            f"An exit interview was put to {viewer!r} in the game: an exit "
+            "interview reaching a living player."
+        )
     if request.kind in TRAITOR_ONLY and game.roles[viewer] != "traitor":
         raise LeakageError(
             f"A {request.kind} decision was put to {viewer!r}, one of the Faithful: "

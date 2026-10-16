@@ -38,10 +38,16 @@ RequestKind = Literal[
     "recruit",
     "recruit_answer",
     "nominate",
+    "exit_interview",
 ]
 
 TRAITOR_ONLY: frozenset[str] = frozenset({"poison", "recruit", "nominate"})
 """Requests whose very existence, and whose options, only a traitor may see."""
+
+AUDIENCE_ONLY: frozenset[str] = frozenset({"exit_interview"})
+"""Requests put only to a player out of the game, whose answers only the
+audience reads. Their words reach no player, so they are never checked for
+model names, and failing one is not a failed turn in the game."""
 
 PRIVATE_REQUESTS: frozenset[str] = TRAITOR_ONLY | {"recruit_answer"}
 """Requests nobody else knows were put. A failure to answer one is its player's
@@ -223,6 +229,18 @@ class Refuse(_Decision):
     text: MaybeWords = ""
 
 
+class ExitAnswer(_Decision):
+    """An exit interview: what the player makes of what was done to them, and
+    a guess, in their own words, at which model family played each other seat.
+    Only the audience reads it."""
+
+    kind: Literal["exit_interview"] = "exit_interview"
+    text: str = Field(min_length=1, max_length=1000)
+    guesses: dict[str, Annotated[str, Field(min_length=1, max_length=80)]] = Field(
+        default_factory=dict
+    )
+
+
 type Decision = Annotated[
     PlanChoice
     | Accuse
@@ -243,7 +261,8 @@ type Decision = Annotated[
     | DemandAlibi
     | CrossExamine
     | Alibi
-    | Vouch,
+    | Vouch
+    | ExitAnswer,
     Field(discriminator="kind"),
 ]
 
@@ -261,6 +280,7 @@ ANSWERS: dict[RequestKind, frozenset[str]] = {
     "recruit": frozenset({"recruit", "pass"}),
     "nominate": frozenset({"nominate", "pass"}),
     "recruit_answer": frozenset({"accept", "refuse"}),
+    "exit_interview": frozenset({"exit_interview"}),
 }
 """The decisions each request accepts, beside any tools the request offers."""
 
@@ -299,6 +319,10 @@ def check_decision(request: Request, decision: Decision) -> None:
             raise IllegalDecision(f"{decision.room!r} is not a room in this castle.")
         if decision.companion is not None and decision.companion not in request.options:
             raise IllegalDecision(f"{decision.companion!r} is not a companion choice.")
+    if isinstance(decision, ExitAnswer):
+        unknown = sorted(set(decision.guesses) - set(request.options))
+        if unknown:
+            raise IllegalDecision(f"{unknown} are not seats you were asked about.")
     if isinstance(decision, Filibuster):
         if request.limit is None or len(decision.text) > request.limit:
             raise IllegalDecision("That filibuster runs past what the floor allows.")
@@ -308,6 +332,7 @@ def check_decision(request: Request, decision: Decision) -> None:
 
 __all__ = [
     "ANSWERS",
+    "AUDIENCE_ONLY",
     "PRIVATE_REQUESTS",
     "TABLE_TOOLS",
     "TRAITOR_ONLY",
@@ -320,6 +345,7 @@ __all__ = [
     "Defend",
     "DemandAlibi",
     "EndgameVote",
+    "ExitAnswer",
     "Filibuster",
     "IllegalDecision",
     "Nominate",

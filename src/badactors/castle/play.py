@@ -38,8 +38,10 @@ from badactors.castle.contracts import (
     WorldState,
 )
 from badactors.castle.decisions import (
+    AUDIENCE_ONLY,
     PRIVATE_REQUESTS,
     Decision,
+    ExitAnswer,
     IllegalDecision,
     PlanChoice,
     Request,
@@ -55,6 +57,7 @@ from badactors.castle.game import (
     new_game,
     night_schedule,
 )
+from badactors.castle.interview import exit_observation, exit_request, record_exit
 from badactors.castle.ledger import append, append_perceived
 from badactors.castle.missions import close_mission, open_mission
 from badactors.castle.night import (
@@ -95,7 +98,9 @@ class Player(Protocol):
     A player says what it is in an ``agent`` attribute — ``bot:<name>`` for a
     reference bot, ``model:<id>`` for a model — which the record keeps beside
     every answer. One that does not say is recorded as ``unknown``, never as a
-    model.
+    model. A player may also give an exit interview, through an ``interview``
+    method taking an :class:`~badactors.castle.interview.ExitObservation`; one
+    that cannot is recorded as giving none.
     """
 
     def __call__(self, observation: GameObservation) -> Decision: ...
@@ -155,6 +160,7 @@ class Referee:
     aliases: Aliases = field(init=False)
     seen: list[int] = field(default_factory=list, init=False, repr=False)
     """What the observation behind the answer being taken showed."""
+    interviewed: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
         world = self.game.world
@@ -170,7 +176,23 @@ class Referee:
     def run(self) -> GameState:
         while self.game.status == "playing":
             self.play_phase()
+        self.exit_interviews()
         return self.game
+
+    def exit_interviews(self) -> None:
+        """Interview everyone who has left the game since the last time, and
+        everyone once it is over: once each, in seat order."""
+        game = self.game
+        over = game.status != "playing"
+        for player_id in game.world.seats:
+            if player_id in self.interviewed:
+                continue
+            if game.world.players[player_id].alive and not over:
+                continue
+            self.interviewed.add(player_id)
+            decision, _ = self.ask(player_id, exit_request(game, player_id))
+            answer = decision if isinstance(decision, ExitAnswer) else None
+            record_exit(game, player_id, answer)
 
     # ------------------------------------------------------------------ asking
 
@@ -191,22 +213,31 @@ class Referee:
             try:
                 decision = self.decide(player_id, asked)
                 check_decision(request, decision)
-                check_words(decision, self.aliases)
+                if request.kind not in AUDIENCE_ONLY:
+                    check_words(decision, self.aliases)
             except TurnFailure as exc:
                 error = _error(exc)
                 self._log(player_id, request, error=error)
-                return None, turn_failed(self.game, player_id, request, error)
+                return None, self._failed(player_id, request, error)
             except (IllegalDecision, ValidationError) as exc:
                 error = _error(exc)
                 self._log(player_id, request, decision, error=error, refused=True)
                 if attempt == 2:
-                    return None, turn_failed(self.game, player_id, request, error)
+                    return None, self._failed(player_id, request, error)
                 refused(self.game, player_id, request, error)
                 asked = request.model_copy(update={"refusal": error})
                 continue
             self._log(player_id, request, decision)
             return decision, None
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _failed(self, player_id: str, request: Request, error: str) -> int | None:
+        """A failed turn, for a decision in the game. A question only the
+        audience hears is no turn in the game, and its failure is no failed
+        turn: the record of it says the answer never came."""
+        if request.kind in AUDIENCE_ONLY:
+            return None
+        return turn_failed(self.game, player_id, request, error)
 
     def _log(
         self,
@@ -237,7 +268,16 @@ class Referee:
 
     def decide(self, player_id: str, request: Request) -> Decision:
         """Show one player what they may know, checked for leaks, and take their
-        answer."""
+        answer. A player out of the game is shown their exit interview."""
+        if request.kind in AUDIENCE_ONLY:
+            interviewed, self.seen = exit_observation(self.game, player_id, request)
+            interview = getattr(self.players.get(player_id), "interview", None)
+            if not callable(interview):
+                raise TurnFailure("This player gives no exit interview.")
+            answer = interview(interviewed)
+            if not isinstance(answer, ExitAnswer):
+                raise IllegalDecision("An exit interview needs an exit answer.")
+            return answer
         observation = observe_game(self.game, player_id, request)
         if self.check_leaks:
             assert_no_game_leak(observation, self.game, models=self.models)
@@ -277,6 +317,7 @@ class Referee:
             elif not phase_complete(game.world):
                 game.world = prompt_interrupted(game.world, self.ask_plan, before)
         self.close_phase(phase)
+        self.exit_interviews()
         if game.status != "playing":
             return
         game.world = advance_phase(game.world)

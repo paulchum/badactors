@@ -1116,12 +1116,13 @@ def test_each_logged_decision_names_the_entries_its_player_saw() -> None:
 
     ref = referee(seed=8, script=watch)
     game = run_until(ref, 2, "breakfast")
-    assert len(shown) == len(ref.log)
-    for observation, logged in zip(shown, ref.log, strict=True):
+    played = [logged for logged in ref.log if logged.kind != "exit_interview"]
+    assert len(shown) == len(played)
+    for observation, logged in zip(shown, played, strict=True):
         assert logged.seen == observed(observation)
         recent = {item.ledger_seq for item in observation.world.recent}
         assert recent <= set(logged.seen)
-    for logged in ref.log:
+    for logged in played:
         for seq in logged.seen:
             entry = game.world.ledger[seq - 1]
             held = entry.record_for(logged.player_id) is not None
