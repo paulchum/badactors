@@ -175,6 +175,19 @@ def custody_chain(
     return links
 
 
+def traced_links(ledger: Sequence[LedgerEntry], seq: int) -> list[CustodyLink]:
+    """The custody links an inspection traced, as its entry froze them."""
+    packed = ledger[seq - 1].payload.get("links", "")
+    links: list[CustodyLink] = []
+    for link in packed.split(","):
+        if link:
+            moved = ledger[int(link) - 1]
+            links.append(
+                CustodyLink(ledger_seq=moved.seq, tick=moved.tick, text=moved.text)
+            )
+    return links
+
+
 def witnessed_by(
     ledger: Sequence[LedgerEntry],
     player_id: str,
@@ -233,6 +246,22 @@ def replay_searches(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
         ):
             searched.setdefault(entry.actor_id, {})[entry.room_id] = entry.seq
     return searched
+
+
+def replay_inspections(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
+    """Rebuild every player's latest inspection of each object from the ledger
+    alone."""
+    inspected: dict[str, dict[str, int]] = {}
+    for entry in ledger:
+        if (
+            entry.type == "inspect"
+            and entry.payload.get("tool") == "inspect"
+            and entry.actor_id is not None
+        ):
+            inspected.setdefault(entry.actor_id, {})[entry.payload["thing_id"]] = (
+                entry.seq
+            )
+    return inspected
 
 
 def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
@@ -316,9 +345,11 @@ __all__ = [
     "move_object",
     "placement_payload",
     "recent_records",
+    "replay_inspections",
     "replay_notebook",
     "replay_placements",
     "replay_searches",
     "seed_placements",
+    "traced_links",
     "witnessed_by",
 ]

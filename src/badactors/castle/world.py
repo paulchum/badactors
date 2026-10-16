@@ -115,7 +115,7 @@ def fork(state: WorldState) -> WorldState:
             },
             "placements": dict(state.placements),
             "ledger": list(state.ledger),
-            "inspected": {key: list(value) for key, value in state.inspected.items()},
+            "inspected": {key: dict(value) for key, value in state.inspected.items()},
             "searched": {key: dict(value) for key, value in state.searched.items()},
             "replans": dict(state.replans),
             "kits": dict(state.kits),

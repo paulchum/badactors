@@ -21,6 +21,7 @@ from badactors.castle.contracts import (
     CompareHands,
     Counterfeit,
     Disguise,
+    Drop,
     Forge,
     Gaslight,
     Honeypot,
@@ -39,6 +40,7 @@ from badactors.castle.contracts import (
     Search,
     SearchPerson,
     Steal,
+    Take,
     Talk,
     Tamper,
     WorldState,
@@ -68,7 +70,12 @@ from badactors.castle.game import (
     shield_held_by,
 )
 from badactors.castle.kit import SPECS, refusal, uses
-from badactors.castle.ledger import append, replay_notebook, replay_placements
+from badactors.castle.ledger import (
+    append,
+    replay_inspections,
+    replay_notebook,
+    replay_placements,
+)
 from badactors.castle.manipulation import outcomes, planted_by, rumor_path
 from badactors.castle.night import end_night, poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
@@ -170,6 +177,37 @@ def test_inspect_shows_a_partial_custody_chain_and_marks() -> None:
     view = next(v for v in seen(world, "knox").carrying if v.id == sheet)
     assert view.custody is not None and view.written is True
     assert len(view.custody) <= world.balance.tools.inspect.links
+
+
+def test_inspect_freezes_the_chain_it_traced() -> None:
+    """An inspection is a look at one moment: what happens to the object after
+    it, and who did it, is not its inspector's to know."""
+    world = scene()
+    put(world, "mara", "dining_room")
+    world = act(world, "mara", Inspect(thing_id="silver_decanter"))
+    inspection = last(world, "inspect")
+    traced = next(
+        view
+        for view in seen(world, "mara").visible_objects
+        if view.id == "silver_decanter"
+    ).custody
+    assert traced is not None
+    put(world, "mara", "kitchen")
+    put(world, "sol", "dining_room")
+    world = act(
+        world, "sol", Take(thing_id="silver_decanter"), Drop(thing_id="silver_decanter")
+    )
+    put(world, "sol", "kitchen")
+    put(world, "mara", "dining_room")
+    view = next(
+        view
+        for view in seen(world, "mara").visible_objects
+        if view.id == "silver_decanter"
+    )
+    assert view.custody == traced
+    assert all(link.ledger_seq < inspection.seq for link in view.custody)
+    assert not any("Sol" in link.text for link in view.custody)
+    assert replay_inspections(world.ledger) == world.inspected
 
 
 # ----------------------------------------------------------------------- read

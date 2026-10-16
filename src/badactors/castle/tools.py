@@ -78,6 +78,7 @@ from badactors.castle.kit import Attempt, refusal
 from badactors.castle.ledger import (
     append,
     append_perceived,
+    custody_chain,
     entry_at,
     move_object,
     placement_payload,
@@ -374,9 +375,9 @@ def _inspect(use: _Use, step: Inspect) -> None:
     if item is None:
         return
     world = use.world
-    world.inspected.setdefault(use.player.id, [])
-    if item.id not in world.inspected[use.player.id]:
-        world.inspected[use.player.id].append(item.id)
+    links = custody_chain(
+        world.ledger, item.id, limit=world.balance.tools.inspect.links
+    )
     marks: list[str] = []
     seen: list[str] = []
     if item.kind == "glass":
@@ -402,12 +403,17 @@ def _inspect(use: _Use, step: Inspect) -> None:
         describe="{seen} examined the " + item.name + " closely.",
         own_text=own,
     )
-    use.record(
+    entry = use.record(
         perception,
         type="inspect",
         text=f"{use.player.name} examined the {item.name}.",
-        payload={"thing_id": item.id, "marks": ",".join(marks)},
+        payload={
+            "thing_id": item.id,
+            "marks": ",".join(marks),
+            "links": ",".join(str(link.ledger_seq) for link in links),
+        },
     )
+    world.inspected.setdefault(use.player.id, {})[item.id] = entry.seq
 
 
 def _read(use: _Use, step: Read) -> None:

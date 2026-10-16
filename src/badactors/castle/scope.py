@@ -62,7 +62,12 @@ from badactors.castle.contracts import (
     WorldState,
     without_intent,
 )
-from badactors.castle.ledger import custody_chain, entry_at, recent_records
+from badactors.castle.ledger import (
+    custody_chain,
+    entry_at,
+    recent_records,
+    traced_links,
+)
 from badactors.castle.papers import WRITING_TOOLS
 from badactors.castle.perceive import (
     carried_things,
@@ -324,7 +329,7 @@ def _assert_objects(
         set(visible_things(state, viewer_id, room.id)) if room is not None else set()
     )
     held = set(carried_things(state, viewer_id))
-    inspected = set(state.inspected.get(viewer_id, []))
+    inspected = set(state.inspected.get(viewer_id, {}))
 
     for view in observation.visible_objects:
         if view.id not in allowed_here:
@@ -527,7 +532,7 @@ def _assert_wearing(
     ):
         raise LeakageError("Observation misstates what the viewer is wearing.")
     if shown is not None:
-        _assert_custody(shown, state, set(state.inspected.get(viewer_id, [])))
+        _assert_custody(shown, state, set(state.inspected.get(viewer_id, {})))
 
 
 def _wearing(state: WorldState, viewer_id: str) -> ThingView | None:
@@ -577,18 +582,14 @@ def _assert_facts(
 
 def _thing_view(state: WorldState, viewer_id: str, thing_id: str) -> ThingView:
     thing = next(item for item in state.map.things if item.id == thing_id)
-    inspected = thing_id in state.inspected.get(viewer_id, [])
+    inspection = state.inspected.get(viewer_id, {}).get(thing_id)
     return ThingView(
         id=thing.id,
         kind=thing.kind,
         name=thing.name,
         properties=dict(thing.properties),
         custody=(
-            custody_chain(
-                state.ledger, thing_id, limit=state.balance.tools.inspect.links
-            )
-            if inspected
-            else None
+            traced_links(state.ledger, inspection) if inspection is not None else None
         ),
         written=_written(state, thing.id) if thing.kind == "paper" else None,
     )

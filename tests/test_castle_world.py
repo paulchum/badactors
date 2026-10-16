@@ -60,7 +60,12 @@ from badactors.castle.director import (
     run_day,
     run_phase,
 )
-from badactors.castle.ledger import custody_chain, replay_placements, replay_searches
+from badactors.castle.ledger import (
+    custody_chain,
+    replay_inspections,
+    replay_placements,
+    replay_searches,
+)
 from badactors.castle.mapfile import (
     build_world,
     lint_map,
@@ -1120,6 +1125,7 @@ class CastleMachine(RuleBasedStateMachine):
         world = self._now()
         _assert_custody(world)
         assert replay_searches(world.ledger) == world.searched
+        assert replay_inspections(world.ledger) == world.inspected
         for player_id in world.seats:
             assert_no_leak(build_observation(world, player_id), world)
         assert world.ledger[: len(self.seen)] == self.seen, "ledger was rewritten"

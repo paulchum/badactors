@@ -807,7 +807,10 @@ class WorldState(Contract):
     placements: dict[str, Placement] = Field(default_factory=dict)
     ledger: list[LedgerEntry] = Field(default_factory=list)
     ledger_seq: int = Field(default=0, ge=0)
-    inspected: dict[str, list[str]] = Field(default_factory=dict)
+    inspected: dict[str, dict[str, int]] = Field(default_factory=dict)
+    """For each player, the ledger entry of their latest inspection of each
+    object. The custody links they traced are frozen in that entry, so what an
+    object has been through since is not theirs to know."""
     searched: dict[str, dict[str, int]] = Field(default_factory=dict)
     """For each player, the ledger entry of their latest search of each room. An
     index over the ledger, kept as it grows: what the search found is frozen in
@@ -865,6 +868,7 @@ class WorldState(Contract):
             ("disguise", set(self.disguises) | set(self.disguises.values())),
             ("notebook", set(self.notebook)),
             ("search", set(self.searched)),
+            ("inspection", set(self.inspected)),
         ):
             if not keys <= set(self.players):
                 raise ValueError(f"A {label} names someone who is not in this world.")

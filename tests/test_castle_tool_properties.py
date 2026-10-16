@@ -36,6 +36,7 @@ from badactors.castle.contracts import (
     Honeypot,
     Hook,
     InRoom,
+    Inspect,
     Intent,
     Plan,
     Plant,
@@ -58,7 +59,13 @@ from badactors.castle.contracts import (
 from badactors.castle.decisions import Decision, Poison
 from badactors.castle.director import run_phase
 from badactors.castle.game import living_faithful, living_traitors
-from badactors.castle.ledger import replay_notebook, replay_placements, replay_searches
+from badactors.castle.ledger import (
+    custody_chain,
+    replay_inspections,
+    replay_notebook,
+    replay_placements,
+    replay_searches,
+)
 from badactors.castle.night import poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import run_game, start_game
@@ -66,7 +73,7 @@ from badactors.castle.rules import GameConfig
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import advance_phase
 from castle_scenes import CAST, CASTLE, MODELS
-from castle_tools import act, give, paper, put, scene, seen
+from castle_tools import act, give, last, paper, put, scene, seen
 
 _SETTINGS = settings(
     max_examples=15,
@@ -584,3 +591,45 @@ def test_property_a_search_never_shows_what_was_hidden_after_it(
         assert in_sight or found.get(view.id) == perceive.spot(placement), view.id
         assert view.id not in stowed or in_sight
     assert replay_searches(world.ledger) == world.searched
+
+
+@_SETTINGS
+@given(
+    seed=st.integers(min_value=0, max_value=4096),
+    handlers=st.lists(
+        st.sampled_from(["sol", "knox", "june", "mara"]), min_size=1, max_size=4
+    ),
+)
+def test_property_an_inspection_never_learns_what_happened_after_it(
+    seed: int, handlers: list[str]
+) -> None:
+    """However often an object changes hands after someone inspected it, the
+    chain they are shown is the one they traced, every link older than their
+    look, until they inspect it again."""
+    world = scene(seed)
+    put(world, "iris", "dining_room")
+    world = act(world, "iris", Inspect(thing_id="silver_decanter"))
+    looked = last(world, "inspect").seq
+    traced = custody_chain(
+        world.ledger, "silver_decanter", limit=world.balance.tools.inspect.links
+    )
+    put(world, "iris", "kitchen")
+    for handler in handlers:
+        put(world, handler, "dining_room")
+        world = act(
+            world,
+            handler,
+            Take(thing_id="silver_decanter"),
+            Drop(thing_id="silver_decanter", hidden=False),
+        )
+        put(world, handler, "great_hall")
+    put(world, "iris", "dining_room")
+    view = next(
+        view
+        for view in seen(world, "iris").visible_objects
+        if view.id == "silver_decanter"
+    )
+    assert view.custody == traced
+    assert view.custody is not None
+    assert all(link.ledger_seq < looked for link in view.custody)
+    assert replay_inspections(world.ledger) == world.inspected
