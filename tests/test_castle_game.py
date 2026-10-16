@@ -510,6 +510,45 @@ _STAGES = {
 }
 
 
+def _order_on(day: int, absent: set[str]) -> list[str]:
+    game = _game()
+    world = game.world
+    world.day = day
+    for pid in world.seats:
+        room = "chapel" if pid in absent else world.map.gathering_room
+        world.players[pid].position = AtRoom(room_id=room)
+    open_table(game)
+    assert game.table is not None
+    return game.table.order
+
+
+def test_the_speaking_order_turns_a_seat_a_day_whoever_attends() -> None:
+    seats = _game().world.seats
+    assert _order_on(1, set()) == seats
+    assert _order_on(3, set())[0] == seats[2]
+    assert _order_on(3, {seats[0]})[0] == seats[2], "an absence shifts nobody"
+    assert _order_on(3, {seats[2]})[0] == seats[3]
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    day=st.integers(min_value=1, max_value=12),
+    first=st.sets(st.integers(min_value=0, max_value=9), max_size=6),
+    second=st.sets(st.integers(min_value=0, max_value=9), max_size=6),
+)
+def test_property_who_attends_never_reorders_the_others(
+    day: int, first: set[int], second: set[int]
+) -> None:
+    """Any two players at both tables speak in the same order at each, however
+    attendance differs."""
+    seats = _game().world.seats
+    one = _order_on(day, {seats[i] for i in first})
+    two = _order_on(day, {seats[i] for i in second})
+    both = [pid for pid in one if pid in two]
+    assert both == [pid for pid in two if pid in one]
+    assert sorted(one) == sorted(pid for i, pid in enumerate(seats) if i not in first)
+
+
 def test_the_round_table_runs_its_turns_in_order() -> None:
     ref = referee(seed=6)
     game = run_until(ref, 1, "dinner")

@@ -90,8 +90,10 @@ def open_table(game: GameState) -> None:
     present = present_at(game, world.map.gathering_room)
     everyone = living(game)
     final = len(everyone) <= game.config.endgame_at or world.day >= game.config.max_days
-    start = (world.day - 1) % len(present) if present else 0
-    order = present[start:] + present[:start]
+    # The order turns one seat a day round the whole table, so who speaks first
+    # depends on the day, not on who happens to have come.
+    start = (world.day - 1) % len(world.seats)
+    order = [pid for pid in world.seats[start:] + world.seats[:start] if pid in present]
     game.table = TableState(day=world.day, final=final, present=present, order=order)
     words = "The round table is in session."
     if final:
