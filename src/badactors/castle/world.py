@@ -315,7 +315,11 @@ def valid_actions(state: WorldState, player_id: str) -> list[str]:
     company = any(other != player_id for other in awake_in(state, room_id))
     if company:
         actions.append("whisper")
-    actions.extend(f"move:{neighbor}" for neighbor in state.map.neighbors(room_id))
+    actions.extend(
+        f"move:{neighbor}"
+        for neighbor in state.map.neighbors(room_id)
+        if not held_at_dinner(state, room_id, neighbor)
+    )
     here = visible_things(state, player_id, room_id)
     things = {item.id: item for item in state.map.things}
     actions.extend(f"take:{thing_id}" for thing_id in here if things[thing_id].portable)
@@ -476,6 +480,9 @@ def _do_move(
     if travel is None:
         blocked(world, player, room_id, "there is no passage that way")
         return
+    if held_at_dinner(world, room_id, step.room_id):
+        blocked(world, player, room_id, "nobody leaves dinner before the lamps go out")
+        return
     destination = world.map.room(step.room_id)
     perception = perceive(
         world,
@@ -509,6 +516,21 @@ def _do_move(
         destination=step.room_id,
         ticks_remaining=travel - 1,
     )
+
+
+def held_at_dinner(state: WorldState, origin: str, destination: str) -> bool:
+    """Whether dinner keeps a player from taking this passage.
+
+    From the dinner summons until the lamps go out the household is at table,
+    and the only way anyone may walk is the next step of the quickest way to it.
+    So everyone sets out on the night walk from the table or from the road to
+    it, and nobody is awake in the chambers, or on the stair, to see the
+    traitors go down.
+    """
+    if state.phase != "dinner":
+        return False
+    route = state.map.route(origin, state.map.gathering_room)
+    return not route or route[0] != destination
 
 
 def _advance_transit(world: WorldState, player: PlayerState) -> None:
@@ -987,6 +1009,7 @@ __all__ = [
     "advance_phase",
     "fall_asleep",
     "fork",
+    "held_at_dinner",
     "interrupted",
     "note_replan",
     "note_replan_capped",

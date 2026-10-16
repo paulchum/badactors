@@ -339,6 +339,45 @@ def test_a_gathering_summons_everyone_and_routes_them() -> None:
     assert world.players["sol"].plan.steps == []
 
 
+def _at_dinner() -> WorldState:
+    world = _world()
+    while world.phase != "dinner":
+        world = advance_phase(world)
+    return world
+
+
+def test_nobody_leaves_dinner_before_the_lamps_go_out() -> None:
+    world = _at_dinner()
+    assert world.players["mara"].room_id == world.map.gathering_room
+    assert not [a for a in valid_actions(world, "mara") if a.startswith("move:")]
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="chambers")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == world.map.gathering_room
+    refusal = world.ledger[-1]
+    assert (refusal.type, refusal.actor_id) == ("blocked", "mara")
+    assert "before the lamps go out" in refusal.payload["reason"]
+    assert [record.player_id for record in refusal.witnesses] == ["mara"]
+
+
+def test_the_road_to_dinner_stays_open() -> None:
+    world = _world()
+    world = advance_phase(world)  # mission
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="gallery")]))
+    world = tick(world)
+    while world.phase != "dinner":
+        world = advance_phase(world)
+    assert world.players["mara"].room_id == "gallery"
+    assert [a for a in valid_actions(world, "mara") if a.startswith("move:")] == [
+        "move:great_hall"
+    ]
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="library")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == "gallery"
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="great_hall")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == "great_hall"
+
+
 def test_lateness_is_observed_with_a_direction() -> None:
     world = _world()
     world = advance_phase(world)

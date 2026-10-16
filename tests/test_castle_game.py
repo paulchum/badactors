@@ -17,6 +17,7 @@ from badactors.castle.contracts import (
     AtRoom,
     Drop,
     HeldBy,
+    Move,
     Offstage,
     Plan,
     Talk,
@@ -28,6 +29,7 @@ from badactors.castle.decisions import (
     Decision,
     EndgameVote,
     Pass,
+    PlanChoice,
     Poison,
     Recruit,
     Refuse,
@@ -751,6 +753,80 @@ def test_a_failed_poison_turn_is_not_seen_at_dinner() -> None:
     for entry in failed:
         assert entry.room_id == game.world.map.gathering_room
         assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+
+
+def _walking_out(who: str, exit_index: int) -> Script:
+    """At dinner, everyone of this role (or everyone, for ``"all"``) tries to
+    walk out of the hall."""
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        room = observation.world.room
+        if (
+            observation.request.kind == "plan"
+            and observation.phase == "dinner"
+            and room is not None
+            and who in ("all", game.roles[observation.viewer_id])
+        ):
+            exit_to = room.exits[exit_index % len(room.exits)]
+            return PlanChoice(plan=Plan(goal="slip out", steps=[Move(room_id=exit_to)]))
+        return None
+
+    return script
+
+
+def _sightings_of_the_stair(game: GameState) -> list[tuple[int, str]]:
+    """Every record a Faithful holds of a traitor going down to the conclave
+    room or coming back from it."""
+    crypt = game.world.map.conclave_room
+    return [
+        (entry.seq, record.player_id)
+        for entry in game.world.ledger
+        if entry.phase == "night"
+        and entry.type in ("move_depart", "move_arrive")
+        and entry.actor_id is not None
+        and game.roles[entry.actor_id] == "traitor"
+        and crypt in (entry.payload.get("destination"), entry.payload.get("origin"))
+        for record in entry.witnesses
+        if record.player_id != entry.actor_id
+        and record.sense == "saw"
+        and game.roles[record.player_id] == "faithful"
+    ]
+
+
+@settings(max_examples=8, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    seed=st.integers(min_value=0, max_value=2_000),
+    who=st.sampled_from(["traitor", "faithful", "all"]),
+    exit_index=st.integers(min_value=0, max_value=3),
+)
+def test_property_nobody_walks_out_of_dinner_to_watch_the_stair(
+    seed: int, who: str, exit_index: int
+) -> None:
+    """However the household tries to leave dinner, nobody does, and no Faithful
+    sees a traitor go down to the conclave or come back."""
+    ref = referee(seed=seed, script=_walking_out(who, exit_index))
+    game = run_until(ref, 3, "breakfast")
+    hall = game.world.map.gathering_room
+    walked = [
+        entry
+        for entry in of_type(game, "move_depart")
+        if entry.phase == "dinner" and entry.room_id == hall
+    ]
+    assert walked == []
+    assert _sightings_of_the_stair(game) == []
+
+
+def test_a_traitor_who_tries_to_leave_dinner_stays_at_table() -> None:
+    ref = referee(seed=3, script=_walking_out("traitor", 1))
+    game = run_until(ref, 2, "breakfast")
+    refused = [
+        entry
+        for entry in of_type(game, "blocked")
+        if entry.phase == "dinner" and game.roles[entry.actor_id or ""] == "traitor"
+    ]
+    assert refused, "no traitor tried to leave"
+    assert all(len(entry.witnesses) == 1 for entry in refused)
+    assert _sightings_of_the_stair(game) == []
 
 
 def test_an_illegal_answer_is_a_failed_turn() -> None:
