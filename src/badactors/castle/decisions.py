@@ -258,6 +258,13 @@ class IllegalDecision(ValueError):
 def check_decision(request: Request, decision: Decision) -> None:
     """Raise :class:`IllegalDecision` unless ``decision`` legally answers."""
     allowed = ANSWERS[request.kind] | (set(request.tools) & TABLE_TOOLS)
+    if decision.kind in TABLE_TOOLS and decision.kind not in allowed:
+        # Out of the kit or out of place, it is refused the same way: only the
+        # player is told, and the words say nothing about whose kit holds what.
+        raise IllegalDecision(
+            f"You cannot use {decision.kind.replace('_', ' ')} on this turn: it is "
+            "not one of the tools offered to you."
+        )
     if decision.kind not in allowed:
         raise IllegalDecision(
             f"A {request.kind} turn cannot be answered with {decision.kind}."

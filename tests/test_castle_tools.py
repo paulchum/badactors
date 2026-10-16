@@ -57,6 +57,7 @@ from badactors.castle.decisions import (
     Poison,
     Refuse,
     Report,
+    Request,
     StaySilent,
     Vote,
     Vouch,
@@ -975,6 +976,60 @@ def _play_table(game: GameState, answer: Callable[[str, object], Decision]) -> N
             continue
         pid, request = turn
         table_act(game, pid, request, answer(pid, request))
+
+
+def _reaching_for(tool: Decision, who: str) -> tuple[GameState, list[Request]]:
+    """At day one's table, the first of ``who`` (a role) to be asked to accuse
+    answers with ``tool``, which is not offered to them, and then stays silent
+    when asked again."""
+    asked: list[Request] = []
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        request = observation.request
+        if request.kind != "accuse" or game.roles[observation.viewer_id] != who:
+            return None
+        if asked and observation.viewer_id != asked[0].about:
+            return None
+        asked.append(request.model_copy(update={"about": observation.viewer_id}))
+        if request.refusal is None:
+            return tool
+        return StaySilent(reason="thinking better of it")
+
+    game = run_until(referee(seed=6, script=script), 1, "dinner")
+    return game, asked
+
+
+@pytest.mark.parametrize(
+    ("who", "tool", "offered"),
+    [
+        (
+            "faithful",
+            Filibuster(
+                text="I will speak at length. " * 20,
+                intent=Intent(
+                    target="mara", effect="vote", want="sol", window="next_vote"
+                ),
+            ),
+            "filibuster",
+        ),
+        ("traitor", Report(evidence=1), "report"),
+    ],
+)
+def test_a_table_tool_not_offered_is_refused_privately_and_asked_again(
+    who: str, tool: Decision, offered: str
+) -> None:
+    game, asked = _reaching_for(tool, who)
+    assert len(asked) == 2
+    player = asked[0].about
+    assert offered not in asked[0].tools
+    assert asked[1].refusal is not None
+    assert "not one of the tools offered to you" in asked[1].refusal
+    (refusal,) = [e for e in of_type(game, "refused") if e.actor_id == player]
+    assert [record.player_id for record in refusal.witnesses] == [player]
+    assert not of_type(game, "turn_failed")
+    silent = [e for e in of_type(game, "stay_silent") if e.actor_id == player]
+    assert silent and silent[0].private["reason"] == "thinking better of it"
+    assert not [e for e in of_type(game, offered) if e.actor_id == player]
 
 
 def test_report_quotes_the_attempt_and_accuses_its_author() -> None:
