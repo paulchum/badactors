@@ -35,6 +35,8 @@ export interface Puzzle {
   voters: string[];
   /** Those of them who voted to banish the liar. */
   caught: string[];
+  /** Those of them who voted to banish a different traitor. */
+  elsewhere: string[];
   quality: number;
 }
 
@@ -91,10 +93,13 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
     tried.add(liar);
     const accused = lie.payload.target;
     const others: FeedEvent[] = [];
+    // Three different voices: a suspect repeating another's words word for
+    // word gives the listener nothing to weigh.
     const take = (event: FeedEvent | undefined) => {
       if (!event || others.length >= 2) return;
       const pid = event.actor!;
       if (pid === liar || others.some((o) => o.actor === pid) || !faithful(pid, event.seq)) return;
+      if ([lie, ...others].some((o) => o.quote === event.quote)) return;
       others.push(event);
     };
     take(said(accused, ["accuse", "defend"]));
@@ -124,6 +129,10 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
       .filter((vote) => vote.voter !== liar && !game.traitorAt(vote.voter, table.closed))
       .map((vote) => vote.voter);
     const caught = voters.filter((voter) => votes.get(voter) === liar);
+    const elsewhere = voters.filter((voter) => {
+      const target = votes.get(voter);
+      return target !== undefined && target !== liar && game.traitorAt(target, table.closed);
+    });
     const fooled = voters.length - caught.length;
     const quality =
       (lie.private.diary ? 2 : 1) * (1 + fooled) * (table.role === "faithful" ? 2 : 1) * (accused === others[0].actor ? 2 : 1);
@@ -137,6 +146,7 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
       truth,
       voters,
       caught,
+      elsewhere,
       quality,
     };
     if (best === null || puzzle.quality > best.quality) best = puzzle;
@@ -201,10 +211,17 @@ export function puzzleOfRound(puzzles: Puzzle[], round: number): Puzzle {
   return puzzles[((round % n) + n) % n];
 }
 
+/** How one Faithful voter at the table did: the liar, another traitor, or one
+ * of their own. */
+export function voteSquare(puzzle: Puzzle, voter: string): string {
+  if (puzzle.caught.includes(voter)) return "🟩";
+  return puzzle.elsewhere.includes(voter) ? "🟨" : "🟥";
+}
+
 /** The text a player shares: how they did and how the table did, without
  * saying who lied. */
 export function shareGrid(puzzle: Puzzle, result: Result, number: number, botGame: boolean): string {
-  const table = puzzle.voters.map((voter) => (puzzle.caught.includes(voter) ? "🟩" : "🟥")).join("");
+  const table = puzzle.voters.map((voter) => voteSquare(puzzle, voter)).join("");
   return [
     `Bad Actors · Who is lying? #${number}`,
     `${result.correct ? "🟩" : "🟥"} me: ${result.correct ? "caught the liar" : "fooled"}`,

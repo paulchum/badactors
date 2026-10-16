@@ -63,6 +63,26 @@ describe("puzzles", () => {
   it("counts only the Faithful's votes, the liar's own and the traitors' left out", () => {
     expect(puzzle.voters).toEqual(["ada", "cy", "di", "ed"]);
     expect(puzzle.caught).toEqual(["ada", "cy"]);
+    expect(puzzle.elsewhere).toEqual([]);
+  });
+
+  it("skips a suspect who only repeats another's words", () => {
+    const echo = new Game(
+      smallFeed({
+        seats: [seat("ada", 1), seat("bo", 2, { role: "traitor", traitor_from: 1 }), seat("cy", 3), seat("di", 4)],
+        events: [
+          { tick: 0, type: "roles_drawn" },
+          { tick: 1, type: "table_opened" },
+          { tick: 1, type: "accuse", actor: "bo", quote: "Ada lies.", payload: { target: "ada" } },
+          { tick: 1, type: "accuse", actor: "ada", quote: "Di did it.", payload: { target: "di" } },
+          { tick: 1, type: "accuse", actor: "cy", quote: "Di did it.", payload: { target: "di" } },
+          { tick: 1, type: "accuse", actor: "di", quote: "Bo is a traitor.", payload: { target: "bo" } },
+          { tick: 1, type: "banishment", payload: { target: "di", role: "faithful", votes: "ada=di,bo=di,cy=di,di=bo" } },
+        ],
+      }),
+    );
+    const [found] = puzzlesFrom(echo);
+    expect(found.suspects.map((s) => s.id)).toEqual(["bo", "ada", "di"]);
   });
 
   it("scores a pick against the liar", () => {

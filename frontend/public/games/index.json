@@ -30,10 +30,10 @@
       "headline": "Knox is banished by 6 of 10 votes, and was one of the Faithful. Iris led the accusation."
     },
     {
-      "id": "seed-41",
-      "file": "seed-41.json",
+      "id": "seed-35",
+      "file": "seed-35.json",
       "castle": "Greywater Castle",
-      "seed": 41,
+      "seed": 35,
       "winner": "traitor",
       "days": 5,
       "ticks": 103,
@@ -42,21 +42,19 @@
       "played_by": [
         "bot"
       ],
-      "moments": 22,
+      "moments": 21,
       "kinds": {
-        "exit_reveal": 8,
+        "exit_reveal": 7,
         "gaslit": 1,
-        "manipulation_backfire": 3,
+        "manipulation_backfire": 2,
         "manipulation_success": 1,
-        "poisoning": 1,
-        "recruit_refused_killed": 2,
-        "recruit_turned": 1,
-        "refusal": 1,
+        "poisoning": 2,
+        "refusal": 2,
         "shield_save": 1,
-        "wrong_banishment": 3
+        "wrong_banishment": 5
       },
       "twist": false,
-      "headline": "Mara poisons Iris at dinner; residue is left in the glass, unfound."
+      "headline": "Iris is banished by 9 of 10 votes, and was one of the Faithful. June led the accusation."
     },
     {
       "id": "seed-145",

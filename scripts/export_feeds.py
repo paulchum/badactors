@@ -6,7 +6,7 @@ asked anything. The feeds land in ``frontend/public/games/`` beside an
 ``index.json`` the site reads first, and every one is labelled a bot game.
 
     uv run python scripts/export_feeds.py
-    uv run python scripts/export_feeds.py --seeds 56 41 --out /tmp/games
+    uv run python scripts/export_feeds.py --seeds 56 35 --out /tmp/games
 """
 
 from __future__ import annotations
@@ -27,12 +27,13 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIGS = ROOT / "configs" / "castle"
 OUT = ROOT / "frontend" / "public" / "games"
 
-SEEDS: tuple[int, ...] = (56, 41, 145, 36, 169, 30)
+SEEDS: tuple[int, ...] = (56, 35, 145, 36, 169, 30)
 """The bundled games, the first shown first. 56 ends with a recruit still at
 the table when the household votes to stop (the only such ending in the first
-200 seeds); 41, 56 and 145 have a recruit turn on their recruiter; 36, 145 and
-169 have a forged note that works; on day 1 of 30 a traitor's accusation fools
-every one of the Faithful."""
+200 seeds); 56 and 145 have a recruit turn on their recruiter; 36, 145 and 169
+have a forged note that works; in 35 the household banishes five of its own
+and the traitors win; on day 1 of 30 a traitor's accusation fools every one of
+the Faithful. Each has a round table for the landing game."""
 
 INDEX_VERSION = 1
 
