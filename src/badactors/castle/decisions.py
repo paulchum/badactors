@@ -137,7 +137,7 @@ class Recruit(_Decision):
 
 
 class Pass(_Decision):
-    """Decline an optional move, such as poison or an offer."""
+    """Decline an optional move: poison, an offer, or naming a victim."""
 
     kind: Literal["pass"] = "pass"
 
@@ -251,7 +251,7 @@ ANSWERS: dict[RequestKind, frozenset[str]] = {
     "endgame": frozenset({"endgame"}),
     "poison": frozenset({"poison", "pass"}),
     "recruit": frozenset({"recruit", "pass"}),
-    "nominate": frozenset({"nominate"}),
+    "nominate": frozenset({"nominate", "pass"}),
     "recruit_answer": frozenset({"accept", "refuse"}),
 }
 """The decisions each request accepts, beside any tools the request offers."""

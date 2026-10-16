@@ -217,6 +217,32 @@ def test_a_day_runs_every_phase_to_its_tick_budget() -> None:
     assert (ref.game.world.day, ref.game.world.phase) == (2, "breakfast")
 
 
+def test_a_conclave_where_every_traitor_passes_kills_nobody() -> None:
+    def refuse_to_name(
+        observation: GameObservation, game: GameState
+    ) -> Decision | None:
+        kind, options = observation.request.kind, observation.request.options
+        if kind in ("nominate", "poison", "recruit"):
+            return Pass()
+        if kind == "vote":
+            faithful = [pid for pid in options if game.roles[pid] == "faithful"]
+            return Vote(target=(faithful or options)[0])
+        return None
+
+    game = run_until(referee(seed=6, script=refuse_to_name), 2, "mission")
+    passes = [
+        e for e in of_type(game, "declined") if e.payload["request"] == "nominate"
+    ]
+    assert {e.actor_id for e in passes} == set(game.starting_traitors)
+    for entry in passes:
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+    assert not of_type(game, "nominate", "kill_attempt", "death")
+    choice = of_type(game, "conclave_choice")[0]
+    assert "named nobody" in (choice.quote or "")
+    news = of_type(game, "breakfast_news")[0]
+    assert "Nobody died in the night." in (news.quote or "")
+
+
 def test_night_sends_the_faithful_to_sleep_and_the_traitors_to_the_conclave() -> None:
     game = run_until(referee(seed=3, tools=NO_POISON), 2, "mission")
     assert not game.offers

@@ -307,6 +307,8 @@ def _render(
         view.say("POISON", entry.text, _aside(game, entry))
     elif kind == "declined" and entry.payload.get("request") == "poison":
         view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", diary)
+    elif kind == "declined" and entry.payload.get("request") == "nominate":
+        view.say("CONCLAVE", f"{who} names nobody.", diary)
     elif kind == "declined":
         view.say("NIGHT", f"{who} decides against recruiting tonight.", diary)
     elif kind == "recruit_offer":

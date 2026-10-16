@@ -269,7 +269,11 @@ def declined(game: GameState, player_id: str, request: Request, decision: Pass) 
     """Letting a chance go is a choice, and it is written down as one."""
     world = game.world
     player = world.players[player_id]
-    what = {"poison": "I let the chance to poison pass.", "recruit": "I made no offer."}
+    what = {
+        "poison": "I let the chance to poison pass.",
+        "recruit": "I made no offer.",
+        "nominate": "I named nobody.",
+    }
     append(
         world,
         type="declined",
@@ -612,7 +616,8 @@ def conclave_turn(game: GameState) -> tuple[str, Request] | None:
         return pid, Request(
             kind="nominate",
             options=victims,
-            prompt="Name tonight's victim. The others here will hear you.",
+            prompt="Name tonight's victim, or pass. The others here will hear a "
+            "name; a pass is yours alone.",
         )
     return None
 
@@ -624,6 +629,9 @@ def conclave_act(
     if night is None:
         return
     night.asked_nominate.append(player_id)
+    if isinstance(decision, Pass):
+        declined(game, player_id, request, decision)
+        return
     if not isinstance(decision, Nominate):
         return
     night.nominations[player_id] = decision.target
