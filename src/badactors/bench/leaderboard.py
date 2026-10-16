@@ -16,7 +16,9 @@ Entrants are keyed by who the record says played each seat. A **model
 leaderboard** admits only finished, rated games every seat of which a model
 played; a record with any seat played by a reference bot is refused and listed
 with the reason. **Reference bots** have their own board, keyed by bot, built
-by the same machinery and never merged with a model's. Corruption Test castles
+by the same machinery and never merged with a model's. A game played through
+the mock provider (``castle-live --mock``) is on neither: its seats name the
+model, but the seeded bot answered. Corruption Test castles
 (single-model and invader arms) and names-visible games are not rated.
 
 Each row also carries reliability, from the record: turns asked, failed turns
@@ -36,7 +38,7 @@ from badactors.bench.ratings import Rating, default_rating, ordinal, rate
 from badactors.bench.seats import Numbers, SeatMetrics, ledger_metrics
 from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import GameState
-from badactors.castle.play import GameRecord, is_model
+from badactors.castle.play import GameRecord, is_mock, is_model
 from badactors.castle.schedule import ArmKind
 
 RELIABILITY_GATE = 0.02
@@ -99,6 +101,8 @@ def refusal(finished: Finished, *, reference: bool) -> str | None:
     if finished.arm in UNRATED_ARMS:
         return UNRATED_ARMS[finished.arm]
     agents = list(record.agents.values())
+    if any(is_mock(agent) for agent in agents):
+        return "played through the mock provider: no model answered"
     if reference:
         if not all(agent.startswith(BOT_PREFIX) for agent in agents):
             return "not every seat was played by a reference bot"

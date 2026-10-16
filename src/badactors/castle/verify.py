@@ -29,7 +29,8 @@ the head — names the whole game. Publish the head beside the replay, and
 4. **custody** — every object's custody chain and final placement, derived from
    both ledgers;
 5. **the result** — the winner, and the roll cursor the world ended on;
-6. **the exchanges** — each names its seat's cast model, on a model seat.
+6. **the exchanges** — each names its seat's cast model, on a model seat or a
+   mock one.
 
     uv run castle-verify out/replays/models/mixed-s3-r2.json.gz
     uv run castle-verify game.bundle.json --head 3f1c...
@@ -59,6 +60,7 @@ from badactors.castle.play import (
     FailureReason,
     GameRecord,
     ReplayDiverged,
+    is_mock,
     is_model,
     load_record,
     replay,
@@ -519,7 +521,7 @@ def check_exchanges(bundle: Bundle) -> list[Problem]:
         agent = record.agents.get(call.seat)
         if agent is None:
             problems.append(Problem("exchange", f"exchange {index} names no seat"))
-        elif is_model(agent) and call.model != cast[call.seat]:
+        elif (is_model(agent) or is_mock(agent)) and call.model != cast[call.seat]:
             problems.append(
                 Problem(
                     "exchange",
@@ -536,7 +538,12 @@ def check_exchanges(bundle: Bundle) -> list[Problem]:
 def summary(bundle: Bundle) -> str:
     record = bundle.record
     rolls = sum(len(entry.rolls) for entry in record.ledger)
-    played = "reference bots" if record.reference_bots else "models"
+    if any(is_mock(agent) for agent in record.agents.values()):
+        played = "the seeded bot behind the mock provider"
+    elif record.reference_bots:
+        played = "reference bots"
+    else:
+        played = "models"
     return (
         f"seed {record.seed}, {record.world_id}, played by {played}: "
         f"{len(record.decisions)} decisions, {len(record.ledger)} entries, "

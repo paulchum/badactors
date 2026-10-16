@@ -58,6 +58,7 @@ from badactors.castle.play import (
     GameRecord,
     Outcome,
     ReplayDiverged,
+    is_mock,
     is_model,
     replay,
     start_game,
@@ -145,7 +146,7 @@ def audience_names(agents: Mapping[str, str], seats: Sequence[str]) -> dict[str,
         agent = agents.get(pid, "")
         if is_model(agent):
             base[pid] = model_name(agent.removeprefix("model:"))
-        elif agent.startswith("bot:"):
+        elif agent.startswith("bot:") or is_mock(agent):
             base[pid] = REFERENCE_BOT
         else:
             base[pid] = UNLABELLED
@@ -498,7 +499,7 @@ def audience_feed(stored: GameRecord) -> Feed:
 def played_by(agent: str) -> PlayedBy:
     if is_model(agent):
         return "model"
-    if agent.startswith("bot:"):
+    if agent.startswith("bot:") or is_mock(agent):
         return "bot"
     return "unknown"
 

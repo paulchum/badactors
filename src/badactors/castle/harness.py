@@ -151,10 +151,12 @@ class ModelPlayer:
     slots: asyncio.Semaphore | None = None
     """Shared by every seat of the same model: how many of its calls may be in
     flight at once."""
+    mock: bool = False
+    """The provider is the mock one: the seeded bot answers for the model."""
 
     @property
     def agent(self) -> str:
-        return f"model:{self.model}"
+        return f"{'mock' if self.mock else 'model'}:{self.model}"
 
     def __call__(self, observation: GameObservation) -> Decision:
         raise RuntimeError("A model seat is asked through the LiveReferee.")
@@ -528,9 +530,11 @@ def play_live(
     closers: Sequence[Closer] = (),
     game_id: str | None = None,
     players: Mapping[str, Player] | None = None,
+    mock: bool = False,
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
-    the seats they name, and return its record."""
+    the seats they name, and return its record. With ``mock``, the provider is
+    the mock one: its seats are recorded as ``mock:<id>`` and never rated."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -558,6 +562,7 @@ def play_live(
             log=log,
             max_tokens=max_tokens,
             slots=slots[model],
+            mock=mock,
         )
         for seat, model in seat_models.items()
     }
@@ -591,7 +596,7 @@ def play_live(
         cast,
         played,
         outcome=referee.outcome,
-        rated=referee.outcome == "finished" and not players,
+        rated=referee.outcome == "finished" and not players and not mock,
     )
     log.write(
         "spent",

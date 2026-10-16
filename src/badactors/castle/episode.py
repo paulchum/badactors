@@ -167,6 +167,8 @@ def _played_by(agent: str) -> str:
         return agent.removeprefix("model:")
     if agent.startswith("bot:"):
         return f"reference bot ({agent.removeprefix('bot:')})"
+    if agent.startswith("mock:"):
+        return "reference bot (behind the mock provider)"
     return "played by an unlabelled agent"
 
 

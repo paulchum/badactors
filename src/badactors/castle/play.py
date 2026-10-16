@@ -108,9 +108,10 @@ class Player(Protocol):
     """Anything that answers a decision from what one player may know.
 
     A player says what it is in an ``agent`` attribute — ``bot:<name>`` for a
-    reference bot, ``model:<id>`` for a model — which the record keeps beside
-    every answer. One that does not say is recorded as ``unknown``, never as a
-    model. A player may also give an exit interview, through an ``interview``
+    reference bot, ``model:<id>`` for a model, ``mock:<id>`` for the seeded bot
+    answering for a model behind the mock provider — which the record keeps
+    beside every answer. One that does not say is recorded as ``unknown``,
+    never as a model. A player may also give an exit interview, through an ``interview``
     method taking an :class:`~badactors.castle.interview.ExitObservation`; one
     that cannot is recorded as giving none.
     """
@@ -129,6 +130,12 @@ def agent_of(player: object) -> str:
 
 def is_model(agent: str) -> bool:
     return agent.startswith("model:") and len(agent) > len("model:")
+
+
+def is_mock(agent: str) -> bool:
+    """A seat the seeded bot played for its cast model, behind the mock
+    provider: the whole harness ran, but no model answered."""
+    return agent.startswith("mock:") and len(agent) > len("mock:")
 
 
 FailureReason = Literal[
@@ -672,6 +679,10 @@ class GameRecord(Contract):
                 raise ValueError(
                     f"Seat {seat!r} was played by {agent!r}, not the cast's model."
                 )
+            if is_mock(agent) and agent != f"mock:{cast[seat]}":
+                raise ValueError(
+                    f"Seat {seat!r} was mocked as {agent!r}, not the cast's model."
+                )
         for decision in self.decisions:
             if decision.agent != self.agents.get(decision.player_id):
                 raise ValueError(
@@ -839,6 +850,7 @@ __all__ = [
     "TurnFailure",
     "agent_of",
     "defused",
+    "is_mock",
     "is_model",
     "load_record",
     "plan_request",

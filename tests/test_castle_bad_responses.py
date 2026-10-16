@@ -5,7 +5,8 @@ first question goes over HTTP to the real OpenRouter provider, whose transport
 serves one recorded response (``fixtures/openrouter``, in the format
 ``RecordingProvider`` writes). Each bad response must fail the turn with the
 right reason class and log no decision as Sol's choice — never a pass, never a
-silence — except a 402, which is the run's problem and aborts it.
+silence — except a 402, which is the run's problem and aborts it. The game's
+verify bundle keeps each bad call's reason in its hashed receipt.
 """
 
 from __future__ import annotations
@@ -22,8 +23,9 @@ from badactors.castle.budget import Limits
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.play import replay
-from badactors.castle.provider import OpenRouterProvider, Routed
+from badactors.castle.provider import HarnessLog, OpenRouterProvider, Routed
 from badactors.castle.rules import GameConfig
+from badactors.castle.verify import HashingProvider, make_bundle, verify
 from castle_scenes import CAST, CASTLE
 
 FIXTURES = Path(__file__).parent / "fixtures" / "openrouter"
@@ -55,17 +57,20 @@ def play(name: str, *, first_mode: str = "tools") -> tuple[LiveGame, list[Any]]:
     bad = served(fixture(name), sent)
     models = mock_models(CAST.models().values())
     models.update(mock_models([MODEL], first_mode))  # type: ignore[arg-type]
+    log = HarnessLog()
+    routed = Routed(
+        default=BotProvider(HeuristicBot(seed=SEED)),
+        routes={f"{SEAT}/0/1": bad, f"{SEAT}/0/2": bad},
+    )
     live = play_live(
         CASTLE,
         CAST,
         seed=SEED,
         config=GameConfig.shipped(max_days=2),
-        provider=Routed(
-            default=BotProvider(HeuristicBot(seed=SEED)),
-            routes={f"{SEAT}/0/1": bad, f"{SEAT}/0/2": bad},
-        ),
+        provider=HashingProvider(routed, log, "openrouter"),
         models=models,
         limits=Limits(10_000, 10**9, 100.0),
+        harness=log,
         closers=[bad.aclose],
     )
     return live, sent
@@ -115,6 +120,23 @@ def test_a_bad_response_fails_the_turn_and_logs_no_decision(
     assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
 
 
+@pytest.mark.parametrize(("name", "reason", "calls"), CASES)
+def test_the_bundle_keeps_each_bad_calls_reason_and_verifies(
+    name: str, reason: str, calls: int
+) -> None:
+    first_mode = "json_schema" if name == "json_schema_400" else "tools"
+    live, _ = play(name, first_mode=first_mode)
+    bundle = make_bundle(live.record, live.harness.events)
+    assert verify(bundle) == []
+    first = [call for call in bundle.exchanges if call.seat == SEAT][:calls]
+    assert [(call.model, call.attempt) for call in first] == [
+        (MODEL, attempt) for attempt in range(1, calls + 1)
+    ]
+    assert [call.failure for call in first] == [reason] * calls
+    others = [call for call in bundle.exchanges if call not in first]
+    assert others and all(call.failure is None for call in others)
+
+
 def test_a_400_on_json_schema_moves_the_model_to_json_object_for_the_run() -> None:
     live, sent = play("json_schema_400", first_mode="json_schema")
     assert sent[0]["response_format"]["type"] == "json_schema"
@@ -156,6 +178,10 @@ def test_a_402_aborts_the_run_and_charges_no_model() -> None:
     assert not [entry for entry in stored.decisions if entry.player_id == SEAT]
     assert stored.winner is None
     assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
+    bundle = make_bundle(stored, live.harness.events)
+    assert verify(bundle) == []
+    (paid,) = [call for call in bundle.exchanges if call.status == 402]
+    assert paid.seat == SEAT and paid.failure is None
 
 
 def _dumped(entries: Any) -> list[Any]:

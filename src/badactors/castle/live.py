@@ -12,11 +12,19 @@ does not fit the budget it stops there unless ``--allow-partial`` is given.
 
 ``--dry-run`` prints the estimate and spends nothing. ``--mock`` plays the whole
 harness against the seeded bot behind a mock provider: no key, no network, no
-cost, and the same ledger as ``castle-game`` with the same seed.
+cost, and the same ledger as ``castle-game`` with the same seed. Its seats are
+recorded as ``mock:<id>``, never as the model, and it is never rated.
 
 The saved record names ``model:<id>`` for every seat, replays to the identical
 ledger, and says how the game ended. A game stopped by its budget, or aborted
 by a 401, 402 or 403, is saved as far as it got and is never rated.
+
+Beside the record go the harness log (``.harness.jsonl``: every call's tokens
+and cost, mode changes, stops) and the game's verify bundle
+(``.bundle.json.gz``): the record and a hashed receipt of every provider call —
+provider, model id, attempt, the SHA-256 of the request and of the response,
+and why an answer could not be used — chained to one head, which
+``castle-verify`` checks. The receipt never holds a key, a header or a word.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ from badactors.castle.provider import (
     load_models,
 )
 from badactors.castle.rules import GameConfig
+from badactors.castle.verify import Bundle, HashingProvider, make_bundle, save_bundle
 
 _ROOT = Path(__file__).resolve().parents[3]
 _CONFIGS = _ROOT / "configs" / "castle"
@@ -157,6 +166,9 @@ def main(argv: list[str] | None = None) -> None:
         openrouter = OpenRouterProvider(api_key=key, timeout=args.timeout)
         closers.append(openrouter.aclose)
         provider = openrouter
+    provider = HashingProvider(
+        provider, harness, "mock:bot" if args.mock else "openrouter"
+    )
     if args.record:
         provider = RecordingProvider(provider, Path(args.record))
 
@@ -174,9 +186,12 @@ def main(argv: list[str] | None = None) -> None:
         check_leaks=not args.no_leak_check,
         concurrent=not args.sequential,
         closers=closers,
+        mock=args.mock,
     )
     save_record(live.record, save)
-    print(report(live, save))
+    bundle = make_bundle(live.record, live.harness.events)
+    save_bundle(bundle, bundle_path(save))
+    print(report(live, save, bundle))
 
 
 def _models(cast: Cast, args: argparse.Namespace) -> dict[str, ModelInfo]:
@@ -197,7 +212,12 @@ def _default_save(seed: int) -> Path:
     return _ROOT / "data" / "live" / f"seed{seed}-{stamp}.json"
 
 
-def report(live: LiveGame, save: Path) -> str:
+def bundle_path(save: Path) -> Path:
+    """Where the verify bundle of the record at ``save`` goes."""
+    return save.with_suffix(".bundle.json.gz")
+
+
+def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     stored = live.record
     failures = Counter(
         (entry.actor_id, entry.payload.get("reason", "?"))
@@ -221,6 +241,10 @@ def report(live: LiveGame, save: Path) -> str:
             f"({change['why']})"
         )
     lines.append(f"Saved the record to {save} and the harness log beside it.")
+    lines.append(
+        f"Verify bundle: {bundle_path(save)}, {len(bundle.exchanges)} exchanges, "
+        f"head {bundle.head}."
+    )
     return "\n".join(lines)
 
 
