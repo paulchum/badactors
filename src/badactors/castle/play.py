@@ -23,9 +23,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Self
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from badactors.castle.anonymity import Aliases, aliases, check_words
 from badactors.castle.cast import Cast
@@ -85,9 +85,28 @@ from badactors.castle.world import (
 
 
 class Player(Protocol):
-    """Anything that answers a decision from what one player may know."""
+    """Anything that answers a decision from what one player may know.
+
+    A player says what it is in an ``agent`` attribute — ``bot:<name>`` for a
+    reference bot, ``model:<id>`` for a model — which the record keeps beside
+    every answer. One that does not say is recorded as ``unknown``, never as a
+    model.
+    """
 
     def __call__(self, observation: GameObservation) -> Decision: ...
+
+
+UNKNOWN_AGENT = "unknown"
+
+
+def agent_of(player: object) -> str:
+    """Who or what plays a seat, as the record keeps it."""
+    agent = getattr(player, "agent", None)
+    return agent if isinstance(agent, str) and agent else UNKNOWN_AGENT
+
+
+def is_model(agent: str) -> bool:
+    return agent.startswith("model:") and len(agent) > len("model:")
 
 
 class TurnFailure(Exception):
@@ -99,6 +118,8 @@ class LoggedDecision(Contract):
     answer is logged as it came, with why it was refused."""
 
     player_id: str
+    agent: str = Field(min_length=1)
+    """Who answered: ``bot:<name>``, ``model:<id>`` or ``unknown``."""
     kind: RequestKind
     day: int
     tick: int
@@ -189,6 +210,7 @@ class Referee:
         self.log.append(
             LoggedDecision(
                 player_id=player_id,
+                agent=self.agent(player_id),
                 kind=request.kind,
                 day=world.day,
                 tick=world.tick,
@@ -197,6 +219,9 @@ class Referee:
                 refused=refused,
             )
         )
+
+    def agent(self, player_id: str) -> str:
+        return agent_of(self.players.get(player_id))
 
     def decide(self, player_id: str, request: Request) -> Decision:
         """Show one player what they may know, checked for leaks, and take their
@@ -400,6 +425,8 @@ class Played:
     game: GameState
     log: list[LoggedDecision]
     observations: int
+    agents: dict[str, str] = field(default_factory=dict)
+    """Who played each seat, by :func:`agent_of`."""
 
 
 def run_game(
@@ -417,21 +444,54 @@ def run_game(
         models=tuple(models),
     )
     finished = referee.run()
-    return Played(game=finished, log=referee.log, observations=referee.observations)
+    return Played(
+        game=finished,
+        log=referee.log,
+        observations=referee.observations,
+        agents={pid: referee.agent(pid) for pid in finished.world.seats},
+    )
 
 
 class GameRecord(Contract):
-    """Everything needed to replay a game exactly, and the ledger it produced."""
+    """Everything needed to replay a game exactly, and the ledger it produced.
 
-    schema_version: Literal[1] = 1
+    ``cast`` is the casting as given, model ids included; who actually played
+    each seat is ``agents``. A seat played by a reference bot says so, and is
+    never to be read as its cast model's result.
+    """
+
+    schema_version: Literal[2] = 2
     seed: int
     world_id: str
     castle: CastleMap
     cast: Cast
+    agents: dict[str, str]
     config: GameConfig
     decisions: list[LoggedDecision]
     ledger: list[LedgerEntry]
     winner: Role | None
+
+    @model_validator(mode="after")
+    def every_seat_says_who_played_it(self) -> Self:
+        cast = {member.id: member.model for member in self.cast.players}
+        if set(self.agents) != set(cast):
+            raise ValueError("Every seat in the cast needs its agent, and only those.")
+        for seat, agent in self.agents.items():
+            if is_model(agent) and agent != f"model:{cast[seat]}":
+                raise ValueError(
+                    f"Seat {seat!r} was played by {agent!r}, not the cast's model."
+                )
+        for decision in self.decisions:
+            if decision.agent != self.agents.get(decision.player_id):
+                raise ValueError(
+                    f"A decision by {decision.player_id!r} names another agent."
+                )
+        return self
+
+    @property
+    def reference_bots(self) -> bool:
+        """Whether no seat was played by a model."""
+        return not any(is_model(agent) for agent in self.agents.values())
 
 
 def start_game(
@@ -462,6 +522,10 @@ def record(
         world_id=game.world.id,
         castle=castle,
         cast=cast,
+        agents={
+            member.id: played.agents.get(member.id, UNKNOWN_AGENT)
+            for member in cast.players
+        },
         config=game.config,
         decisions=played.log,
         ledger=game.world.ledger,
@@ -538,6 +602,7 @@ def load_record(path: str | Path) -> GameRecord:
 
 
 __all__ = [
+    "UNKNOWN_AGENT",
     "GameRecord",
     "LoggedDecision",
     "Played",
@@ -546,6 +611,8 @@ __all__ = [
     "ReplayDiverged",
     "ReplayReferee",
     "TurnFailure",
+    "agent_of",
+    "is_model",
     "load_record",
     "plan_request",
     "record",

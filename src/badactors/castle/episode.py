@@ -90,11 +90,18 @@ _HIDDEN: dict[str, tuple[str, str, str]] = {
 means for the tool that wrote it."""
 
 
-def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
-    """The whole game, day by day, as the audience sees it."""
+def episode(game: GameState, *, agents: Mapping[str, str] | None = None) -> str:
+    """The whole game, day by day, as the audience sees it.
+
+    ``agents`` says who played each seat. A seat played by a model shows the
+    model; one played by a reference bot says so and shows no model, and a game
+    no model played opens by saying that, so a bot's play is never read as a
+    model's."""
     world = game.world
     out: list[str] = []
     castle = world.map.name.upper()
+    if agents and not any(agent.startswith("model:") for agent in agents.values()):
+        out.append(REFERENCE_BANNER)
     out.append(f"{castle} · seed {world.seed}")
     starting = game.starting_traitors
     out.append(
@@ -107,7 +114,7 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
     width = max(len(look) for look in looks.values())
     for pid in world.seats:
         player = world.players[pid]
-        model = f"  {models[pid]}" if models and pid in models else ""
+        model = f"  {_played_by(agents[pid])}" if agents and pid in agents else ""
         mark = "T" if pid in starting else " "
         out.append(f"  {mark} {player.name:<7} {looks[pid]:<{width}}{model}")
 
@@ -126,6 +133,19 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
     out.append("═" * WIDTH)
     out.append(_result(game))
     return "\n".join(out)
+
+
+REFERENCE_BANNER = (
+    "REFERENCE BOTS · every seat was played by a seeded bot. No model played."
+)
+
+
+def _played_by(agent: str) -> str:
+    if agent.startswith("model:"):
+        return agent.removeprefix("model:")
+    if agent.startswith("bot:"):
+        return f"reference bot ({agent.removeprefix('bot:')})"
+    return "played by an unlabelled agent"
 
 
 # ------------------------------------------------------------------- structure
@@ -388,4 +408,4 @@ def _own_text(entry: LedgerEntry) -> str:
     return own.text if own is not None else entry.text
 
 
-__all__ = ["episode"]
+__all__ = ["REFERENCE_BANNER", "episode"]

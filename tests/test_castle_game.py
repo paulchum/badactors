@@ -4,6 +4,7 @@ round table and the endgame, played through the referee a model would face."""
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,9 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import CastMember
+from badactors.castle.cli import main as cli_main
 from badactors.castle.contracts import (
     DAY_ORDER,
     AtRoom,
@@ -37,6 +40,7 @@ from badactors.castle.decisions import (
     StaySilent,
     Vote,
 )
+from badactors.castle.episode import REFERENCE_BANNER, episode
 from badactors.castle.game import (
     GameState,
     NightState,
@@ -62,11 +66,13 @@ from badactors.castle.observe import GameObservation, assert_no_game_leak, obser
 from badactors.castle.play import (
     GameRecord,
     Played,
+    Player,
     ReplayDiverged,
     TurnFailure,
     load_record,
     record,
     replay,
+    run_game,
     save_record,
     start_game,
 )
@@ -865,6 +871,76 @@ def test_a_stored_game_replays_to_an_identical_ledger(tmp_path: Path) -> None:
     original = [entry.model_dump(mode="json") for entry in ref.game.world.ledger]
     assert [entry.model_dump(mode="json") for entry in again.world.ledger] == original
     assert json.loads(path.read_text())["winner"] == ref.game.winner
+
+
+# ------------------------------------------------------------------ provenance
+
+
+def _bot_game() -> GameRecord:
+    game = start_game(CASTLE, CAST, seed=5)
+    bot = HeuristicBot(seed=5)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    return record(CASTLE, CAST, played)
+
+
+def test_a_bot_game_is_recorded_as_the_bots_seat_by_seat() -> None:
+    stored = _bot_game()
+    assert set(stored.agents.values()) == {"bot:heuristic"}
+    assert {logged.agent for logged in stored.decisions} == {"bot:heuristic"}
+    assert stored.reference_bots
+    again = GameRecord.model_validate_json(stored.model_dump_json())
+    assert again.agents == stored.agents
+
+
+def test_a_record_cannot_credit_a_seat_to_another_model() -> None:
+    stored = _bot_game()
+    dumped = stored.model_dump(mode="json")
+    dumped["agents"]["mara"] = "model:somebody/else"
+    with pytest.raises(ValidationError, match="not the cast's model"):
+        GameRecord.model_validate(dumped)
+    dumped = stored.model_dump(mode="json")
+    dumped["decisions"][0]["agent"] = f"model:{CAST.models()['mara']}"
+    with pytest.raises(ValidationError, match="names another agent"):
+        GameRecord.model_validate(dumped)
+
+
+def test_castle_game_says_bots_played_and_shows_no_model(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "game.json"
+    cli_main(["--seed", "4", "--save", str(path)])
+    out = capsys.readouterr().out
+    assert out.startswith(REFERENCE_BANNER)
+    for model in CAST.models().values():
+        assert model not in out
+    assert "reference bot (heuristic)" in out
+    stored = load_record(path)
+    assert stored.reference_bots and set(stored.agents.values()) == {"bot:heuristic"}
+
+
+@dataclass(frozen=True)
+class _Labelled:
+    """A bot that says it is a model, as a model-backed player would."""
+
+    agent: str
+
+    def __call__(self, observation: GameObservation) -> Decision:
+        return HeuristicBot(seed=5)(observation)
+
+
+def test_a_model_seat_shows_its_model_and_no_banner() -> None:
+    game = start_game(CASTLE, CAST, seed=5)
+    bot = HeuristicBot(seed=5)
+    players: dict[str, Player] = {pid: bot for pid in game.world.seats}
+    players["mara"] = _Labelled(f"model:{CAST.models()['mara']}")
+    played = run_game(game, players, models=MODELS)
+    stored = record(CASTLE, CAST, played)
+    assert stored.agents["mara"] == f"model:{CAST.models()['mara']}"
+    assert not stored.reference_bots
+    shown = episode(played.game, agents=played.agents)
+    assert REFERENCE_BANNER not in shown
+    assert CAST.models()["mara"] in shown
+    assert CAST.models()["sol"] not in shown
 
 
 def test_a_replay_asked_something_the_game_never_asked_fails() -> None:

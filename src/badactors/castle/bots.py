@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import ClassVar
 
 from badactors.castle import schemes, sleuth
 from badactors.castle.contracts import Move, Plan, Search, Step, Use, Wait, Whisper
@@ -78,6 +79,8 @@ class HeuristicBot:
 
     seed: int = 7
     susceptibility: float | None = None
+    agent: ClassVar[str] = "bot:heuristic"
+    """What the record says played a seat this bot sat in."""
 
     def __call__(self, observation: GameObservation) -> Decision:
         mind = Mind(observation, self.seed, self.susceptibility)

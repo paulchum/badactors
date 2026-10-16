@@ -1,8 +1,10 @@
 """``castle-game``: play a mock game from a seed and a cast, and print it.
 
 Every seat is played by the seeded heuristic bot, so there are no model calls and
-nothing to configure; the same seed always prints the same episode. Every
-observation a bot is given passes the leak checker first, model names included.
+nothing to configure; the same seed always prints the same episode. The episode
+and the saved record say so, seat by seat, and show no model ids: the cast's
+models are who would play, not who did. Every observation a bot is given passes
+the leak checker first, model names included.
 
     uv run castle-game --seed 7
     uv run castle-game --seed 12 --players 8 --save data/game.json
@@ -64,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
         models=list(cast.models().values()),
     )
     finished = played.game
-    print(episode(finished, models=cast.models()))
+    print(episode(finished, agents=played.agents))
     print(
         f"{played.observations} observations, every one leak-checked; "
         f"{len(finished.world.ledger)} ledger entries; "
