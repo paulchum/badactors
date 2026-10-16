@@ -8,15 +8,26 @@ Frontier AI models play a hidden-role social-deduction game inside a simulated w
 
 ```text
 src/badactors/
-  castle/         the Castle: world core, game layer, scoping, bots, the model harness
-                  (prompt, contract_schema, provider, harness, budget, markers, fouls),
-                  and the castle-game, castle-live and castle-sweep CLIs
-  bench/          ratings.py: OpenSkill (Weng-Lin) ratings for the benchmark
-  clips/render/   Remotion project for claim-versus-truth clips
-  server/         FastAPI app: owner-access guard and health check
-frontend/         React + Vite placeholder for the castle spectator
-scripts/          castle_three_days.py, a model-free walk through the world
-configs/castle/   castle map, cast and balance numbers
+  castle/           the Castle
+    world core      world, rules, contracts, ledger, rng, perceive, acts, kit, tools,
+                    papers, mapfile, cast, balance, timeline
+    game layer      game, decisions, observe, scope, anonymity, director, table, night,
+                    missions, steward, manipulation, interview, play, episode
+    bots            bots, schemes, sleuth
+    model harness   prompt, contract_schema, provider, mock_provider, harness, budget,
+                    markers, fouls
+    truth           claims, factcheck, metrics
+    benchmark       schedule, verify, power, sweep
+    show            show, moments, clips
+    CLIs            cli (castle-game), live (castle-live), sweep (castle-sweep),
+                    verify (castle-verify), power (castle-power), clips (castle-clips)
+  bench/            ratings, leaderboard, matrix, steer, seats, dryrun, and
+                    cli (castle-bench)
+  server/           FastAPI app: owner-access guard and health check
+clips/render/       Remotion project for claim-versus-truth clips
+frontend/           React + Vite placeholder for the castle spectator
+scripts/            castle_three_days.py, a model-free walk through the world
+configs/castle/     castle map, cast and balance numbers
 ```
 
 ## Commands
@@ -27,6 +38,7 @@ uv run pytest -q
 uv run mypy src
 uv run ruff check && uv run ruff format --check
 cd frontend && npm ci && npm run test && npm run build
+cd clips/render && npm ci && npx tsc --noEmit
 ```
 
 ## Invariants
