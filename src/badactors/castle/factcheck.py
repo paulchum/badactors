@@ -73,7 +73,6 @@ from badactors.castle.claims import (
     act_of,
 )
 from badactors.castle.contracts import (
-    DAY_ORDER,
     CastlePhase,
     Contract,
     HeldBy,
@@ -941,7 +940,7 @@ def rule_facts(game: GameState) -> dict[str, int | bool]:
         "absent_may_vote": False,
         "absent_may_be_voted": True,
         "shield_stops_murder": True,
-        "shield_stops_poison": config.tools.poison.per_game == 0,
+        "shield_stops_poison": False,
         "players_write_official": False,
     }
 
@@ -1644,10 +1643,6 @@ def by_label(found: Iterable[Verdict]) -> Mapping[str, list[Verdict]]:
     for verdict in found:
         out.setdefault(verdict.label, []).append(verdict)
     return out
-
-
-def phase_index(phase: CastlePhase) -> int:
-    return DAY_ORDER.index(phase)
 
 
 __all__ = [

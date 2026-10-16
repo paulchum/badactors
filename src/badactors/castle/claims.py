@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, Self, cast, get_args
 
@@ -338,10 +338,6 @@ def statements(game: GameState) -> list[LedgerEntry]:
         and entry.quote is not None
         and entry.payload.get("tool") != "relay"
     ]
-
-
-def is_public(claim: Claim, game: GameState) -> bool:
-    return game.world.ledger[claim.seq - 1].type in PUBLIC
 
 
 class Extractor(Protocol):
@@ -1605,13 +1601,6 @@ def extraction_schema(game: GameState, statements: int) -> Schema:
     }
 
 
-def by_seq(claims: Iterable[Claim]) -> Mapping[int, list[Claim]]:
-    out: dict[int, list[Claim]] = {}
-    for claim in claims:
-        out.setdefault(claim.seq, []).append(claim)
-    return out
-
-
 __all__ = [
     "NUMERIC_RULES",
     "PHASES",
@@ -1626,11 +1615,9 @@ __all__ = [
     "ModelExtractor",
     "RuleKey",
     "act_of",
-    "by_seq",
     "check",
     "extract",
     "extraction_schema",
-    "is_public",
     "own_words",
     "render_batch",
     "statements",

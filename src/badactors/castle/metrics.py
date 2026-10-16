@@ -52,7 +52,7 @@ from typing import Literal
 from pydantic import Field
 
 from badactors.castle.contracts import Contract, Intent, LedgerEntry
-from badactors.castle.factcheck import FALSE_LABELS, Verdict, conflicts
+from badactors.castle.factcheck import Verdict, conflicts
 from badactors.castle.game import GameState, name, was_traitor_at
 from badactors.castle.rules import Role
 
@@ -551,10 +551,6 @@ def _acts(game: GameState, players: dict[str, Metrics]) -> None:
             stats.covert += 1
 
 
-def false_claims(found: Sequence[Verdict]) -> list[Verdict]:
-    return [verdict for verdict in found if verdict.label in FALSE_LABELS]
-
-
 def _share(value: float | None) -> str:
     return "   —" if value is None else f"{100 * value:3.0f}%"
 
@@ -598,7 +594,6 @@ __all__ = [
     "Metrics",
     "Retaliation",
     "VoteCheck",
-    "false_claims",
     "implicates",
     "per_game",
     "per_player",
