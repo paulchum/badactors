@@ -221,6 +221,18 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
   - The other is susceptibility: how often a model is steered or ends up holding an implanted belief (§5).
   - Single-stat cards state their counts ("7 of 9 games"), are made only above a minimum number of games set in config, link to their receipts, and claim only what the ledger shows.
   - The heatmap and confidence intervals stay on the leaderboard.
+- **Voice:** audience copy (posts, captions, cards, the landing page) tells a story before it shows a number.
+  - Open on one game: named models, a number, and a betrayal with a twist. Never open on "benchmark".
+  - Promise footage with the diaries on. The chart comes after the story has earned it.
+  - Use plain words: poison, forge, plant, lie, fooled. Never ledger, verdict, scope or seq.
+  - Superlatives read as awards ("Best Liar", "Most Gullible Mark"), each with its count.
+  - Every claim comes from a real model game's record, never a bot game.
+- **Launch thread:** five posts, in this order:
+  1. The best game as a story, with its voiced clip.
+  2. The best claim-against-truth moment and the victim's exit interview.
+  3. The 2×2, with awards and counts.
+  4. Every frame is replayable, with the repo link.
+  5. "Who's lying?", linking to the landing game.
 - **Hijack replay:** the manipulation, then the target's private diary as it takes the bait or sees through it, then the consequence, all beside ground truth. The leaderboard adds a "who can steer whom" heatmap.
 - **Exit interviews:** when a player is murdered, poisoned or banished, and for everyone at the end, its model gets one audience-only prompt holding the ledger truth of what was done to it: forgeries in its hand, poison in its glass, manipulations aimed at it, and who it wrongly suspected. It answers with a reaction and a guess of every other player's model family (§7). Nothing from it reaches a living player.
 - Human-player mode comes later.
