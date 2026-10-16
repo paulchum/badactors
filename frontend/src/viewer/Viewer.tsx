@@ -76,7 +76,9 @@ export function Replay({
   const plan = useMemo(() => planFor(feed.game.castle_id, feed.rooms), [feed]);
   const timeline = useMemo(() => tokenTimeline(feed), [feed]);
   const first = useMemo(() => railOrder(feed.moments)[0] ?? null, [feed]);
-  const [momentId, setMomentId] = useState<string | null>(() => route.moment ?? first?.id ?? null);
+  const [momentId, setMomentId] = useState<string | null>(() =>
+    feed.moments.some((m) => m.id === route.moment) ? route.moment : (first?.id ?? null),
+  );
   const moment = feed.moments.find((m) => m.id === momentId) ?? null;
   const [tick, setTick] = useState(() => Math.min(route.tick ?? (moment ? momentTick(game, moment) : 0), game.lastTick));
   const [playing, setPlaying] = useState(false);

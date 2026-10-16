@@ -49,6 +49,13 @@ describe("the replay of seed 56", () => {
     expect(html).toContain("Evidence board");
   });
 
+  it("opens on the best moment when the linked one is not in the game", () => {
+    const html = renderToStaticMarkup(
+      <Replay game={game} summary={summary} route={{ page: "viewer", game: "seed-56", tick: null, moment: "nope" }} go={() => undefined} />,
+    );
+    expect(html).toContain("STILL AMONG THEM");
+  });
+
   it("draws every seat on the map at the linked tick, and never a lab logo", () => {
     const html = render(41);
     expect(html).toContain("tick 41 of 81");
