@@ -28,6 +28,13 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      # The tests and the build export the bundled games from the engine first.
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+        working-directory: .
       - uses: actions/setup-node@v4
         with:
           node-version: 22

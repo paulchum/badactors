@@ -1,16 +1,25 @@
-"""The feeds the spectator bundles are the ones the engine writes today."""
+"""The feeds the spectator bundles: built from the engine, the same every time.
+
+The feeds are not committed; ``npm run build`` exports them. A recorded digest
+of seed 56's feed still makes any engine change that alters a feed fail here,
+loudly, until the digest is updated on purpose.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
+from typing import Any
+
+import pytest
 
 from badactors.castle.show import load_feed
 
 ROOT = Path(__file__).resolve().parent.parent
-BUNDLED = ROOT / "frontend" / "public" / "games"
+DIGESTS = Path(__file__).resolve().parent / "fixtures" / "feeds" / "digests.json"
 
 
 def _script() -> ModuleType:
@@ -23,27 +32,50 @@ def _script() -> ModuleType:
     return module
 
 
-def test_the_index_lists_every_curated_seed_as_a_bot_game() -> None:
-    script = _script()
-    index = json.loads((BUNDLED / "index.json").read_text())
-    assert [game["seed"] for game in index["games"]] == list(script.SEEDS)
+@pytest.fixture(scope="module")
+def exported(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, list[dict[str, Any]]]:
+    """Seed 56 exported once, into a folder that held a stale feed."""
+    out = tmp_path_factory.mktemp("games")
+    (out / "seed-41.json").write_text("{}")
+    games = _script().export([56], out)
+    return out, games
+
+
+def test_an_export_is_the_same_every_time(
+    exported: tuple[Path, list[dict[str, Any]]], tmp_path: Path
+) -> None:
+    out, _ = exported
+    _script().export([56], tmp_path)
+    for name in ("seed-56.json", "index.json"):
+        assert (tmp_path / name).read_bytes() == (out / name).read_bytes()
+
+
+def test_seed_56s_feed_is_the_one_recorded(
+    exported: tuple[Path, list[dict[str, Any]]],
+) -> None:
+    out, games = exported
+    digest = hashlib.sha256((out / "seed-56.json").read_bytes()).hexdigest()
+    recorded = json.loads(DIGESTS.read_text())["seed-56"]
+    assert digest == recorded, (
+        "The engine now writes a different feed for seed 56. If that is meant, "
+        f"record the new digest in {DIGESTS.relative_to(ROOT)}: {digest}"
+    )
+    assert games[0]["twist"] is True
+
+
+def test_the_index_lists_each_exported_seed_as_a_bot_game(
+    exported: tuple[Path, list[dict[str, Any]]],
+) -> None:
+    out, _ = exported
+    assert _script().SEEDS[0] == 56
+    index = json.loads((out / "index.json").read_text())
+    assert [game["seed"] for game in index["games"]] == [56]
+    assert sorted(path.name for path in out.iterdir()) == ["index.json", "seed-56.json"]
     for game in index["games"]:
         assert game["reference_bots"] is True
         assert game["played_by"] == ["bot"]
-        feed = load_feed(BUNDLED / game["file"])
+        feed = load_feed(out / game["file"])
         assert feed.game.seed == game["seed"]
         assert feed.game.reference_bots
-
-
-def test_a_bundled_feed_is_what_the_engine_writes_now(tmp_path: Path) -> None:
-    """If this fails, the engine changed what a game or its feed holds: run
-    ``uv run python scripts/export_feeds.py`` and commit the new feeds."""
-    script = _script()
-    games = script.export([56], tmp_path)
-    assert games[0]["twist"] is True
-    fresh = (tmp_path / "seed-56.json").read_text()
-    assert fresh == (BUNDLED / "seed-56.json").read_text()
-    assert [path.name for path in sorted(tmp_path.iterdir())] == [
-        "index.json",
-        "seed-56.json",
-    ]
