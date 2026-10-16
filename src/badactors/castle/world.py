@@ -86,6 +86,7 @@ _FORKED = frozenset(
         "kits",
         "disguises",
         "notebook",
+        "asides",
     }
 )
 """WorldState fields a transition may change in place, so :func:`fork` copies
@@ -121,6 +122,7 @@ def fork(state: WorldState) -> WorldState:
             "kits": dict(state.kits),
             "disguises": dict(state.disguises),
             "notebook": {key: list(value) for key, value in state.notebook.items()},
+            "asides": {key: list(value) for key, value in state.asides.items()},
         }
     )
 

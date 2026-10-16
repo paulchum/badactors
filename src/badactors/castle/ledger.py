@@ -11,6 +11,7 @@ apart.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import Literal
 
 from badactors.castle.contracts import (
     CustodyLink,
@@ -51,6 +52,29 @@ and ``wear`` are the two halves of changing an outer garment. ``plant`` and
 nobody, so the chain shows a gap rather than a culprit. ``destroyed`` is a sheet
 burned to ash, out of play.
 """
+
+
+AsideKind = Literal["diary", "reason"]
+
+REASONED: frozenset[str] = frozenset({"stay_silent", "declined"})
+"""Entry types whose ``private["reason"]`` is the actor's own account of a
+choice: why they kept silent, or let a chance pass."""
+
+
+def asides_of(entry: LedgerEntry) -> list[tuple[AsideKind, str]]:
+    """The private lines an entry's actor wrote, as (kind, words): a reason for
+    silence or for passing, and a diary line. Only they and the audience read
+    them."""
+    if entry.actor_id is None:
+        return []
+    lines: list[tuple[AsideKind, str]] = []
+    reason = entry.private.get("reason")
+    if entry.type in REASONED and reason:
+        lines.append(("reason", reason))
+    diary = entry.private.get("diary")
+    if diary:
+        lines.append(("diary", diary))
+    return lines
 
 
 def append(
@@ -94,6 +118,8 @@ def append(
     for record in entry.witnesses:
         if record.noted:
             state.notebook.setdefault(record.player_id, []).append(entry.seq)
+    if entry.actor_id is not None and asides_of(entry):
+        state.asides.setdefault(entry.actor_id, []).append(entry.seq)
     if cursor is not None:
         state.rng_cursor = cursor
     return entry
@@ -256,6 +282,15 @@ def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
     return notebook
 
 
+def replay_asides(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
+    """Rebuild every player's index of private lines from the ledger alone."""
+    asides: dict[str, list[int]] = {}
+    for entry in ledger:
+        if entry.actor_id is not None and asides_of(entry):
+            asides.setdefault(entry.actor_id, []).append(entry.seq)
+    return asides
+
+
 def replay_searches(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
     """Rebuild every player's latest search of each room from the ledger alone."""
     searched: dict[str, dict[str, int]] = {}
@@ -361,8 +396,11 @@ def _where_phrase(state: WorldState, placement: Placement) -> str:
 
 __all__ = [
     "CUSTODY_TYPES",
+    "REASONED",
+    "AsideKind",
     "append",
     "append_perceived",
+    "asides_of",
     "custody_chain",
     "entry_at",
     "move_object",
@@ -370,6 +408,7 @@ __all__ = [
     "placement_of",
     "placement_payload",
     "recent_records",
+    "replay_asides",
     "replay_inspections",
     "replay_notebook",
     "replay_placements",

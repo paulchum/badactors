@@ -31,6 +31,7 @@ from badactors.castle.decisions import (
     Nominate,
     Refuse,
     Request,
+    StaySilent,
 )
 from badactors.castle.game import (
     GameState,
@@ -48,6 +49,7 @@ from badactors.castle.night import (
     settle_sleepers,
 )
 from badactors.castle.observe import (
+    Aside,
     GameObservation,
     OfferReceived,
     assert_no_game_leak,
@@ -90,6 +92,68 @@ def _leaked(game: GameState, viewer: str, entry: LedgerEntry) -> GameObservation
 
 def _alive(world: WorldState) -> list[str]:
     return [pid for pid in world.seats if world.players[pid].alive]
+
+
+# ------------------------------------------------- another player's private line
+
+
+def _diarists() -> GameState:
+    """Day one's table, where Mara and Sol each stay silent with a reason and
+    a diary line."""
+
+    def musing(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "accuse" and observation.viewer_id in (
+            "mara",
+            "sol",
+        ):
+            who = observation.viewer_id
+            return StaySilent(reason=f"{who} is waiting.", diary=f"{who} privately.")
+        return None
+
+    return run_until(referee(seed=6, script=musing), 1, "dinner")
+
+
+def test_a_player_sees_their_own_private_lines_and_nobody_elses() -> None:
+    game = _diarists()
+    mine = observe_game(game, "mara", PLAN)
+    _check(mine, game)
+    texts = [(aside.kind, aside.text) for aside in mine.asides]
+    assert ("reason", "mara is waiting.") in texts
+    assert ("diary", "mara privately.") in texts
+    assert all("sol" not in text for _, text in texts)
+    assert len(mine.asides) <= game.config.diary_limit
+
+
+def test_planted_leak_another_players_diary_line() -> None:
+    game = _diarists()
+    honest = observe_game(game, "mara", PLAN)
+    theirs = next(e for e in of_type(game, "stay_silent") if e.actor_id == "sol")
+    planted = Aside(
+        seq=theirs.seq,
+        day=theirs.day,
+        phase=theirs.phase,
+        kind="diary",
+        text="sol privately.",
+    )
+    leaked = honest.model_copy(update={"asides": [*honest.asides, planted]})
+    with pytest.raises(LeakageError, match="another player's diary"):
+        _check(leaked, game)
+
+
+def test_planted_leak_a_private_line_misquoted_or_past_the_limit() -> None:
+    game = _diarists()
+    honest = observe_game(game, "mara", PLAN)
+    first = honest.asides[0]
+    misquoted = honest.model_copy(
+        update={"asides": [first.model_copy(update={"text": "something else"})]}
+    )
+    with pytest.raises(LeakageError, match="misquotes"):
+        _check(misquoted, game)
+    flood = honest.model_copy(
+        update={"asides": [first] * (game.config.diary_limit + 1)}
+    )
+    with pytest.raises(LeakageError, match="limit"):
+        _check(flood, game)
 
 
 # ---------------------------------------------- a failure on a private decision

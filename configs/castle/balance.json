@@ -6,6 +6,7 @@
   "tally_noise": 3,
   "recent_limit": 40,
   "notebook_limit": 30,
+  "diary_limit": 12,
   "dim_recognition": 0.5,
   "paper": 12,
   "yields": {

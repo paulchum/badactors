@@ -22,7 +22,7 @@ import pytest
 from badactors.castle.contracts import Offstage
 from badactors.castle.game import shield_ids
 from badactors.castle.kit import SPECS
-from badactors.castle.ledger import replay_notebook, replay_placements
+from badactors.castle.ledger import replay_asides, replay_notebook, replay_placements
 from badactors.castle.play import GameRecord, record, replay
 from badactors.castle.sweep import Swept, play_seed, usage
 from castle_scenes import CASTLE
@@ -146,6 +146,7 @@ def test_every_notebook_is_the_ledgers_own_index(sweep: list[Swept]) -> None:
     for swept in sweep:
         world = swept.game.world
         assert replay_notebook(world.ledger) == world.notebook, swept.seed
+        assert replay_asides(world.ledger) == world.asides, swept.seed
 
 
 def test_every_tool_is_used_somewhere_in_the_sweep(sweep: list[Swept]) -> None:

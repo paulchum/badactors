@@ -198,6 +198,9 @@ class Balance(Numbers):
     notebook_limit: Annotated[int, Field(ge=1, le=200)]
     """How many of a player's noted records (findings, words received in private,
     testimony) reach a prompt, however long ago they were made."""
+    diary_limit: Annotated[int, Field(ge=0, le=100)]
+    """How many of a player's own earlier private lines — diary lines, and their
+    reasons for silence or for letting a chance pass — reach their prompt."""
     dim_recognition: Probability
     """Chance a witness in a dim room pins the identity rather than a garment."""
     paper: Annotated[int, Field(ge=0, le=60)]

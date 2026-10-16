@@ -62,6 +62,7 @@ from badactors.castle.director import run_phase
 from badactors.castle.game import living_faithful, living_traitors
 from badactors.castle.ledger import (
     custody_chain,
+    replay_asides,
     replay_inspections,
     replay_notebook,
     replay_placements,
@@ -331,6 +332,7 @@ def test_property_whole_games_pass_the_leak_checker(
     assert played.game.status == "over"
     assert replay_placements(world.ledger) == world.placements
     assert replay_notebook(world.ledger) == world.notebook
+    assert replay_asides(world.ledger) == world.asides
 
 
 # -------------------------------------------- drawn tool use, every tick checked

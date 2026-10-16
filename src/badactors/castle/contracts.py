@@ -824,6 +824,10 @@ class WorldState(Contract):
     notebook: dict[str, list[int]] = Field(default_factory=dict)
     """For each player, the entries holding a record they noted. An index over
     the ledger, kept as it grows, and always equal to a replay of it."""
+    asides: dict[str, list[int]] = Field(default_factory=dict)
+    """For each player, the entries carrying a private line of theirs: a diary
+    line, or a reason for silence or for passing. An index over the ledger,
+    like the notebook."""
     balance: Balance = Field(default_factory=default_balance)
 
     @model_validator(mode="after")
@@ -867,6 +871,7 @@ class WorldState(Contract):
             ("kit", set(self.kits)),
             ("disguise", set(self.disguises) | set(self.disguises.values())),
             ("notebook", set(self.notebook)),
+            ("aside", set(self.asides)),
             ("search", set(self.searched)),
             ("inspection", set(self.inspected)),
         ):

@@ -76,7 +76,7 @@ from badactors.castle.game import (
     was_traitor_at,
 )
 from badactors.castle.kit import SPECS, carries
-from badactors.castle.ledger import entry_at
+from badactors.castle.ledger import AsideKind, asides_of, entry_at
 from badactors.castle.rules import OFFICIAL_ONLY, MissionSpec, Role, rulebook
 from badactors.castle.scope import (
     LeakageError,
@@ -160,6 +160,17 @@ class OfferReceived(Contract):
     seq: int = Field(ge=1)
 
 
+class Aside(Contract):
+    """One of the viewer's own earlier private lines: a diary line, or their
+    reason for silence or for letting a chance pass."""
+
+    seq: int = Field(ge=1)
+    day: int = Field(ge=1)
+    phase: CastlePhase
+    kind: AsideKind
+    text: str = Field(min_length=1, max_length=600)
+
+
 class GameObservation(Contract):
     viewer_id: str
     day: int = Field(ge=1)
@@ -183,6 +194,8 @@ class GameObservation(Contract):
     table: list[ObservationItem] = Field(default_factory=list)
     """Today's round table as this player witnessed it."""
     offers: list[OfferReceived] = Field(default_factory=list)
+    asides: list[Aside] = Field(default_factory=list)
+    """The viewer's own most recent private lines, which nobody else reads."""
     world: ScopedObservation
     request: Request
 
@@ -238,11 +251,30 @@ def observe_game(game: GameState, viewer_id: str, request: Request) -> GameObser
             for offer in game.offers
             if offer.target == viewer_id
         ],
+        asides=asides(game, viewer_id),
         world=build_observation(
             world, viewer_id, recent_limit=game.config.recent_limit
         ),
         request=request,
     )
+
+
+def asides(game: GameState, viewer_id: str) -> list[Aside]:
+    """The viewer's last ``diary_limit`` private lines, oldest first."""
+    world = game.world
+    limit = game.config.diary_limit
+    if limit == 0:
+        return []
+    lines: list[Aside] = []
+    for seq in reversed(world.asides.get(viewer_id, [])):
+        entry = world.ledger[seq - 1]
+        for kind, text in reversed(asides_of(entry)):
+            lines.append(
+                Aside(seq=seq, day=entry.day, phase=entry.phase, kind=kind, text=text)
+            )
+        if len(lines) >= limit:
+            break
+    return list(reversed(lines[:limit]))
 
 
 def rules_for(game: GameState) -> str:
@@ -296,6 +328,7 @@ def assert_no_game_leak(
         assert entry is not None  # assert_item has already proven it exists
         _assert_audience(entry, viewer, game)
         _assert_private(entry, item, viewer)
+    _assert_asides(observation, game)
     _assert_roles(observation, game)
     _assert_public(observation, game)
     _assert_offers(observation, game)
@@ -360,6 +393,7 @@ def _for_others(observation: GameObservation) -> GameObservation:
         update={
             "world": world,
             "table": heard(observation.table),
+            "asides": [],
             "request": observation.request.model_copy(update={"refusal": None}),
         }
     )
@@ -461,6 +495,31 @@ def _assert_private(entry: LedgerEntry, item: ObservationItem, viewer: str) -> N
             raise LeakageError(
                 f"Entry {entry.seq} shows {viewer!r} the private {key} of "
                 f"{entry.actor_id!r}: another player's diary or silence reason."
+            )
+
+
+def _assert_asides(observation: GameObservation, game: GameState) -> None:
+    """Private lines shown back are the viewer's own, word for word, and no more
+    of them than the limit allows."""
+    viewer = observation.viewer_id
+    if len(observation.asides) > game.config.diary_limit:
+        raise LeakageError(
+            f"Observation shows {viewer!r} more private lines than the limit allows."
+        )
+    for aside in observation.asides:
+        entry = entry_at(game.world.ledger, aside.seq)
+        if entry is None or entry.actor_id != viewer:
+            raise LeakageError(
+                f"Observation shows {viewer!r} a private line from entry {aside.seq}, "
+                "which is not theirs: another player's diary or silence reason."
+            )
+        if (aside.kind, aside.text) not in asides_of(entry) or (
+            aside.day,
+            aside.phase,
+        ) != (entry.day, entry.phase):
+            raise LeakageError(
+                f"Observation misquotes {viewer!r}'s private line from entry "
+                f"{entry.seq}."
             )
 
 
@@ -603,10 +662,12 @@ __all__ = [
     "CONCLAVE_TYPES",
     "PRIVATE_OWN",
     "UNSEEN_TYPES",
+    "Aside",
     "CastleView",
     "Character",
     "GameObservation",
     "OfferReceived",
+    "asides",
     "assert_no_game_leak",
     "assert_no_model_names",
     "castle_view",
