@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
+    "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"
   },
   "dependencies": {
@@ -21,5 +22,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  }
 }
