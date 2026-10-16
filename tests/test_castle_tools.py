@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from badactors.castle.contracts import (
+    QUOTE_LIMIT,
     Blackmail,
     CastlePhase,
     CheckRegister,
@@ -21,6 +22,7 @@ from badactors.castle.contracts import (
     CompareHands,
     Counterfeit,
     Disguise,
+    Drop,
     Forge,
     Gaslight,
     Honeypot,
@@ -28,6 +30,7 @@ from badactors.castle.contracts import (
     Inspect,
     InspectSeal,
     Intent,
+    LedgerEntry,
     Move,
     Offstage,
     Plant,
@@ -39,6 +42,8 @@ from badactors.castle.contracts import (
     Search,
     SearchPerson,
     Steal,
+    Step,
+    Take,
     Talk,
     Tamper,
     WorldState,
@@ -55,6 +60,7 @@ from badactors.castle.decisions import (
     Poison,
     Refuse,
     Report,
+    Request,
     StaySilent,
     Vote,
     Vouch,
@@ -68,15 +74,39 @@ from badactors.castle.game import (
     shield_held_by,
 )
 from badactors.castle.kit import SPECS, refusal, uses
-from badactors.castle.ledger import append, replay_notebook, replay_placements
-from badactors.castle.manipulation import outcomes, planted_by, rumor_path
+from badactors.castle.ledger import (
+    append,
+    replay_inspections,
+    replay_notebook,
+    replay_placements,
+)
+from badactors.castle.manipulation import (
+    outcomes,
+    perceived_at,
+    planted_by,
+    rumor_path,
+)
 from badactors.castle.night import end_night, poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.papers import glass_state, log_lines, writings
+from badactors.castle.perceive import room_of
+from badactors.castle.play import start_game
 from badactors.castle.table import open_table, table_act, table_advance, table_turn
 from badactors.castle.world import advance_phase, submit_plan, tick, valid_actions
-from castle_scenes import of_type, recruiting, referee, run_until
-from castle_tools import act, give, last, own, paper, put, refused, scene, seen, tuned
+from castle_scenes import CAST, CASTLE, of_type, recruiting, referee, run_until
+from castle_tools import (
+    act,
+    give,
+    last,
+    on_mission,
+    own,
+    paper,
+    put,
+    refused,
+    scene,
+    seen,
+    tuned,
+)
 from castle_tools import uses as used
 
 VOTE_MARA = Intent(target="sol", effect="vote", want="mara", window="next_vote")
@@ -170,6 +200,37 @@ def test_inspect_shows_a_partial_custody_chain_and_marks() -> None:
     view = next(v for v in seen(world, "knox").carrying if v.id == sheet)
     assert view.custody is not None and view.written is True
     assert len(view.custody) <= world.balance.tools.inspect.links
+
+
+def test_inspect_freezes_the_chain_it_traced() -> None:
+    """An inspection is a look at one moment: what happens to the object after
+    it, and who did it, is not its inspector's to know."""
+    world = scene()
+    put(world, "mara", "dining_room")
+    world = act(world, "mara", Inspect(thing_id="silver_decanter"))
+    inspection = last(world, "inspect")
+    traced = next(
+        view
+        for view in seen(world, "mara").visible_objects
+        if view.id == "silver_decanter"
+    ).custody
+    assert traced is not None
+    put(world, "mara", "kitchen")
+    put(world, "sol", "dining_room")
+    world = act(
+        world, "sol", Take(thing_id="silver_decanter"), Drop(thing_id="silver_decanter")
+    )
+    put(world, "sol", "kitchen")
+    put(world, "mara", "dining_room")
+    view = next(
+        view
+        for view in seen(world, "mara").visible_objects
+        if view.id == "silver_decanter"
+    )
+    assert view.custody == traced
+    assert all(link.ledger_seq < inspection.seq for link in view.custody)
+    assert not any("Sol" in link.text for link in view.custody)
+    assert replay_inspections(world.ledger) == world.inspected
 
 
 # ----------------------------------------------------------------------- read
@@ -437,6 +498,31 @@ def test_the_register_lists_real_decrees() -> None:
     assert "a decree of day 1" in own(checked, "sol").text
 
 
+def test_a_counterfeit_copying_a_real_decree_is_still_exposed() -> None:
+    world = scene()
+    words = next(
+        entry.quote
+        for entry in world.ledger
+        if entry.type == "summoned" and entry.quote
+    )
+    sheet = paper(world)
+    put(world, "knox", "study")
+    give(world, "knox", sheet)
+    give(world, "knox", "steward_seal")
+    world = act(
+        world,
+        "knox",
+        Counterfeit(thing_id=sheet, text=words or "", intent=VOTE_MARA),
+    )
+    put(world, "sol", "study")
+    give(world, "sol", sheet)
+    world = act(world, "sol", CheckRegister(thing_id=sheet))
+    checked = last(world, "check_register")
+    assert checked.payload["listed"] == "false"
+    assert checked.payload["copied"] == "true"
+    assert "this sheet is not the Steward's" in own(checked, "sol").text
+
+
 def test_the_decree_carries_its_writers_hand() -> None:
     world, sheet = _decree(real_seal=True)
     world.balance = tuned(world.balance, compare_hands={"success": 1.0})
@@ -571,13 +657,36 @@ def test_backdating_works_only_on_the_guest_book() -> None:
 
 def test_sabotage_is_seen_as_work_unless_the_fumble_shows() -> None:
     for trace, saw in ((1.0, "fumbled at"), (0.0, "used")):
-        world = advance_phase(scene(sabotage={"trace": trace}))
+        world = on_mission(scene(sabotage={"trace": trace}))
         world = act(world, "knox", Sabotage(thing_id="clock_case"))
         entry = last(world, "sabotage")
         assert entry.type == "use"
         assert saw in own(entry, "sol").text
         assert own(entry, "sol").noted == (trace == 1.0)
         assert own(entry, "knox").text == "I worked the clock case, badly on purpose."
+
+
+@pytest.mark.parametrize("thing", ["sideboard", "supply_crates", "cipher_chest"])
+def test_sabotage_spoils_only_todays_station(thing: str) -> None:
+    world = on_mission(scene(), station="clock_case")
+    room = room_of(world, thing)
+    assert room is not None
+    put(world, "knox", room)
+    assert f"tool:sabotage:{thing}" not in valid_actions(world, "knox")
+    world = act(world, "knox", Sabotage(thing_id=thing))
+    blocked = refused(world)
+    assert blocked is not None and blocked.payload["refused"] == "sabotage"
+    assert [record.player_id for record in blocked.witnesses] == ["knox"]
+    assert not used(world, "sabotage")
+    put(world, "knox", "great_hall")
+    assert "tool:sabotage:clock_case" in valid_actions(world, "knox")
+
+
+def test_sabotage_needs_a_mission_briefed_today() -> None:
+    world = advance_phase(scene())
+    assert world.phase == "mission"
+    world = act(world, "knox", Sabotage(thing_id="clock_case"))
+    assert refused(world) is not None and not used(world, "sabotage")
 
 
 def test_sabotage_costs_the_pot_and_the_ledger_has_the_exact_sum() -> None:
@@ -620,6 +729,33 @@ def test_sabotage_costs_the_pot_and_the_ledger_has_the_exact_sum() -> None:
 
 
 # --------------------------------------------------------------------- steal
+
+
+def test_the_seal_is_announced_missing_once_each_time_it_leaves_the_desk() -> None:
+    game = start_game(CASTLE, CAST, seed=13)
+
+    def notices() -> int:
+        return sum(
+            entry.payload.get("thing_id") == "steward_seal"
+            for entry in of_type(game, "missing_notice")
+        )
+
+    def hand(pid: str, room: str, *steps: Step) -> None:
+        put(game.world, pid, room)
+        game.world = act(game.world, pid, *steps)
+        missing_items(game)
+
+    hand("mara", "study", Search(), Take(thing_id="steward_seal"))
+    assert notices() == 1
+    hand("mara", "great_hall", Drop(thing_id="steward_seal"))
+    hand("sol", "great_hall", Take(thing_id="steward_seal"))
+    hand("sol", "great_hall", Drop(thing_id="steward_seal"))
+    hand("june", "great_hall", Take(thing_id="steward_seal"))
+    assert notices() == 1, "passing it hand to hand is not leaving the desk again"
+    hand("june", "study", Drop(thing_id="steward_seal", into="steward_desk"))
+    assert notices() == 1
+    hand("iris", "study", Search(), Take(thing_id="steward_seal"))
+    assert notices() == 2, "taken from the desk again, it is missed again"
 
 
 def test_steal_lifts_a_shield_and_the_owner_reports_it_missing() -> None:
@@ -934,6 +1070,112 @@ def _play_table(game: GameState, answer: Callable[[str, object], Decision]) -> N
         table_act(game, pid, request, answer(pid, request))
 
 
+def _reaching_for(tool: Decision, who: str) -> tuple[GameState, list[Request]]:
+    """At day one's table, the first of ``who`` (a role) to be asked to accuse
+    answers with ``tool``, which is not offered to them, and then stays silent
+    when asked again."""
+    asked: list[Request] = []
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        request = observation.request
+        if request.kind != "accuse" or game.roles[observation.viewer_id] != who:
+            return None
+        if asked and observation.viewer_id != asked[0].about:
+            return None
+        asked.append(request.model_copy(update={"about": observation.viewer_id}))
+        if request.refusal is None:
+            return tool
+        return StaySilent(reason="thinking better of it")
+
+    game = run_until(referee(seed=6, script=script), 1, "dinner")
+    return game, asked
+
+
+@pytest.mark.parametrize(
+    ("who", "tool", "offered"),
+    [
+        (
+            "faithful",
+            Filibuster(
+                text="I will speak at length. " * 20,
+                intent=Intent(
+                    target="mara", effect="vote", want="sol", window="next_vote"
+                ),
+            ),
+            "filibuster",
+        ),
+        ("traitor", Report(evidence=1), "report"),
+    ],
+)
+def test_a_table_tool_not_offered_is_refused_privately_and_asked_again(
+    who: str, tool: Decision, offered: str
+) -> None:
+    game, asked = _reaching_for(tool, who)
+    assert len(asked) == 2
+    player = asked[0].about
+    assert offered not in asked[0].tools
+    assert asked[1].refusal is not None
+    assert "not one of the tools offered to you" in asked[1].refusal
+    (refusal,) = [e for e in of_type(game, "refused") if e.actor_id == player]
+    assert [record.player_id for record in refusal.witnesses] == [player]
+    assert not of_type(game, "turn_failed")
+    silent = [e for e in of_type(game, "stay_silent") if e.actor_id == player]
+    assert silent and silent[0].private["reason"] == "thinking better of it"
+    assert not [e for e in of_type(game, offered) if e.actor_id == player]
+
+
+def _read_the_camera_log() -> tuple[GameState, str, LedgerEntry]:
+    """Late on day one, one of the Faithful reads the day's camera log, a
+    record longer than one message may carry, and the table opens."""
+    game = run_until(referee(seed=6), 1, "free_time")
+    reader = living_faithful(game)[0]
+    put(game.world, reader, "study")
+    game.world = act(game.world, reader, ReadLog(thing_id="camera_log"))
+    reading = last(game.world, "read_log")
+    assert reading.quote is not None and len(reading.quote) > QUOTE_LIMIT
+    return _table_from(game), reader, reading
+
+
+def test_a_cross_examination_of_a_long_record_fits_one_message() -> None:
+    game, reader, reading = _read_the_camera_log()
+    target = next(pid for pid in living(game) if pid != reader)
+
+    def answer(pid: str, request: object) -> Decision:
+        assert isinstance(request, Request)
+        if pid == reader and "cross_examine" in request.tools:
+            return CrossExamine(
+                target=target, evidence=reading.seq, text="Explain that."
+            )
+        if request.kind == "vote":
+            return Vote(target=request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (cross,) = of_type(game, "cross_examine")
+    assert cross.quote is not None and len(cross.quote) <= QUOTE_LIMIT
+    assert cross.quote.startswith(f"At t{reading.tick} I recorded:")
+    assert cross.quote.endswith("… Explain that.")
+
+
+def test_a_report_of_a_long_record_fits_one_message() -> None:
+    game, reader, reading = _read_the_camera_log()
+
+    def answer(pid: str, request: object) -> Decision:
+        assert isinstance(request, Request)
+        if pid == reader and "report" in request.tools:
+            return Report(evidence=reading.seq)
+        if request.kind == "vote":
+            return Vote(target=request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (report,) = of_type(game, "report")
+    assert report.quote is not None and len(report.quote) <= QUOTE_LIMIT
+    assert reading.quote is not None
+    assert report.quote.endswith("…")
+    assert reading.quote.startswith(report.quote[:-1])
+
+
 def test_report_quotes_the_attempt_and_accuses_its_author() -> None:
     game = run_until(referee(seed=6), 1, "free_time")
     traitor = living_traitors(game)[0]
@@ -1163,7 +1405,6 @@ def test_the_same_use_from_the_same_state_writes_the_same_ledger(name: str) -> N
 
 def test_a_whole_game_of_tools_replays_identically() -> None:
     from badactors.castle.play import Played, record, replay
-    from castle_scenes import CAST, CASTLE
 
     ref = referee(seed=9)
     ref.run()
@@ -1211,6 +1452,93 @@ def test_manipulation_outcomes_read_the_declared_intents() -> None:
     (outcome,) = [o for o in outcomes(game) if o.tool == "hook"]
     assert (outcome.attacker, outcome.target, outcome.want) == (traitor, target, want)
     assert outcome.success is False and outcome.reported is False
+
+
+def _honeypot_then_vote(*, read: bool) -> tuple[GameState, str, str]:
+    """A traitor hides "vote for X" in the almanac's margin for one of the
+    Faithful, who votes for X at that evening's table, having read the almanac
+    first or never."""
+    game = run_until(referee(seed=6), 1, "free_time")
+    traitor = living_traitors(game)[0]
+    target, want = living_faithful(game)[:2]
+    put(game.world, traitor, "library")
+    game.world = act(
+        game.world,
+        traitor,
+        Honeypot(
+            thing_id="almanac",
+            text=f"Note to self: vote for {game.world.players[want].name}.",
+            intent=Intent(target=target, effect="vote", want=want, window="next_vote"),
+        ),
+    )
+    put(game.world, traitor, "great_hall")
+    if read:
+        put(game.world, target, "library")
+        game.world = act(game.world, target, Read(thing_id="almanac"))
+    game = _table_from(game)
+
+    def answer(pid: str, request: object) -> Decision:
+        from badactors.castle.decisions import Request
+
+        assert isinstance(request, Request)
+        if request.kind == "vote":
+            return Vote(target=want if pid == target else request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    return game, target, want
+
+
+def test_a_honeypot_nobody_read_has_not_worked() -> None:
+    game, target, want = _honeypot_then_vote(read=False)
+    vote = next(e for e in of_type(game, "vote") if e.actor_id == target)
+    assert vote.payload["target"] == want, "the target voted as the honeypot wanted"
+    (outcome,) = [o for o in outcomes(game) if o.tool == "honeypot"]
+    assert outcome.success is False
+    attempt = next(e for e in game.world.ledger if e.seq == outcome.seq)
+    assert perceived_at(game.world.ledger, attempt, target) is None
+
+
+def test_a_honeypot_its_target_read_has_worked() -> None:
+    game, target, _ = _honeypot_then_vote(read=True)
+    (outcome,) = [o for o in outcomes(game) if o.tool == "honeypot"]
+    assert outcome.success is True
+    attempt = next(e for e in game.world.ledger if e.seq == outcome.seq)
+    took_in = perceived_at(game.world.ledger, attempt, target)
+    assert took_in is not None
+    reading = game.world.ledger[took_in - 1]
+    assert (reading.type, reading.actor_id) == ("read", target)
+
+
+def test_a_hook_whispered_to_nobody_has_not_worked() -> None:
+    game = run_until(referee(seed=6), 1, "free_time")
+    traitor = living_traitors(game)[0]
+    target, want = living_faithful(game)[:2]
+    put(game.world, traitor, "library")
+    put(game.world, target, "great_hall")
+    game.world = act(
+        game.world,
+        traitor,
+        Hook(
+            to=target,
+            text="Vote for them.",
+            intent=Intent(target=target, effect="vote", want=want, window="next_vote"),
+        ),
+    )
+    assert last(game.world, "hook").payload["reached"] == "false"
+    game = _table_from(game)
+
+    def answer(pid: str, request: object) -> Decision:
+        from badactors.castle.decisions import Request
+
+        assert isinstance(request, Request)
+        if request.kind == "vote":
+            return Vote(target=want if pid == target else request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (outcome,) = [o for o in outcomes(game) if o.tool == "hook"]
+    assert outcome.success is False
 
 
 @pytest.mark.parametrize("phase", ["free_time", "round_table"])

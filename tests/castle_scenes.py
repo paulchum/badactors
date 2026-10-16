@@ -9,14 +9,16 @@ the one liberty tests take that a player never can.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
 from badactors.castle.contracts import CastlePhase, LedgerEntry, WitnessRecord
-from badactors.castle.decisions import Decision, Pass, Recruit, Vote
+from badactors.castle.decisions import Decision, ExitAnswer, Pass, Recruit, Vote
 from badactors.castle.game import GameState, fork_game, shield_held_by
+from badactors.castle.interview import ExitObservation
 from badactors.castle.mapfile import load_map
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import Referee, start_game
@@ -52,17 +54,29 @@ def referee(
     cast = CAST.first(players)
     game = start_game(CASTLE, cast, seed=seed, config=GameConfig.shipped(**config))
     ref = Referee(fork_game(game), {}, models=tuple(MODELS))
-    bot = HeuristicBot(seed=seed)
-
-    def player(observation: GameObservation) -> Decision:
-        if script is not None:
-            decision = script(observation, ref.game)
-            if decision is not None:
-                return decision
-        return bot(observation)
-
+    player = _Scripted(ref, HeuristicBot(seed=seed), script)
     ref.players = {pid: player for pid in game.world.seats}
     return ref
+
+
+@dataclass
+class _Scripted:
+    """The bot in every seat, with a script answering first; exit interviews
+    go to the bot."""
+
+    ref: Referee
+    bot: HeuristicBot
+    script: Script | None
+
+    def __call__(self, observation: GameObservation) -> Decision:
+        if self.script is not None:
+            decision = self.script(observation, self.ref.game)
+            if decision is not None:
+                return decision
+        return self.bot(observation)
+
+    def interview(self, departing: ExitObservation) -> ExitAnswer:
+        return self.bot.interview(departing)
 
 
 def run_until(ref: Referee, day: int, phase: CastlePhase) -> GameState:
@@ -108,7 +122,7 @@ def recruiting(answer: Decision) -> Script:
             first = game.starting_traitors[0]
             return Vote(target=first if first in options else options[0])
         if kind == "poison":
-            return Pass()
+            return Pass(reason="Not this time.")
         if kind == "recruit":
             unshielded = [pid for pid in options if shield_held_by(game, pid) is None]
             return Recruit(target=(unshielded or options)[0], text="Join us.")

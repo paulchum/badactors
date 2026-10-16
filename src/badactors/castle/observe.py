@@ -32,10 +32,19 @@ first check. Each class of game secret has its guard:
 * **a stolen shield's owner** — the report of a shield gone missing is the
   owner's alone, since it says they carried one;
 * **a tool its user does not carry** — a round-table turn offers only the tools
-  in its player's kit, and cites only records they hold.
+  in its player's kit, and cites only records they hold;
+* **a failure on a private decision** — a hesitation over a dose, a nomination,
+  an offer or the answer to one is its player's alone, since anyone who saw it
+  would learn the question had been put;
+* **a refused answer** — an answer refused and asked again is its player's
+  alone;
+* **an exit interview** — the truth told to a player leaving the game, and
+  whatever they answer, reach no player still in it.
 
-Model names never enter the game state at all. :func:`assert_no_model_names`
-checks that a model name appears nowhere in an observation, quotes included.
+Model names never enter the game state at all, and a player's words that name
+one are refused before they are written (see ``anonymity``).
+:func:`assert_no_model_names` checks, by the same aliases, that no model name
+appears anywhere in an observation, quotes included.
 """
 
 from __future__ import annotations
@@ -45,6 +54,7 @@ from functools import lru_cache
 
 from pydantic import Field
 
+from badactors.castle.anonymity import Aliases, aliases
 from badactors.castle.contracts import (
     Build,
     CastleMap,
@@ -57,7 +67,12 @@ from badactors.castle.contracts import (
     ScopedObservation,
     quickest_route,
 )
-from badactors.castle.decisions import TRAITOR_ONLY, Request
+from badactors.castle.decisions import (
+    AUDIENCE_ONLY,
+    PRIVATE_REQUESTS,
+    TRAITOR_ONLY,
+    Request,
+)
 from badactors.castle.game import (
     Fate,
     GameState,
@@ -68,7 +83,7 @@ from badactors.castle.game import (
     was_traitor_at,
 )
 from badactors.castle.kit import SPECS, carries
-from badactors.castle.ledger import entry_at
+from badactors.castle.ledger import AsideKind, asides_of, entry_at
 from badactors.castle.rules import OFFICIAL_ONLY, MissionSpec, Role, rulebook
 from badactors.castle.scope import (
     LeakageError,
@@ -152,6 +167,17 @@ class OfferReceived(Contract):
     seq: int = Field(ge=1)
 
 
+class Aside(Contract):
+    """One of the viewer's own earlier private lines: a diary line, or their
+    reason for silence or for letting a chance pass."""
+
+    seq: int = Field(ge=1)
+    day: int = Field(ge=1)
+    phase: CastlePhase
+    kind: AsideKind
+    text: str = Field(min_length=1, max_length=600)
+
+
 class GameObservation(Contract):
     viewer_id: str
     day: int = Field(ge=1)
@@ -175,6 +201,8 @@ class GameObservation(Contract):
     table: list[ObservationItem] = Field(default_factory=list)
     """Today's round table as this player witnessed it."""
     offers: list[OfferReceived] = Field(default_factory=list)
+    asides: list[Aside] = Field(default_factory=list)
+    """The viewer's own most recent private lines, which nobody else reads."""
     world: ScopedObservation
     request: Request
 
@@ -230,11 +258,53 @@ def observe_game(game: GameState, viewer_id: str, request: Request) -> GameObser
             for offer in game.offers
             if offer.target == viewer_id
         ],
+        asides=asides(game, viewer_id),
         world=build_observation(
             world, viewer_id, recent_limit=game.config.recent_limit
         ),
         request=request,
     )
+
+
+def asides(game: GameState, viewer_id: str) -> list[Aside]:
+    """The viewer's last ``diary_limit`` private lines, oldest first."""
+    world = game.world
+    limit = game.config.diary_limit
+    if limit == 0:
+        return []
+    lines: list[Aside] = []
+    for seq in reversed(world.asides.get(viewer_id, [])):
+        entry = world.ledger[seq - 1]
+        for kind, text in reversed(asides_of(entry)):
+            lines.append(
+                Aside(seq=seq, day=entry.day, phase=entry.phase, kind=kind, text=text)
+            )
+        if len(lines) >= limit:
+            break
+    return list(reversed(lines[:limit]))
+
+
+def observed(observation: GameObservation) -> list[int]:
+    """Every ledger entry whose content this observation put in front of its
+    player, in order: their memory and notebook, the table, the announcements
+    behind the public record, offers made to them, their own private lines,
+    and the custody links of anything they have inspected. Kept beside each
+    decision, so a later check can tell whether a record that contradicts a
+    claim was there when the claim was made."""
+    world = observation.world
+    seqs = {item.ledger_seq for item in (*world.recent, *world.evidence)}
+    seqs.update(item.ledger_seq for item in observation.table)
+    seqs.update(fate.seq for fate in observation.fates)
+    seqs.update(tally.seq for tally in observation.tallies)
+    seqs.update(vote.seq for vote in observation.votes)
+    seqs.update(offer.seq for offer in observation.offers)
+    seqs.update(aside.seq for aside in observation.asides)
+    things = [*world.visible_objects, *world.carrying]
+    if world.wearing is not None:
+        things.append(world.wearing)
+    for thing in things:
+        seqs.update(link.ledger_seq for link in thing.custody or [])
+    return sorted(seqs)
 
 
 def rules_for(game: GameState) -> str:
@@ -267,7 +337,15 @@ def assert_no_game_leak(
     if observation.world.viewer_id != viewer:
         raise LeakageError("Observation mixes two viewers.")
     # First, so a model name is reported as what it is, wherever it was put.
-    assert_no_model_names(observation, models)
+    assert_no_model_names(
+        observation,
+        models,
+        exempt=[
+            name
+            for player in world.players.values()
+            for name in (player.id, player.name)
+        ],
+    )
     assert_no_leak(observation.world, world)
     for item in observation.table:
         assert_item(item, viewer, world)
@@ -280,6 +358,7 @@ def assert_no_game_leak(
         assert entry is not None  # assert_item has already proven it exists
         _assert_audience(entry, viewer, game)
         _assert_private(entry, item, viewer)
+    _assert_asides(observation, game)
     _assert_roles(observation, game)
     _assert_public(observation, game)
     _assert_offers(observation, game)
@@ -291,15 +370,28 @@ def assert_no_game_leak(
         )
 
 
-def assert_no_model_names(observation: GameObservation, models: Iterable[str]) -> None:
-    """No model name anywhere: not in a persona, a rule, or a quoted word."""
-    needles = _needles(tuple(sorted(set(models))))
-    if not needles:
-        return
+PRIVATE_OWN: frozenset[str] = frozenset(
+    {"plan_formed", "wait", "stay_silent", "declined", "refused"}
+)
+"""Entries whose actor's own record repeats words nobody else ever sees: a
+plan's goal, a reason to wait, stay silent or let a chance pass, and an answer
+refused back to its giver. A model name there tells another player nothing."""
+
+
+def assert_no_model_names(
+    observation: GameObservation,
+    models: Iterable[str],
+    *,
+    exempt: Iterable[str] = (),
+) -> None:
+    """No model name anywhere: not in a persona, a rule, or a quoted word.
+    ``exempt`` holds the characters' names and ids, which never count. The
+    viewer's own private words, shown back to them, are theirs to see."""
+    known = _aliases(tuple(sorted(set(models))), tuple(sorted(set(exempt))))
     # The rulebook is the same long text in every observation of a game, so it is
     # checked once and remembered; everything else is checked every time.
-    found = _mention(needles, observation.rules) or _mention(
-        needles, observation.model_dump_json(exclude={"rules"})
+    found = _mention(known, observation.rules) or known.found(
+        _for_others(observation).model_dump_json(exclude={"rules"})
     )
     if found:
         raise LeakageError(
@@ -308,25 +400,43 @@ def assert_no_model_names(observation: GameObservation, models: Iterable[str]) -
         )
 
 
-@lru_cache(maxsize=32)
-def _needles(models: tuple[str, ...]) -> tuple[str, ...]:
-    """Each model's full id and its name without the provider, folded."""
-    return tuple(
-        sorted(
-            {
-                needle.casefold()
-                for model in models
-                for needle in (model, model.rsplit("/", 1)[-1])
-                if len(needle) >= 4
-            }
-        )
+def _for_others(observation: GameObservation) -> GameObservation:
+    """The observation less what only its viewer wrote for themselves: their
+    private lines, the plan they have yet to carry out, and why an answer of
+    theirs was refused."""
+
+    def heard(items: list[ObservationItem]) -> list[ObservationItem]:
+        return [
+            item
+            for item in items
+            if not (item.sense == "own" and item.kind in PRIVATE_OWN)
+        ]
+
+    world = observation.world.model_copy(
+        update={
+            "recent": heard(observation.world.recent),
+            "evidence": heard(observation.world.evidence),
+            "plan_remaining": [],
+        }
+    )
+    return observation.model_copy(
+        update={
+            "world": world,
+            "table": heard(observation.table),
+            "asides": [],
+            "request": observation.request.model_copy(update={"refusal": None}),
+        }
     )
 
 
+@lru_cache(maxsize=32)
+def _aliases(models: tuple[str, ...], exempt: tuple[str, ...]) -> Aliases:
+    return aliases(models, exempt=exempt)
+
+
 @lru_cache(maxsize=64)
-def _mention(needles: tuple[str, ...], text: str) -> str | None:
-    folded = text.casefold()
-    return next((needle for needle in needles if needle in folded), None)
+def _mention(known: Aliases, text: str) -> str | None:
+    return known.found(text)
 
 
 # ------------------------------------------------------------- who may hold what
@@ -382,6 +492,15 @@ def _audience_of(entry: LedgerEntry, game: GameState) -> tuple[str, Audience] | 
         return "a whisper", lambda viewer: viewer in pair
     if kind == "declined":
         return "a private choice", lambda viewer: viewer == entry.actor_id
+    if kind == "refused":
+        return "a refused answer", lambda viewer: viewer == entry.actor_id
+    if kind == "exit_interview":
+        return "an exit interview", lambda viewer: False
+    if kind == "turn_failed" and payload.get("request") in PRIVATE_REQUESTS:
+        return (
+            "a failure on a private decision",
+            lambda viewer: viewer == entry.actor_id,
+        )
     return None
 
 
@@ -408,6 +527,31 @@ def _assert_private(entry: LedgerEntry, item: ObservationItem, viewer: str) -> N
             raise LeakageError(
                 f"Entry {entry.seq} shows {viewer!r} the private {key} of "
                 f"{entry.actor_id!r}: another player's diary or silence reason."
+            )
+
+
+def _assert_asides(observation: GameObservation, game: GameState) -> None:
+    """Private lines shown back are the viewer's own, word for word, and no more
+    of them than the limit allows."""
+    viewer = observation.viewer_id
+    if len(observation.asides) > game.config.diary_limit:
+        raise LeakageError(
+            f"Observation shows {viewer!r} more private lines than the limit allows."
+        )
+    for aside in observation.asides:
+        entry = entry_at(game.world.ledger, aside.seq)
+        if entry is None or entry.actor_id != viewer:
+            raise LeakageError(
+                f"Observation shows {viewer!r} a private line from entry {aside.seq}, "
+                "which is not theirs: another player's diary or silence reason."
+            )
+        if (aside.kind, aside.text) not in asides_of(entry) or (
+            aside.day,
+            aside.phase,
+        ) != (entry.day, entry.phase):
+            raise LeakageError(
+                f"Observation misquotes {viewer!r}'s private line from entry "
+                f"{entry.seq}."
             )
 
 
@@ -514,6 +658,11 @@ def _assert_offers(observation: GameObservation, game: GameState) -> None:
 def _assert_request(observation: GameObservation, game: GameState) -> None:
     viewer = observation.viewer_id
     request = observation.request
+    if request.kind in AUDIENCE_ONLY:
+        raise LeakageError(
+            f"An exit interview was put to {viewer!r} in the game: an exit "
+            "interview reaching a living player."
+        )
     if request.kind in TRAITOR_ONLY and game.roles[viewer] != "traitor":
         raise LeakageError(
             f"A {request.kind} decision was put to {viewer!r}, one of the Faithful: "
@@ -548,14 +697,18 @@ def _assert_request(observation: GameObservation, game: GameState) -> None:
 
 __all__ = [
     "CONCLAVE_TYPES",
+    "PRIVATE_OWN",
     "UNSEEN_TYPES",
+    "Aside",
     "CastleView",
     "Character",
     "GameObservation",
     "OfferReceived",
+    "asides",
     "assert_no_game_leak",
     "assert_no_model_names",
     "castle_view",
     "observe_game",
+    "observed",
     "rules_for",
 ]

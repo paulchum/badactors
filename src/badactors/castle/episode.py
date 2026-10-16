@@ -12,6 +12,7 @@ was said, searched, taken or hidden along the way.
 
 from __future__ import annotations
 
+import json
 import textwrap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -90,11 +91,18 @@ _HIDDEN: dict[str, tuple[str, str, str]] = {
 means for the tool that wrote it."""
 
 
-def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
-    """The whole game, day by day, as the audience sees it."""
+def episode(game: GameState, *, agents: Mapping[str, str] | None = None) -> str:
+    """The whole game, day by day, as the audience sees it.
+
+    ``agents`` says who played each seat. A seat played by a model shows the
+    model; one played by a reference bot says so and shows no model, and a game
+    no model played opens by saying that, so a bot's play is never read as a
+    model's."""
     world = game.world
     out: list[str] = []
     castle = world.map.name.upper()
+    if agents and not any(agent.startswith("model:") for agent in agents.values()):
+        out.append(REFERENCE_BANNER)
     out.append(f"{castle} · seed {world.seed}")
     starting = game.starting_traitors
     out.append(
@@ -107,7 +115,7 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
     width = max(len(look) for look in looks.values())
     for pid in world.seats:
         player = world.players[pid]
-        model = f"  {models[pid]}" if models and pid in models else ""
+        model = f"  {_played_by(agents[pid])}" if agents and pid in agents else ""
         mark = "T" if pid in starting else " "
         out.append(f"  {mark} {player.name:<7} {looks[pid]:<{width}}{model}")
 
@@ -126,6 +134,19 @@ def episode(game: GameState, *, models: Mapping[str, str] | None = None) -> str:
     out.append("═" * WIDTH)
     out.append(_result(game))
     return "\n".join(out)
+
+
+REFERENCE_BANNER = (
+    "REFERENCE BOTS · every seat was played by a seeded bot. No model played."
+)
+
+
+def _played_by(agent: str) -> str:
+    if agent.startswith("model:"):
+        return agent.removeprefix("model:")
+    if agent.startswith("bot:"):
+        return f"reference bot ({agent.removeprefix('bot:')})"
+    return "played by an unlabelled agent"
 
 
 # ------------------------------------------------------------------- structure
@@ -278,15 +299,33 @@ def _render(
         _table_line(view, entry, who, diary)
     elif kind == "turn_failed":
         view.say("FAILED", entry.text)
+    elif kind == "refused":
+        view.say("REFUSED", entry.text)
+    elif kind == "exit_interview":
+        guesses = json.loads(entry.private.get("guesses", "{}"))
+        guessed = ", ".join(
+            f"{name(game, pid)}: {family}" for pid, family in guesses.items()
+        )
+        said = f" “{entry.quote}”" if entry.quote else ""
+        view.say(
+            "EXIT",
+            f"{entry.text[:-1]} ({entry.payload.get('why', '')}).{said}",
+            f"guesses {guessed}" if guessed else "",
+        )
+    elif kind == "remember":
+        kept = game.world.ledger[int(entry.payload["seq"]) - 1]
+        view.say("NOTE", f"{who} makes a note to remember: {kept.text}")
     elif kind == "blocked" and "was full" in entry.payload.get("reason", ""):
         full = entry.payload["reason"].split(" and ")[0]
         view.say("MOVES", f"{who} was turned back at the door: {full}.")
     elif kind == "poison":
         view.say("POISON", entry.text, _aside(game, entry))
     elif kind == "declined" and entry.payload.get("request") == "poison":
-        view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", diary)
+        view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", _why(entry))
+    elif kind == "declined" and entry.payload.get("request") == "nominate":
+        view.say("CONCLAVE", f"{who} names nobody.", _why(entry))
     elif kind == "declined":
-        view.say("NIGHT", f"{who} decides against recruiting tonight.", diary)
+        view.say("NIGHT", f"{who} decides against recruiting tonight.", _why(entry))
     elif kind == "recruit_offer":
         view.say("OFFER", f"{entry.text} “{entry.quote}”", diary)
     elif kind == "recruit_answer":
@@ -310,6 +349,15 @@ def _render(
         )
     elif kind == "conclave_missed":
         view.say("CONCLAVE", entry.text)
+
+
+def _why(entry: LedgerEntry) -> str:
+    """A private reason and any diary line, set off for the audience."""
+    return " · ".join(
+        value
+        for value in (entry.private.get("reason"), entry.private.get("diary"))
+        if value
+    )
 
 
 def _table_line(view: _Phase, entry: LedgerEntry, who: str, diary: str) -> None:
@@ -386,4 +434,4 @@ def _own_text(entry: LedgerEntry) -> str:
     return own.text if own is not None else entry.text
 
 
-__all__ = ["episode"]
+__all__ = ["REFERENCE_BANNER", "episode"]

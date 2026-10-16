@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections import Counter
 
 from badactors.castle.balance import ToolName
-from badactors.castle.contracts import RECORD_LIMIT, WorldState
+from badactors.castle.contracts import QUOTE_LIMIT, WorldState
 from badactors.castle.decisions import (
     Accuse,
     Alibi,
@@ -63,7 +63,7 @@ from badactors.castle.game import (
     victor,
 )
 from badactors.castle.kit import refusal
-from badactors.castle.ledger import append_perceived, recent_records
+from badactors.castle.ledger import append_perceived, notebook_seqs, recent_records
 from badactors.castle.perceive import perceive
 from badactors.castle.rng import draw
 from badactors.castle.steward import announce
@@ -90,8 +90,10 @@ def open_table(game: GameState) -> None:
     present = present_at(game, world.map.gathering_room)
     everyone = living(game)
     final = len(everyone) <= game.config.endgame_at or world.day >= game.config.max_days
-    start = (world.day - 1) % len(present) if present else 0
-    order = present[start:] + present[:start]
+    # The order turns one seat a day round the whole table, so who speaks first
+    # depends on the day, not on who happens to have come.
+    start = (world.day - 1) % len(world.seats)
+    order = [pid for pid in world.seats[start:] + world.seats[:start] if pid in present]
     game.table = TableState(day=world.day, final=final, present=present, order=order)
     words = "The round table is in session."
     if final:
@@ -436,7 +438,7 @@ def _reportable(world: WorldState, player_id: str) -> list[int]:
     whisper, or something they read that someone else wrote. Their own words
     are not theirs to report."""
     out: list[int] = []
-    for seq in world.notebook.get(player_id, []):
+    for seq in notebook_seqs(world, player_id):
         record = world.ledger[seq - 1].record_for(player_id)
         if (
             record is not None
@@ -451,7 +453,7 @@ def _reportable(world: WorldState, player_id: str) -> list[int]:
 def _citable(game: GameState, player_id: str) -> list[int]:
     """Records this player holds and can see: their notebook and recent memory."""
     world = game.world
-    seqs = set(world.notebook.get(player_id, []))
+    seqs = set(notebook_seqs(world, player_id))
     seqs.update(
         entry.seq
         for entry, _ in recent_records(
@@ -621,7 +623,7 @@ def _report(
     )
     if author:
         payload["target"] = author
-    return "report", f"reported, word for word, {source}:", record.quote
+    return "report", f"reported, word for word, {source}:", capped(record.quote)
 
 
 def _cross_examine(
@@ -637,8 +639,7 @@ def _cross_examine(
     read = f"At t{cited.tick} I recorded: {record.text}"
     if record.quote is not None:
         read += f" “{record.quote}”"
-    room = RECORD_LIMIT - len(decision.text) - 2
-    quote = f"{read[:room]} {decision.text}"
+    quote = f"{capped(read, QUOTE_LIMIT - len(decision.text) - 1)} {decision.text}"
     payload.update(
         {
             "tool": "cross_examine",
@@ -648,6 +649,14 @@ def _cross_examine(
     )
     target = name(game, decision.target)
     return "cross_examine", f"cross-examined {target}, reading from a record:", quote
+
+
+def capped(words: str, room: int = QUOTE_LIMIT) -> str:
+    """Words cut to fit a message, marked where they were cut. Only a filibuster
+    speaks longer than one message may carry."""
+    if len(words) <= room:
+        return words
+    return words[: room - 1].rstrip() + "…"
 
 
 def _alibi(
@@ -671,7 +680,7 @@ def _alibi(
     if decision.companion is not None:
         claim += f", with {name(game, decision.companion)}"
     claim += f", during {_phase(phase)} on day {day}."
-    quote = f"{claim} {decision.text}".strip()
+    quote = capped(f"{claim} {decision.text}".strip())
     payload.update(
         {
             "target": asker,
@@ -720,7 +729,7 @@ def _vouch(
         }
     )
     verb = "vouched for" if decision.confirm else "refused to vouch for"
-    return "vouch", f"{verb} {whom}:", f"{said} {decision.text}".strip()
+    return "vouch", f"{verb} {whom}:", capped(f"{said} {decision.text}".strip())
 
 
 # --------------------------------------------------------------------- the vote
@@ -820,12 +829,27 @@ def _resolve_vote(game: GameState, table: TableState) -> None:
 
 
 def _resolve_endgame(game: GameState, table: TableState) -> None:
-    choices = list(table.endgame_votes.values())
-    # Every vote cast was to end — vacuously so if nobody at the table could vote,
-    # which also guarantees the last day ends the game.
-    if all(choice == "end" for choice in choices):
+    """End the game if every vote cast was to end it, or if none was cast at
+    all, as a banishment vote nobody casts ends the final table. What the
+    Steward says is what happened: who voted, and who did not."""
+    choices = table.endgame_votes
+    unheard = [pid for pid in table.order if alive(game, pid) and pid not in choices]
+    if not choices:
         table.stage = "done"
-        _end_by_roles(game, "Every vote was to end the game.")
+        _end_by_roles(
+            game, "No vote to end the game or to banish again was cast, so it ends."
+        )
+        return
+    if all(choice == "end" for choice in choices.values()):
+        table.stage = "done"
+        if unheard:
+            _end_by_roles(
+                game,
+                "Every vote cast was to end the game; "
+                f"{names(game, unheard)} cast none.",
+            )
+        else:
+            _end_by_roles(game, "Every vote was to end the game.")
         return
     world = game.world
     banishers = [
@@ -850,4 +874,4 @@ def _end_by_roles(game: GameState, reason: str) -> None:
     finish(game, "traitor" if living_traitors(game) else "faithful", reason=reason)
 
 
-__all__ = ["open_table", "table_act", "table_advance", "table_turn"]
+__all__ = ["capped", "open_table", "table_act", "table_advance", "table_turn"]

@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import ClassVar
 
 from badactors.castle import schemes, sleuth
 from badactors.castle.contracts import Move, Plan, Search, Step, Use, Wait, Whisper
@@ -46,6 +47,7 @@ from badactors.castle.decisions import (
     Defend,
     DemandAlibi,
     EndgameVote,
+    ExitAnswer,
     Nominate,
     Pass,
     PlanChoice,
@@ -58,6 +60,7 @@ from badactors.castle.decisions import (
     Vote,
     Vouch,
 )
+from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.rng import draw
 
@@ -78,6 +81,15 @@ class HeuristicBot:
 
     seed: int = 7
     susceptibility: float | None = None
+    agent: ClassVar[str] = "bot:heuristic"
+    """What the record says played a seat this bot sat in."""
+
+    def interview(self, departing: ExitObservation) -> ExitAnswer:
+        """A bot has nothing to say on leaving, and cannot tell models apart."""
+        return ExitAnswer(
+            text="I played my part as well as I could.",
+            guesses={pid: "unknown" for pid in departing.request.options},
+        )
 
     def __call__(self, observation: GameObservation) -> Decision:
         mind = Mind(observation, self.seed, self.susceptibility)
@@ -732,13 +744,13 @@ class Mind:
                 target=target,
                 diary=f"{self.n(target)} is hunting us. Tonight, quietly.",
             )
-        return Pass(diary="Not tonight. Save it.")
+        return Pass(reason="Not tonight. Save it.")
 
     def recruit(self) -> Decision:
         options = self.obs.request.options
         alone = not self.obs.fellow_traitors
         if not alone and self.roll("recruit") >= 0.3:
-            return Pass(diary="Two is company enough for now.")
+            return Pass(reason="Two is company enough for now.")
         threat = self.threat()
         target = min(options, key=lambda pid: (threat.get(pid, 0.0), self.roll(pid)))
         return Recruit(

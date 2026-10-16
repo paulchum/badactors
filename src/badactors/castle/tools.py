@@ -50,8 +50,6 @@ from badactors.castle.contracts import (
     HeldBy,
     Honeypot,
     Hook,
-    InContainer,
-    InRoom,
     Inspect,
     InspectSeal,
     Intent,
@@ -79,6 +77,7 @@ from badactors.castle.kit import Attempt, refusal
 from badactors.castle.ledger import (
     append,
     append_perceived,
+    custody_chain,
     entry_at,
     move_object,
     placement_payload,
@@ -99,9 +98,11 @@ from badactors.castle.perceive import (
     Perception,
     awake_in,
     carried_things,
+    pack_finds,
     perceive,
     room_of,
     seen_as,
+    spot,
     worn_garment,
 )
 
@@ -333,19 +334,13 @@ class _Use:
 
 def _search(use: _Use) -> None:
     world, room_id = use.world, use.room_id
-    hidden = sorted(
-        thing_id
+    finds = {
+        thing_id: where
         for thing_id, placement in world.placements.items()
-        if (
-            isinstance(placement, InRoom)
-            and placement.room_id == room_id
-            and placement.hidden
-        )
-        or (isinstance(placement, InContainer) and room_of(world, thing_id) == room_id)
-    )
-    world.searched.setdefault(use.player.id, [])
-    if room_id not in world.searched[use.player.id]:
-        world.searched[use.player.id].append(room_id)
+        if (where := spot(placement)) is not None
+        and room_of(world, thing_id) == room_id
+    }
+    hidden = sorted(finds)
     found = listing([thing(world, thing_id).name for thing_id in hidden])
     burned = ashes(world.ledger, room_id)
     own = (
@@ -361,12 +356,17 @@ def _search(use: _Use) -> None:
         own_text=own,
         silent=False,
     )
-    use.record(
+    entry = use.record(
         perception,
         type="search",
         text=f"{use.player.name} searched the {use.room_name}.",
-        payload={"found": str(len(hidden)), "ash": str(len(burned))},
+        payload={
+            "found": str(len(hidden)),
+            "finds": pack_finds(finds),
+            "ash": str(len(burned)),
+        },
     )
+    world.searched.setdefault(use.player.id, {})[room_id] = entry.seq
 
 
 def _inspect(use: _Use, step: Inspect) -> None:
@@ -374,9 +374,9 @@ def _inspect(use: _Use, step: Inspect) -> None:
     if item is None:
         return
     world = use.world
-    world.inspected.setdefault(use.player.id, [])
-    if item.id not in world.inspected[use.player.id]:
-        world.inspected[use.player.id].append(item.id)
+    links = custody_chain(
+        world.ledger, item.id, limit=world.balance.tools.inspect.links
+    )
     marks: list[str] = []
     seen: list[str] = []
     if item.kind == "glass":
@@ -402,12 +402,17 @@ def _inspect(use: _Use, step: Inspect) -> None:
         describe="{seen} examined the " + item.name + " closely.",
         own_text=own,
     )
-    use.record(
+    entry = use.record(
         perception,
         type="inspect",
         text=f"{use.player.name} examined the {item.name}.",
-        payload={"thing_id": item.id, "marks": ",".join(marks)},
+        payload={
+            "thing_id": item.id,
+            "marks": ",".join(marks),
+            "links": ",".join(str(link.ledger_seq) for link in links),
+        },
     )
+    world.inspected.setdefault(use.player.id, {})[item.id] = entry.seq
 
 
 def _read(use: _Use, step: Read) -> None:
@@ -769,18 +774,32 @@ def _check_register(use: _Use, step: CheckRegister) -> None:
             payload={"thing_id": item.id},
         )
         return
-    day = registered(use.world.ledger, written[-1].words)
-    verdict = (
-        f"the register lists it, a decree of day {day}."
-        if day is not None
-        else "the register lists no such decree."
-    )
+    latest = written[-1]
+    day = registered(use.world.ledger, latest.words)
+    payload = {"thing_id": item.id, "listed": "false"}
+    if latest.signed == STEWARD:
+        # The Steward decrees aloud, in the official channel, and never on
+        # paper: a sheet under the Steward's name is not in the register,
+        # whatever words it copies.
+        verdict = (
+            f"the register has those words as said aloud on day {day}, but the "
+            "Steward puts no decree on paper: this sheet is not the Steward's."
+            if day is not None
+            else "the register lists no such decree."
+        )
+        if day is not None:
+            payload["copied"] = "true"
+    elif day is not None:
+        verdict = f"the register lists it, a decree of day {day}."
+        payload["listed"] = "true"
+    else:
+        verdict = "the register lists no such decree."
     _finding(
         use,
         item,
         own=f"I looked for the {item.name} in the {register.name}: {verdict}",
         describe="{seen} consulted the " + register.name + ".",
-        payload={"thing_id": item.id, "listed": "true" if day else "false"},
+        payload=payload,
     )
 
 
@@ -1129,7 +1148,7 @@ def _sabotage(use: _Use, step: Sabotage) -> None:
     item = use.reachable(step.thing_id)
     if item is None:
         return
-    if not item.container or not isinstance(use.world.placements.get(item.id), InRoom):
+    if item.id != todays_station(use.world):
         use.refuse(f"there is no work to spoil at the {item.name}")
         return
     fumble = use.attempt.roll("trace", use.attempt.numbers.trace, item.id)
@@ -1404,8 +1423,19 @@ def listing(names: list[str], room: int = 300) -> str:
     return text[:room]
 
 
+def todays_station(world: WorldState) -> str | None:
+    """The station today's mission is worked at, as the Steward briefed it: the
+    only work there is to spoil."""
+    for entry in reversed(world.ledger):
+        if entry.day < world.day:
+            return None
+        if entry.type == "mission_briefing":
+            return entry.payload.get("station")
+    return None
+
+
 def find_thing_of_kind(world: WorldState, kind: str) -> Thing | None:
     return next((item for item in world.map.things if item.kind == kind), None)
 
 
-__all__ = ["find_thing_of_kind", "listing", "use_tool"]
+__all__ = ["find_thing_of_kind", "listing", "todays_station", "use_tool"]

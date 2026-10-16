@@ -38,6 +38,7 @@ from badactors.castle.contracts import (
     Plan,
     Read,
     ReadLog,
+    Remember,
     ScopedObservation,
     Search,
     SearchPerson,
@@ -60,7 +61,12 @@ from badactors.castle.director import (
     run_day,
     run_phase,
 )
-from badactors.castle.ledger import custody_chain, replay_placements
+from badactors.castle.ledger import (
+    custody_chain,
+    replay_inspections,
+    replay_placements,
+    replay_searches,
+)
 from badactors.castle.mapfile import (
     build_world,
     lint_map,
@@ -334,6 +340,45 @@ def test_a_gathering_summons_everyone_and_routes_them() -> None:
     assert world.players["sol"].plan.steps == []
 
 
+def _at_dinner() -> WorldState:
+    world = _world()
+    while world.phase != "dinner":
+        world = advance_phase(world)
+    return world
+
+
+def test_nobody_leaves_dinner_before_the_lamps_go_out() -> None:
+    world = _at_dinner()
+    assert world.players["mara"].room_id == world.map.gathering_room
+    assert not [a for a in valid_actions(world, "mara") if a.startswith("move:")]
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="chambers")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == world.map.gathering_room
+    refusal = world.ledger[-1]
+    assert (refusal.type, refusal.actor_id) == ("blocked", "mara")
+    assert "before the lamps go out" in refusal.payload["reason"]
+    assert [record.player_id for record in refusal.witnesses] == ["mara"]
+
+
+def test_the_road_to_dinner_stays_open() -> None:
+    world = _world()
+    world = advance_phase(world)  # mission
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="gallery")]))
+    world = tick(world)
+    while world.phase != "dinner":
+        world = advance_phase(world)
+    assert world.players["mara"].room_id == "gallery"
+    assert [a for a in valid_actions(world, "mara") if a.startswith("move:")] == [
+        "move:great_hall"
+    ]
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="library")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == "gallery"
+    world = submit_plan(world, "mara", Plan(steps=[Move(room_id="great_hall")]))
+    world = tick(world)
+    assert world.players["mara"].room_id == "great_hall"
+
+
 def test_lateness_is_observed_with_a_direction() -> None:
     world = _world()
     world = advance_phase(world)
@@ -414,6 +459,45 @@ def test_hidden_objects_need_a_search() -> None:
     world = tick(world)
     assert "brass_key" in visible_things(world, "june", "library")
     assert "brass_key" not in visible_things(world, "mara", "library")
+
+
+def test_a_search_is_a_look_not_a_window() -> None:
+    """A search fixes what it found at that tick. Something hidden in the room
+    afterwards stays out of the searcher's sight, and something found and since
+    taken is no longer where they found it, until they search again."""
+    world = _walk(_world(), "june", "gallery", "library")
+    world = submit_plan(world, "june", Plan(steps=[Search()]))
+    world = tick(world)
+    world = _walk(world, "june", "gallery")
+    world = _walk(world, "knox", "gallery", "library")
+    world = submit_plan(
+        world,
+        "knox",
+        Plan(
+            steps=[
+                Take(thing_id="almanac"),
+                Drop(thing_id="almanac", hidden=True),
+                Search(),
+                Take(thing_id="brass_key"),
+            ]
+        ),
+    )
+    for _ in range(4):
+        world = tick(world)
+    assert world.placements["almanac"] == InRoom(room_id="library", hidden=True)
+    assert world.placements["brass_key"] == HeldBy(player_id="knox")
+    world = _walk(world, "knox", "gallery")
+    world = _walk(world, "june", "library")
+
+    here = visible_things(world, "june", "library")
+    assert "almanac" not in here, "hidden after June's search"
+    assert "brass_key" not in here, "taken since June found it"
+    assert_no_leak(build_observation(world, "june"), world)
+
+    world = submit_plan(world, "june", Plan(steps=[Search()]))
+    world = tick(world)
+    assert "almanac" in visible_things(world, "june", "library")
+    assert replay_searches(world.ledger) == world.searched
 
 
 # ------------------------------------------------------------------ whispers
@@ -1080,6 +1164,8 @@ class CastleMachine(RuleBasedStateMachine):
     def _check(self) -> None:
         world = self._now()
         _assert_custody(world)
+        assert replay_searches(world.ledger) == world.searched
+        assert replay_inspections(world.ledger) == world.inspected
         for player_id in world.seats:
             assert_no_leak(build_observation(world, player_id), world)
         assert world.ledger[: len(self.seen)] == self.seen, "ledger was rewritten"
@@ -1190,6 +1276,16 @@ class CastleMachine(RuleBasedStateMachine):
     @rule(data=st.data())
     def search(self, data: st.DataObject) -> None:
         self._act(data.draw(st.sampled_from(self._seated())), Search())
+
+    @precondition(lambda self: self.world is not None and bool(self._seated()))
+    @rule(data=st.data())
+    def remember(self, data: st.DataObject) -> None:
+        """Keep a record held, or try to keep one never held."""
+        pid = data.draw(st.sampled_from(self._seated()), label="who")
+        seq = data.draw(
+            st.integers(min_value=1, max_value=len(self._now().ledger)), label="keep"
+        )
+        self._act(pid, Remember(seq=seq), Wait())
 
     @precondition(lambda self: self.world is not None and bool(self._takers()))
     @rule(data=st.data())

@@ -34,9 +34,8 @@ from badactors.castle.contracts import (
 from badactors.castle.decisions import Poison
 from badactors.castle.night import poison_act, poison_turn, seat_dinner
 from badactors.castle.rules import GameConfig
-from badactors.castle.world import advance_phase
 from castle_scenes import CAST, CASTLE
-from castle_tools import act, give, last, paper, put, scene
+from castle_tools import act, give, last, on_mission, paper, put, scene
 
 SAMPLES = 600
 
@@ -69,7 +68,7 @@ def _tamper(seed: int) -> bool:
 
 
 def _sabotage(seed: int) -> bool:
-    world = advance_phase(scene(seed))
+    world = on_mission(scene(seed))
     world = act(world, "knox", Sabotage(thing_id="clock_case"))
     return last(world, "sabotage").payload["fumble"] == "true"
 

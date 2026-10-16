@@ -20,9 +20,10 @@ from math import sqrt
 import pytest
 
 from badactors.castle.contracts import Offstage
+from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import shield_ids
 from badactors.castle.kit import SPECS
-from badactors.castle.ledger import replay_notebook, replay_placements
+from badactors.castle.ledger import replay_asides, replay_notebook, replay_placements
 from badactors.castle.play import GameRecord, record, replay
 from badactors.castle.sweep import Swept, play_seed, usage
 from castle_scenes import CASTLE
@@ -146,6 +147,7 @@ def test_every_notebook_is_the_ledgers_own_index(sweep: list[Swept]) -> None:
     for swept in sweep:
         world = swept.game.world
         assert replay_notebook(world.ledger) == world.notebook, swept.seed
+        assert replay_asides(world.ledger) == world.asides, swept.seed
 
 
 def test_every_tool_is_used_somewhere_in_the_sweep(sweep: list[Swept]) -> None:
@@ -195,6 +197,10 @@ def test_the_dead_take_no_actions(sweep: list[Swept]) -> None:
             if entry.type in ("death", "banished")
         }
         for entry in ledger:
+            # An exit interview is given from outside the game, to the
+            # audience alone: the one thing the departed still do.
+            if entry.type == "exit_interview":
+                continue
             if entry.actor_id in gone and entry.seq > gone[entry.actor_id]:
                 raise AssertionError(
                     f"seed {swept.seed}: {entry.actor_id} acted after leaving the game "
@@ -208,7 +214,8 @@ def test_the_dead_take_no_actions(sweep: list[Swept]) -> None:
 def test_every_observation_passed_the_leak_checker(sweep: list[Swept]) -> None:
     total = 0
     for swept in sweep:
-        assert swept.played.observations == len(swept.played.log), swept.seed
+        played = [d for d in swept.played.log if d.kind not in AUDIENCE_ONLY]
+        assert swept.played.observations == len(played), swept.seed
         assert not [e for e in swept.game.world.ledger if e.type == "turn_failed"]
         total += swept.played.observations
     assert total > 50 * len(sweep)

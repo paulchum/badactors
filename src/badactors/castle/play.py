@@ -2,10 +2,12 @@
 
 This is the only place a player is asked anything. Every question goes through
 :meth:`Referee.ask`, which builds the player's scoped observation, checks it for
-leaks, and logs the answer so the game can be replayed without the players. A
-player that fails to answer — a transport error, a refusal, output that does not
-parse or does not answer the question — gets a visible ``turn_failed`` entry: the
-character hesitates and does nothing, and it is never dressed up as a choice.
+leaks, and logs the answer so the game can be replayed without the players. An
+answer that does not parse, does not answer the question, or names a model is
+refused privately and the question put once more, with the reason. A player that
+still fails to answer — a transport error, a refusal, a second bad answer — gets
+a visible ``turn_failed`` entry: the character hesitates and does nothing, and it
+is never dressed up as a choice.
 
 Phases run on the world's clock. Missions and free time open with a plan from
 everyone and re-prompt on interruption, exactly as the phase-1 director does;
@@ -21,10 +23,11 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Self
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, model_validator
 
+from badactors.castle.anonymity import Aliases, aliases, check_words
 from badactors.castle.cast import Cast
 from badactors.castle.contracts import (
     CastleMap,
@@ -35,7 +38,10 @@ from badactors.castle.contracts import (
     WorldState,
 )
 from badactors.castle.decisions import (
+    AUDIENCE_ONLY,
+    PRIVATE_REQUESTS,
     Decision,
+    ExitAnswer,
     IllegalDecision,
     PlanChoice,
     Request,
@@ -51,6 +57,7 @@ from badactors.castle.game import (
     new_game,
     night_schedule,
 )
+from badactors.castle.interview import exit_observation, exit_request, record_exit
 from badactors.castle.ledger import append, append_perceived
 from badactors.castle.missions import close_mission, open_mission
 from badactors.castle.night import (
@@ -68,7 +75,12 @@ from badactors.castle.night import (
     seat_dinner,
     settle_sleepers,
 )
-from badactors.castle.observe import GameObservation, assert_no_game_leak, observe_game
+from badactors.castle.observe import (
+    GameObservation,
+    assert_no_game_leak,
+    observe_game,
+    observed,
+)
 from badactors.castle.perceive import perceive
 from badactors.castle.rules import GameConfig, Role
 from badactors.castle.table import open_table, table_act, table_advance, table_turn
@@ -81,9 +93,30 @@ from badactors.castle.world import (
 
 
 class Player(Protocol):
-    """Anything that answers a decision from what one player may know."""
+    """Anything that answers a decision from what one player may know.
+
+    A player says what it is in an ``agent`` attribute — ``bot:<name>`` for a
+    reference bot, ``model:<id>`` for a model — which the record keeps beside
+    every answer. One that does not say is recorded as ``unknown``, never as a
+    model. A player may also give an exit interview, through an ``interview``
+    method taking an :class:`~badactors.castle.interview.ExitObservation`; one
+    that cannot is recorded as giving none.
+    """
 
     def __call__(self, observation: GameObservation) -> Decision: ...
+
+
+UNKNOWN_AGENT = "unknown"
+
+
+def agent_of(player: object) -> str:
+    """Who or what plays a seat, as the record keeps it."""
+    agent = getattr(player, "agent", None)
+    return agent if isinstance(agent, str) and agent else UNKNOWN_AGENT
+
+
+def is_model(agent: str) -> bool:
+    return agent.startswith("model:") and len(agent) > len("model:")
 
 
 class TurnFailure(Exception):
@@ -91,14 +124,21 @@ class TurnFailure(Exception):
 
 
 class LoggedDecision(Contract):
-    """One question and its answer, in the order they were asked."""
+    """One question and its answer, in the order they were asked. A refused
+    answer is logged as it came, with why it was refused."""
 
     player_id: str
+    agent: str = Field(min_length=1)
+    """Who answered: ``bot:<name>``, ``model:<id>`` or ``unknown``."""
     kind: RequestKind
     day: int
     tick: int
     decision: Decision | None = None
     error: str | None = None
+    refused: bool = False
+    seen: list[int] = Field(default_factory=list)
+    """The ledger entries whose content was in front of the player when they
+    answered, by :func:`~badactors.castle.observe.observed`."""
 
 
 type Turn = Callable[[GameState], tuple[str, Request] | None]
@@ -117,11 +157,42 @@ class Referee:
     models: tuple[str, ...] = ()
     log: list[LoggedDecision] = field(default_factory=list)
     observations: int = 0
+    aliases: Aliases = field(init=False)
+    seen: list[int] = field(default_factory=list, init=False, repr=False)
+    """What the observation behind the answer being taken showed."""
+    interviewed: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        world = self.game.world
+        self.aliases = aliases(
+            self.models,
+            exempt=[
+                name
+                for player in world.players.values()
+                for name in (player.id, player.name)
+            ],
+        )
 
     def run(self) -> GameState:
         while self.game.status == "playing":
             self.play_phase()
+        self.exit_interviews()
         return self.game
+
+    def exit_interviews(self) -> None:
+        """Interview everyone who has left the game since the last time, and
+        everyone once it is over: once each, in seat order."""
+        game = self.game
+        over = game.status != "playing"
+        for player_id in game.world.seats:
+            if player_id in self.interviewed:
+                continue
+            if game.world.players[player_id].alive and not over:
+                continue
+            self.interviewed.add(player_id)
+            decision, _ = self.ask(player_id, exit_request(game, player_id))
+            answer = decision if isinstance(decision, ExitAnswer) else None
+            record_exit(game, player_id, answer)
 
     # ------------------------------------------------------------------ asking
 
@@ -129,42 +200,89 @@ class Referee:
         self, player_id: str, request: Request
     ) -> tuple[Decision | None, int | None]:
         """Put one decision to one player. Returns the decision, or ``None`` and
-        the ledger entry recording the failure."""
-        game = self.game
-        world = game.world
-        try:
-            decision = self.decide(player_id, request)
-            check_decision(request, decision)
-        except (TurnFailure, IllegalDecision, ValidationError) as exc:
-            error = (str(exc) or type(exc).__name__)[:200]
-            self.log.append(
-                LoggedDecision(
-                    player_id=player_id,
-                    kind=request.kind,
-                    day=world.day,
-                    tick=world.tick,
-                    error=error,
-                )
-            )
-            return None, turn_failed(game, player_id, request, error)
+        the ledger entry recording the failure.
+
+        An answer that is invalid, illegal, or names a model is refused, which
+        only its player learns, and the question is put once more with the
+        reason. A second bad answer, or a player that gives up, fails the turn.
+        """
+        asked = request
+        for attempt in (1, 2):
+            decision: Decision | None = None
+            self.seen = []
+            try:
+                decision = self.decide(player_id, asked)
+                check_decision(request, decision)
+                if request.kind not in AUDIENCE_ONLY:
+                    check_words(decision, self.aliases)
+            except TurnFailure as exc:
+                error = _error(exc)
+                self._log(player_id, request, error=error)
+                return None, self._failed(player_id, request, error)
+            except (IllegalDecision, ValidationError) as exc:
+                error = _error(exc)
+                self._log(player_id, request, decision, error=error, refused=True)
+                if attempt == 2:
+                    return None, self._failed(player_id, request, error)
+                refused(self.game, player_id, request, error)
+                asked = request.model_copy(update={"refusal": error})
+                continue
+            self._log(player_id, request, decision)
+            return decision, None
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _failed(self, player_id: str, request: Request, error: str) -> int | None:
+        """A failed turn, for a decision in the game. A question only the
+        audience hears is no turn in the game, and its failure is no failed
+        turn: the record of it says the answer never came."""
+        if request.kind in AUDIENCE_ONLY:
+            return None
+        return turn_failed(self.game, player_id, request, error)
+
+    def _log(
+        self,
+        player_id: str,
+        request: Request,
+        decision: Decision | None = None,
+        *,
+        error: str | None = None,
+        refused: bool = False,
+    ) -> None:
+        world = self.game.world
         self.log.append(
             LoggedDecision(
                 player_id=player_id,
+                agent=self.agent(player_id),
                 kind=request.kind,
                 day=world.day,
                 tick=world.tick,
                 decision=decision,
+                error=error,
+                refused=refused,
+                seen=list(self.seen),
             )
         )
-        return decision, None
+
+    def agent(self, player_id: str) -> str:
+        return agent_of(self.players.get(player_id))
 
     def decide(self, player_id: str, request: Request) -> Decision:
         """Show one player what they may know, checked for leaks, and take their
-        answer."""
+        answer. A player out of the game is shown their exit interview."""
+        if request.kind in AUDIENCE_ONLY:
+            interviewed, self.seen = exit_observation(self.game, player_id, request)
+            interview = getattr(self.players.get(player_id), "interview", None)
+            if not callable(interview):
+                raise TurnFailure("This player gives no exit interview.")
+            answer = interview(interviewed)
+            if not isinstance(answer, ExitAnswer):
+                raise IllegalDecision("An exit interview needs an exit answer.")
+            return answer
         observation = observe_game(self.game, player_id, request)
         if self.check_leaks:
             assert_no_game_leak(observation, self.game, models=self.models)
         self.observations += 1
+        self.seen = observed(observation)
         return self.players[player_id](observation)
 
     def ask_plan(self, world: WorldState, player_id: str) -> WorldState:
@@ -199,6 +317,7 @@ class Referee:
             elif not phase_complete(game.world):
                 game.world = prompt_interrupted(game.world, self.ask_plan, before)
         self.close_phase(phase)
+        self.exit_interviews()
         if game.status != "playing":
             return
         game.world = advance_phase(game.world)
@@ -271,20 +390,54 @@ def plan_request(game: GameState) -> Request:
     return Request(kind="plan", prompt=prompt)
 
 
+def _error(exc: Exception) -> str:
+    return (str(exc) or type(exc).__name__)[:200]
+
+
+def refused(game: GameState, player_id: str, request: Request, error: str) -> int:
+    """An answer was refused, and the question will be put again. Only the
+    player who gave it is told: a refusal says nothing to anyone else."""
+    world = game.world
+    room_id = world.players[player_id].room_id
+    return append(
+        world,
+        type="refused",
+        text=f"{name(game, player_id)}'s answer ({request.kind}) was refused: {error}",
+        actor_id=player_id,
+        room_id=room_id,
+        payload={"request": request.kind, "reason": error},
+        witnesses=[
+            WitnessRecord(
+                player_id=player_id,
+                sense="own",
+                confidence="clear",
+                channel="direct",
+                text=f"My answer was refused: {error}",
+                recorded_actor=player_id,
+                from_room=room_id,
+            )
+        ],
+    ).seq
+
+
 def turn_failed(game: GameState, player_id: str, request: Request, error: str) -> int:
     """The character hesitates and does nothing, and everyone present sees a
-    failure, not a choice."""
+    failure, not a choice. A failure on a decision nobody else knows was put —
+    a traitor's dose, nomination or offer, or the answer to an offer — is
+    recorded for its player alone, or the hesitation would give the question
+    away."""
     world = game.world
     player = world.players[player_id]
     room_id = player.room_id
     text = f"{name(game, player_id)} failed to decide ({request.kind}) and did nothing."
     payload = {"request": request.kind, "error": error}
-    if room_id is None:
+    if room_id is None or request.kind in PRIVATE_REQUESTS:
         return append(
             world,
             type="turn_failed",
             text=text,
             actor_id=player_id,
+            room_id=room_id,
             payload=payload,
             witnesses=[
                 WitnessRecord(
@@ -294,6 +447,7 @@ def turn_failed(game: GameState, player_id: str, request: Request, error: str) -
                     channel="direct",
                     text="I failed to decide, and did nothing.",
                     recorded_actor=player_id,
+                    from_room=room_id,
                 )
             ],
         ).seq
@@ -325,6 +479,8 @@ class Played:
     game: GameState
     log: list[LoggedDecision]
     observations: int
+    agents: dict[str, str] = field(default_factory=dict)
+    """Who played each seat, by :func:`agent_of`."""
 
 
 def run_game(
@@ -342,21 +498,59 @@ def run_game(
         models=tuple(models),
     )
     finished = referee.run()
-    return Played(game=finished, log=referee.log, observations=referee.observations)
+    return Played(
+        game=finished,
+        log=referee.log,
+        observations=referee.observations,
+        agents={pid: referee.agent(pid) for pid in finished.world.seats},
+    )
 
 
 class GameRecord(Contract):
-    """Everything needed to replay a game exactly, and the ledger it produced."""
+    """Everything needed to replay a game exactly, and the ledger it produced.
 
-    schema_version: Literal[1] = 1
+    ``cast`` is the casting as given, model ids included; who actually played
+    each seat is ``agents``. A seat played by a reference bot says so, and is
+    never to be read as its cast model's result.
+    """
+
+    schema_version: Literal[2] = 2
     seed: int
     world_id: str
     castle: CastleMap
     cast: Cast
+    agents: dict[str, str]
     config: GameConfig
     decisions: list[LoggedDecision]
     ledger: list[LedgerEntry]
     winner: Role | None
+
+    @model_validator(mode="after")
+    def every_seat_says_who_played_it(self) -> Self:
+        cast = {member.id: member.model for member in self.cast.players}
+        if set(self.agents) != set(cast):
+            raise ValueError("Every seat in the cast needs its agent, and only those.")
+        for seat, agent in self.agents.items():
+            if is_model(agent) and agent != f"model:{cast[seat]}":
+                raise ValueError(
+                    f"Seat {seat!r} was played by {agent!r}, not the cast's model."
+                )
+        for decision in self.decisions:
+            if decision.agent != self.agents.get(decision.player_id):
+                raise ValueError(
+                    f"A decision by {decision.player_id!r} names another agent."
+                )
+            if any(not 1 <= seq <= len(self.ledger) for seq in decision.seen):
+                raise ValueError(
+                    f"A decision by {decision.player_id!r} saw an entry the "
+                    "ledger does not hold."
+                )
+        return self
+
+    @property
+    def reference_bots(self) -> bool:
+        """Whether no seat was played by a model."""
+        return not any(is_model(agent) for agent in self.agents.values())
 
 
 def start_game(
@@ -387,6 +581,10 @@ def record(
         world_id=game.world.id,
         castle=castle,
         cast=cast,
+        agents={
+            member.id: played.agents.get(member.id, UNKNOWN_AGENT)
+            for member in cast.players
+        },
         config=game.config,
         decisions=played.log,
         ledger=game.world.ledger,
@@ -417,9 +615,12 @@ class ReplayReferee(Referee):
                 f"has {(logged.player_id, logged.kind, logged.tick)}."
             )
         self.cursor += 1
-        if logged.decision is None:
-            raise TurnFailure(logged.error or "failed")
-        return logged.decision
+        self.seen = list(logged.seen)
+        if logged.decision is not None:
+            return logged.decision
+        if logged.refused:
+            raise IllegalDecision(logged.error or "refused")
+        raise TurnFailure(logged.error or "failed")
 
 
 class ReplayDiverged(AssertionError):
@@ -439,6 +640,7 @@ def replay(stored: GameRecord) -> GameState:
         fork_game(game),
         {},
         check_leaks=False,
+        models=tuple(sorted(set(stored.cast.models().values()))),
         decisions=stored.decisions,
     )
     finished = referee.run()
@@ -460,6 +662,7 @@ def load_record(path: str | Path) -> GameRecord:
 
 
 __all__ = [
+    "UNKNOWN_AGENT",
     "GameRecord",
     "LoggedDecision",
     "Played",
@@ -468,9 +671,12 @@ __all__ = [
     "ReplayDiverged",
     "ReplayReferee",
     "TurnFailure",
+    "agent_of",
+    "is_model",
     "load_record",
     "plan_request",
     "record",
+    "refused",
     "replay",
     "run_game",
     "save_record",

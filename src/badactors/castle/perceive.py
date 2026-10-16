@@ -38,6 +38,7 @@ from badactors.castle.contracts import (
     InContainer,
     InRoom,
     Lighting,
+    Placement,
     Presence,
     RngDraw,
     Thing,
@@ -345,26 +346,54 @@ def _count_word(speakers: int) -> str:
 
 
 def visible_things(state: WorldState, viewer_id: str, room_id: str) -> list[str]:
-    """Objects on show in ``room_id``, plus what this viewer found by searching it.
+    """Objects on show in ``room_id``, plus what this viewer's latest search of it
+    found that is still where they found it.
 
-    A search turns up both the objects hidden in a room and the contents of the
-    containers standing in it. Someone who has not searched sees neither, so a
-    stowed object is as private as a hidden one until a search.
+    A search turns up the objects hidden in a room and the contents of the
+    containers standing in it, as they were at that moment. It is a look, not a
+    window: anything hidden or stowed there afterwards stays out of sight until
+    the next search, and something found and since moved is simply not where it
+    was. Someone who has not searched sees neither, so a stowed object is as
+    private as a hidden one.
     """
-    searched_here = room_id in state.searched.get(viewer_id, [])
+    finds = search_finds(state, viewer_id, room_id)
     out: list[str] = []
     for thing in state.map.things:
         placement = state.placements.get(thing.id)
-        if isinstance(placement, InRoom):
-            if placement.room_id == room_id and (searched_here or not placement.hidden):
+        if isinstance(placement, InRoom) and not placement.hidden:
+            if placement.room_id == room_id:
                 out.append(thing.id)
-        elif (
-            isinstance(placement, InContainer)
-            and searched_here
-            and room_of(state, thing.id) == room_id
-        ):
+        elif thing.id in finds and finds[thing.id] == spot(placement):
             out.append(thing.id)
     return sorted(out)
+
+
+def spot(placement: Placement | None) -> str | None:
+    """Where a search turns something up: hidden loose in a room, or inside a
+    container. ``None`` for anything in plain sight or on a person."""
+    if isinstance(placement, InRoom) and placement.hidden:
+        return f"hidden:{placement.room_id}"
+    if isinstance(placement, InContainer):
+        return f"in:{placement.thing_id}"
+    return None
+
+
+def search_finds(state: WorldState, viewer_id: str, room_id: str) -> dict[str, str]:
+    """What this viewer's latest search of ``room_id`` turned up, and the spot
+    each was found in, as the search's entry froze it."""
+    seq = state.searched.get(viewer_id, {}).get(room_id)
+    if seq is None:
+        return {}
+    return unpack_finds(state.ledger[seq - 1].payload.get("finds", ""))
+
+
+def pack_finds(finds: dict[str, str]) -> str:
+    """A search's finds as its entry's payload keeps them."""
+    return ",".join(f"{thing_id}={where}" for thing_id, where in sorted(finds.items()))
+
+
+def unpack_finds(packed: str) -> dict[str, str]:
+    return dict(pair.split("=", 1) for pair in packed.split(",") if pair)
 
 
 def room_of(state: WorldState, thing_id: str) -> str | None:
@@ -410,11 +439,15 @@ __all__ = [
     "describe_room",
     "garments",
     "occupants",
+    "pack_finds",
     "perceive",
     "presence",
     "room_of",
+    "search_finds",
     "seen_as",
+    "spot",
     "unnamed",
+    "unpack_finds",
     "visible_things",
     "worn_garment",
 ]

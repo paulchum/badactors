@@ -12,32 +12,40 @@ from pathlib import Path
 
 import pytest
 
+from badactors.castle import scope as scope_module
 from badactors.castle.contracts import (
     AtRoom,
     CustodyLink,
+    Drop,
+    InRoom,
     Inspect,
     LedgerEntry,
     Move,
     ObservationItem,
     Plan,
+    Remember,
     ScopedObservation,
     Search,
     Take,
     Talk,
     ThingView,
     Wait,
+    Whisper,
     WitnessRecord,
     WorldState,
 )
 from badactors.castle.director import RoutineDecider, run_phase
-from badactors.castle.ledger import custody_chain
+from badactors.castle.ledger import custody_chain, replay_notebook
 from badactors.castle.mapfile import build_world, load_cast, load_map, load_world
+from badactors.castle.perceive import room_of
 from badactors.castle.scope import (
     LeakageError,
     assert_no_leak,
     build_observation,
+    item_for,
 )
 from badactors.castle.world import start, submit_plan, tick
+from castle_tools import act, last, put, scene
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "configs/castle/map.json"
@@ -409,6 +417,142 @@ def test_planted_leak_custody_without_an_inspection() -> None:
         assert_no_leak(leaked, world)
 
 
+# ------------------------------------- a search or an inspection read as a window
+
+
+def _hidden_after_a_search() -> WorldState:
+    """June searches the Library. While she is out, Knox hides the almanac
+    there and searches it himself. June comes back."""
+    world = scene()
+    put(world, "june", "library")
+    world = act(world, "june", Search())
+    put(world, "june", "gallery")
+    put(world, "knox", "library")
+    world = act(
+        world,
+        "knox",
+        Take(thing_id="almanac"),
+        Drop(thing_id="almanac", hidden=True),
+        Search(),
+    )
+    put(world, "knox", "gallery")
+    put(world, "june", "library")
+    assert_no_leak(build_observation(world, "june"), world)
+    return world
+
+
+def _live_window(state: WorldState, viewer_id: str, room_id: str) -> list[str]:
+    """The bug: a search that, once made, shows the room as it is now."""
+    searched = room_id in state.searched.get(viewer_id, {})
+    return sorted(
+        thing_id
+        for thing_id, placement in state.placements.items()
+        if room_of(state, thing_id) == room_id
+        and (searched or (isinstance(placement, InRoom) and not placement.hidden))
+    )
+
+
+def test_planted_leak_a_search_index_pointing_at_someone_elses_search() -> None:
+    world = _hidden_after_a_search()
+    world.searched["june"]["library"] = last(world, "search").seq
+    observation = build_observation(world, "june")
+    assert "almanac" in {view.id for view in observation.visible_objects}
+    with pytest.raises(LeakageError, match="not visible from where"):
+        assert_no_leak(observation, world)
+
+
+def test_a_world_whose_search_is_a_live_window_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _hidden_after_a_search()
+    monkeypatch.setattr(scope_module, "visible_things", _live_window)
+    observation = build_observation(world, "june")
+    assert "almanac" in {view.id for view in observation.visible_objects}
+    with pytest.raises(LeakageError, match="not visible from where"):
+        assert_no_leak(observation, world)
+
+
+def _moved_after_an_inspection() -> WorldState:
+    """Mara inspects the decanter. While she is out, Sol carries it round the
+    room and inspects it himself. Mara comes back."""
+    world = scene()
+    put(world, "mara", "dining_room")
+    world = act(world, "mara", Inspect(thing_id="silver_decanter"))
+    put(world, "mara", "kitchen")
+    put(world, "sol", "dining_room")
+    world = act(
+        world,
+        "sol",
+        Take(thing_id="silver_decanter"),
+        Drop(thing_id="silver_decanter"),
+        Inspect(thing_id="silver_decanter"),
+    )
+    put(world, "sol", "kitchen")
+    put(world, "mara", "dining_room")
+    assert_no_leak(build_observation(world, "mara"), world)
+    return world
+
+
+def _decanter_chain(observation: ScopedObservation) -> list[CustodyLink]:
+    view = next(v for v in observation.visible_objects if v.id == "silver_decanter")
+    assert view.custody is not None
+    return view.custody
+
+
+def test_planted_leak_an_inspection_index_pointing_at_someone_elses() -> None:
+    world = _moved_after_an_inspection()
+    world.inspected["mara"]["silver_decanter"] = last(world, "inspect").seq
+    observation = build_observation(world, "mara")
+    assert any("Sol" in link.text for link in _decanter_chain(observation))
+    with pytest.raises(LeakageError, match="after this viewer inspected it"):
+        assert_no_leak(observation, world)
+
+
+def test_a_world_whose_inspection_is_a_live_window_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _moved_after_an_inspection()
+
+    def live(ledger: list[LedgerEntry], seq: int) -> list[CustodyLink]:
+        thing_id = ledger[seq - 1].payload["thing_id"]
+        return custody_chain(ledger, thing_id, limit=world.balance.tools.inspect.links)
+
+    monkeypatch.setattr(scope_module, "traced_links", live)
+    observation = build_observation(world, "mara")
+    assert any("Sol" in link.text for link in _decanter_chain(observation))
+    with pytest.raises(LeakageError, match="after this viewer inspected it"):
+        assert_no_leak(observation, world)
+
+
+def test_planted_leak_a_chain_older_than_the_inspection_traced() -> None:
+    world = scene()
+    put(world, "mara", "dining_room")
+    for _ in range(3):
+        world = act(
+            world,
+            "mara",
+            Take(thing_id="silver_decanter"),
+            Drop(thing_id="silver_decanter"),
+        )
+    world = act(world, "mara", Inspect(thing_id="silver_decanter"))
+    observation = build_observation(world, "mara")
+    traced = _decanter_chain(observation)
+    older = custody_chain(world.ledger, "silver_decanter")[: -len(traced)]
+    assert older, "the decanter moved more often than an inspection traces"
+    leaked = observation.model_copy(
+        update={
+            "visible_objects": [
+                view.model_copy(update={"custody": [*older, *traced]})
+                if view.id == "silver_decanter"
+                else view
+                for view in observation.visible_objects
+            ]
+        }
+    )
+    with pytest.raises(LeakageError, match="never moved it within"):
+        assert_no_leak(leaked, world)
+
+
 def test_planted_leak_invented_custody_link() -> None:
     world = _with_decanter(_world())
     world = submit_plan(
@@ -612,3 +756,99 @@ def test_a_search_is_remembered_only_by_the_searcher() -> None:
     world = tick(world)
     assert build_observation(world, "mara").searched_here is True
     assert build_observation(world, "sol").searched_here is False
+
+
+# ------------------------------------------------------- keeping a record
+
+
+def _overheard_sol() -> tuple[WorldState, LedgerEntry]:
+    """Mara hears Sol say something in the Great Hall: a record she holds but
+    did not note."""
+    world = scene()
+    world = act(world, "sol", Talk(text="I was in the cellar all afternoon."))
+    said = world.ledger[-1]
+    record = said.record_for("mara")
+    assert record is not None and not record.noted
+    return world, said
+
+
+def test_a_note_keeps_a_record_in_the_notebook_and_takes_no_time() -> None:
+    world, said = _overheard_sol()
+    world = submit_plan(
+        world,
+        "mara",
+        Plan(steps=[Remember(seq=said.seq), Move(room_id="dining_room")]),
+    )
+    world = tick(world)
+    assert world.players["mara"].room_id == "dining_room", "the note took no time"
+    note = next(e for e in world.ledger if e.type == "remember")
+    assert [record.player_id for record in note.witnesses] == ["mara"]
+    observation = build_observation(world, "mara")
+    assert said.seq in {item.ledger_seq for item in observation.evidence}
+    assert note.seq not in {item.ledger_seq for item in observation.evidence}
+    assert_no_leak(observation, world)
+    assert replay_notebook(world.ledger) == world.notebook
+
+
+def test_a_note_of_a_record_never_held_is_refused_privately() -> None:
+    world = scene()
+    put(world, "sol", "cellar")
+    world = act(world, "sol", Wait(reason="alone"))
+    unheard = world.ledger[-1]
+    assert unheard.type == "wait" and unheard.record_for("mara") is None
+    world = act(world, "mara", Remember(seq=unheard.seq), Wait())
+    refused = next(
+        e for e in world.ledger if e.type == "blocked" and e.actor_id == "mara"
+    )
+    assert [record.player_id for record in refused.witnesses] == ["mara"]
+    assert not [e for e in world.ledger if e.type == "remember"]
+    assert unheard.seq not in {
+        item.ledger_seq for item in build_observation(world, "mara").evidence
+    }
+
+
+def test_a_kept_record_stays_within_the_notebook_limit() -> None:
+    world, said = _overheard_sol()
+    world.balance = world.balance.model_copy(update={"notebook_limit": 2})
+    world = act(world, "mara", Remember(seq=said.seq), Wait())
+    for line in ("One.", "Two.", "Three."):
+        world = act(world, "sol", Whisper(to="mara", text=line))
+    shown = [item.ledger_seq for item in build_observation(world, "mara").evidence]
+    assert said.seq not in shown, "three noted whispers pushed it out"
+    world = act(world, "mara", Remember(seq=said.seq), Wait())
+    shown = [item.ledger_seq for item in build_observation(world, "mara").evidence]
+    assert len(shown) == 2 and shown[-1] == said.seq
+    assert_no_leak(build_observation(world, "mara"), world)
+
+
+def test_planted_leak_a_notebook_item_neither_noted_nor_kept() -> None:
+    world, said = _overheard_sol()
+    observation = build_observation(world, "mara")
+    record = said.record_for("mara")
+    assert record is not None
+    leaked = observation.model_copy(
+        update={"evidence": [*observation.evidence, item_for(said, record)]}
+    )
+    with pytest.raises(LeakageError, match="never noted or kept"):
+        assert_no_leak(leaked, world)
+
+
+def test_planted_leak_someone_elses_note_does_not_fill_your_notebook() -> None:
+    world, said = _overheard_sol()
+    world = act(world, "sol", Remember(seq=said.seq), Wait())
+    note = next(e for e in world.ledger if e.type == "remember")
+    own = note.record_for("sol")
+    assert own is not None
+    planted = own.model_copy(update={"player_id": "mara"})
+    world.ledger[note.seq - 1] = note.model_copy(
+        update={"witnesses": [*note.witnesses, planted]}
+    )
+    world.notebook.setdefault("mara", []).append(note.seq)
+    observation = build_observation(world, "mara")
+    record = said.record_for("mara")
+    assert record is not None
+    leaked = observation.model_copy(
+        update={"evidence": [*observation.evidence, item_for(said, record)]}
+    )
+    with pytest.raises(LeakageError, match="never noted or kept"):
+        assert_no_leak(leaked, world)

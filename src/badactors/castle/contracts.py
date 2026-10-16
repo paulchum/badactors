@@ -648,8 +648,16 @@ class Wear(Contract):
     thing_id: str
 
 
+class Remember(Contract):
+    """Keep one of your own records in your notebook: ``seq`` is the ledger
+    entry it came from. Making a note takes no time, and nobody sees it."""
+
+    kind: Literal["remember"] = "remember"
+    seq: int = Field(ge=1)
+
+
 type Step = Annotated[
-    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait | Wear,
+    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait | Wear | Remember,
     Field(discriminator="kind"),
 ]
 """One step of a plan. A tool step is itself one of many shapes, told apart by
@@ -807,8 +815,14 @@ class WorldState(Contract):
     placements: dict[str, Placement] = Field(default_factory=dict)
     ledger: list[LedgerEntry] = Field(default_factory=list)
     ledger_seq: int = Field(default=0, ge=0)
-    inspected: dict[str, list[str]] = Field(default_factory=dict)
-    searched: dict[str, list[str]] = Field(default_factory=dict)
+    inspected: dict[str, dict[str, int]] = Field(default_factory=dict)
+    """For each player, the ledger entry of their latest inspection of each
+    object. The custody links they traced are frozen in that entry, so what an
+    object has been through since is not theirs to know."""
+    searched: dict[str, dict[str, int]] = Field(default_factory=dict)
+    """For each player, the ledger entry of their latest search of each room. An
+    index over the ledger, kept as it grows: what the search found is frozen in
+    that entry, so a search is a look at one moment, never a window on the room."""
     replans: dict[str, int] = Field(default_factory=dict)
     kits: dict[str, Kit] = Field(default_factory=dict)
     """Who carries the traitor kit. Anyone not listed has the household's."""
@@ -818,6 +832,10 @@ class WorldState(Contract):
     notebook: dict[str, list[int]] = Field(default_factory=dict)
     """For each player, the entries holding a record they noted. An index over
     the ledger, kept as it grows, and always equal to a replay of it."""
+    asides: dict[str, list[int]] = Field(default_factory=dict)
+    """For each player, the entries carrying a private line of theirs: a diary
+    line, or a reason for silence or for passing. An index over the ledger,
+    like the notebook."""
     balance: Balance = Field(default_factory=default_balance)
 
     @model_validator(mode="after")
@@ -861,6 +879,9 @@ class WorldState(Contract):
             ("kit", set(self.kits)),
             ("disguise", set(self.disguises) | set(self.disguises.values())),
             ("notebook", set(self.notebook)),
+            ("aside", set(self.asides)),
+            ("search", set(self.searched)),
+            ("inspection", set(self.inspected)),
         ):
             if not keys <= set(self.players):
                 raise ValueError(f"A {label} names someone who is not in this world.")

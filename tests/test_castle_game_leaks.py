@@ -31,6 +31,7 @@ from badactors.castle.decisions import (
     Nominate,
     Refuse,
     Request,
+    StaySilent,
 )
 from badactors.castle.game import (
     GameState,
@@ -48,12 +49,14 @@ from badactors.castle.night import (
     settle_sleepers,
 )
 from badactors.castle.observe import (
+    Aside,
     GameObservation,
     OfferReceived,
     assert_no_game_leak,
     observe_game,
 )
 from badactors.castle.perceive import Perception, awake_in
+from badactors.castle.play import TurnFailure
 from badactors.castle.scope import LeakageError
 from badactors.castle.world import phase_complete, tick
 from castle_scenes import (
@@ -65,6 +68,7 @@ from castle_scenes import (
     recruiting,
     referee,
     rewrite_record,
+    run_until,
 )
 
 PLAN = Request(kind="plan", prompt="Plan.")
@@ -88,6 +92,101 @@ def _leaked(game: GameState, viewer: str, entry: LedgerEntry) -> GameObservation
 
 def _alive(world: WorldState) -> list[str]:
     return [pid for pid in world.seats if world.players[pid].alive]
+
+
+# ------------------------------------------------- another player's private line
+
+
+def _diarists() -> GameState:
+    """Day one's table, where Mara and Sol each stay silent with a reason and
+    a diary line."""
+
+    def musing(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "accuse" and observation.viewer_id in (
+            "mara",
+            "sol",
+        ):
+            who = observation.viewer_id
+            return StaySilent(reason=f"{who} is waiting.", diary=f"{who} privately.")
+        return None
+
+    return run_until(referee(seed=6, script=musing), 1, "dinner")
+
+
+def test_a_player_sees_their_own_private_lines_and_nobody_elses() -> None:
+    game = _diarists()
+    mine = observe_game(game, "mara", PLAN)
+    _check(mine, game)
+    texts = [(aside.kind, aside.text) for aside in mine.asides]
+    assert ("reason", "mara is waiting.") in texts
+    assert ("diary", "mara privately.") in texts
+    assert all("sol" not in text for _, text in texts)
+    assert len(mine.asides) <= game.config.diary_limit
+
+
+def test_planted_leak_another_players_diary_line() -> None:
+    game = _diarists()
+    honest = observe_game(game, "mara", PLAN)
+    theirs = next(e for e in of_type(game, "stay_silent") if e.actor_id == "sol")
+    planted = Aside(
+        seq=theirs.seq,
+        day=theirs.day,
+        phase=theirs.phase,
+        kind="diary",
+        text="sol privately.",
+    )
+    leaked = honest.model_copy(update={"asides": [*honest.asides, planted]})
+    with pytest.raises(LeakageError, match="another player's diary"):
+        _check(leaked, game)
+
+
+def test_planted_leak_a_private_line_misquoted_or_past_the_limit() -> None:
+    game = _diarists()
+    honest = observe_game(game, "mara", PLAN)
+    first = honest.asides[0]
+    misquoted = honest.model_copy(
+        update={"asides": [first.model_copy(update={"text": "something else"})]}
+    )
+    with pytest.raises(LeakageError, match="misquotes"):
+        _check(misquoted, game)
+    flood = honest.model_copy(
+        update={"asides": [first] * (game.config.diary_limit + 1)}
+    )
+    with pytest.raises(LeakageError, match="limit"):
+        _check(flood, game)
+
+
+# ---------------------------------------------- a failure on a private decision
+
+
+def test_planted_leak_a_failed_poison_turn_seen_at_dinner() -> None:
+    def flaky(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "poison":
+            raise TurnFailure("the provider returned nothing")
+        return None
+
+    ref = referee(seed=6, script=flaky)
+    game = run_until(ref, 1, "night")
+    failed = next(
+        entry
+        for entry in of_type(game, "turn_failed")
+        if entry.payload["request"] == "poison"
+    )
+    faithful = next(
+        pid
+        for pid in game.seating
+        if game.roles[pid] == "faithful" and pid in _alive(game.world)
+    )
+    planted = plant_record(
+        game,
+        failed,
+        faithful,
+        sense="saw",
+        text="Someone hesitated and did nothing.",
+        recorded_actor=None,
+    )
+    with pytest.raises(LeakageError, match="a failure on a private decision"):
+        _check(_leaked(game, faithful, planted), game)
 
 
 # ----------------------------------------------------- another player's role
@@ -480,7 +579,7 @@ def test_a_world_that_lets_the_room_hear_whispers_is_caught(
 # ----------------------------------------------------------------- model names
 
 
-def test_a_player_naming_a_model_aloud_is_caught() -> None:
+def test_a_player_naming_a_model_aloud_is_refused_and_never_heard() -> None:
     def blurt(observation: GameObservation, game: GameState) -> Decision | None:
         if observation.request.kind == "accuse" and observation.viewer_id == "mara":
             return Accuse(
@@ -489,5 +588,11 @@ def test_a_player_naming_a_model_aloud_is_caught() -> None:
             )
         return None
 
-    with pytest.raises(LeakageError, match="model name"):
-        referee(seed=6, script=blurt).run()
+    ref = referee(seed=6, script=blurt)
+    ref.run()
+    assert ref.game.status == "over"
+    assert MODELS[0].casefold() not in ref.game.world.model_dump_json().casefold()
+    failed = of_type(ref.game, "turn_failed")
+    assert failed
+    assert {(e.actor_id, e.payload["request"]) for e in failed} == {("mara", "accuse")}
+    assert len(of_type(ref.game, "refused")) == len(failed)

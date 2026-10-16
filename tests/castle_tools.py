@@ -27,8 +27,10 @@ from badactors.castle.contracts import (
 from badactors.castle.game import with_shields
 from badactors.castle.ledger import append, move_object, placement_payload
 from badactors.castle.mapfile import build_world
+from badactors.castle.perceive import room_of
 from badactors.castle.scope import assert_no_leak, build_observation
-from badactors.castle.world import start, submit_plan, tick
+from badactors.castle.steward import announce
+from badactors.castle.world import advance_phase, start, submit_plan, tick
 from castle_scenes import CAST, CASTLE
 
 
@@ -86,6 +88,19 @@ def give(world: WorldState, player_id: str, thing_id: str) -> None:
     move_object(world, thing_id, placement)
 
 
+def on_mission(world: WorldState, station: str = "clock_case") -> WorldState:
+    """Open the mission phase with today's station briefed, as the game does."""
+    world = advance_phase(world)
+    room = room_of(world, station)
+    announce(
+        world,
+        type="mission_briefing",
+        words=f"Today's mission is worked at the {station}.",
+        payload={"kind": "assemble", "room": room or "", "station": station},
+    )
+    return world
+
+
 def act(world: WorldState, player_id: str, *steps: Step) -> WorldState:
     """One player carries out these steps, a tick each."""
     world = submit_plan(world, player_id, Plan(goal="test", steps=list(steps)))
@@ -138,6 +153,7 @@ __all__ = [
     "act",
     "give",
     "last",
+    "on_mission",
     "own",
     "paper",
     "put",

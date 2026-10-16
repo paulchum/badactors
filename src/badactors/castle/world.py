@@ -46,6 +46,7 @@ from badactors.castle.contracts import (
     Move,
     Plan,
     PlayerState,
+    Remember,
     Step,
     Take,
     Talk,
@@ -60,6 +61,7 @@ from badactors.castle.kit import refusal
 from badactors.castle.ledger import (
     append,
     append_perceived,
+    entry_at,
     move_object,
     placement_payload,
     seed_placements,
@@ -73,7 +75,7 @@ from badactors.castle.perceive import (
     visible_things,
     worn_garment,
 )
-from badactors.castle.tools import use_tool
+from badactors.castle.tools import todays_station, use_tool
 
 _FORKED = frozenset(
     {
@@ -86,6 +88,7 @@ _FORKED = frozenset(
         "kits",
         "disguises",
         "notebook",
+        "asides",
     }
 )
 """WorldState fields a transition may change in place, so :func:`fork` copies
@@ -115,12 +118,13 @@ def fork(state: WorldState) -> WorldState:
             },
             "placements": dict(state.placements),
             "ledger": list(state.ledger),
-            "inspected": {key: list(value) for key, value in state.inspected.items()},
-            "searched": {key: list(value) for key, value in state.searched.items()},
+            "inspected": {key: dict(value) for key, value in state.inspected.items()},
+            "searched": {key: dict(value) for key, value in state.searched.items()},
             "replans": dict(state.replans),
             "kits": dict(state.kits),
             "disguises": dict(state.disguises),
             "notebook": {key: list(value) for key, value in state.notebook.items()},
+            "asides": {key: list(value) for key, value in state.asides.items()},
         }
     )
 
@@ -186,6 +190,11 @@ def tick(state: WorldState) -> WorldState:
         if isinstance(player.position, InTransit):
             _advance_transit(world, player)
             continue
+        # Making a note takes no time: notes at the head of a plan are made,
+        # and the tick still goes to the next step.
+        while player.plan.steps and isinstance(note := player.plan.steps[0], Remember):
+            player.plan.steps.pop(0)
+            _remember(world, player, note)
         if player.plan.steps:
             step = player.plan.steps.pop(0)
             _execute(world, player, step)
@@ -311,11 +320,15 @@ def valid_actions(state: WorldState, player_id: str) -> list[str]:
     room_id = player.room_id
     if room_id is None:
         return ["wait"]
-    actions = ["wait", "talk"]
+    actions = ["wait", "talk", "remember"]
     company = any(other != player_id for other in awake_in(state, room_id))
     if company:
         actions.append("whisper")
-    actions.extend(f"move:{neighbor}" for neighbor in state.map.neighbors(room_id))
+    actions.extend(
+        f"move:{neighbor}"
+        for neighbor in state.map.neighbors(room_id)
+        if not held_at_dinner(state, room_id, neighbor)
+    )
     here = visible_things(state, player_id, room_id)
     things = {item.id: item for item in state.map.things}
     actions.extend(f"take:{thing_id}" for thing_id in here if things[thing_id].portable)
@@ -389,7 +402,7 @@ def _tool_actions(
             offer(tool)
         offer("plant", held)
     if state.phase == "mission":
-        offer("sabotage", open_here_containers(state, near))
+        offer("sabotage", [t for t in near if t == todays_station(state)])
     garments = [t for t in near if things[t].kind == GARMENT]
     offer("disguise", garments)
     offer(
@@ -397,16 +410,6 @@ def _tool_actions(
         [t for t in near if things[t].kind in ("paper", "glass")],
     )
     return out
-
-
-def open_here_containers(state: WorldState, near: list[str]) -> list[str]:
-    things = {item.id: item for item in state.map.things}
-    return [
-        thing_id
-        for thing_id in near
-        if things[thing_id].container
-        and isinstance(state.placements.get(thing_id), InRoom)
-    ]
 
 
 def _heard_rumours(state: WorldState, player_id: str) -> bool:
@@ -451,8 +454,39 @@ def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
         _do_drop(world, player, room_id, step.thing_id, hidden=step.hidden)
     elif isinstance(step, Wear):
         change_garment(world, player, room_id, step.thing_id)
+    elif isinstance(step, Remember):
+        _remember(world, player, step)
     else:
         _do_wait(world, player, room_id, step.reason)
+
+
+def _remember(world: WorldState, player: PlayerState, step: Remember) -> None:
+    """File one of the player's own records in their notebook. Only they know:
+    the note is a private act, and what it keeps is a record they already
+    hold."""
+    room_id = player.room_id
+    entry = entry_at(world.ledger, step.seq)
+    record = entry.record_for(player.id) if entry is not None else None
+    if entry is None or record is None or room_id is None:
+        if room_id is not None:
+            blocked(world, player, room_id, "you hold no such record to keep")
+        return
+    append(
+        world,
+        type="remember",
+        text=f"{player.name} made a note to remember entry {entry.seq}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"seq": str(entry.seq)},
+        witnesses=[
+            own_record(
+                player.id,
+                room_id,
+                f"I made a note of what I recorded at t{entry.tick}.",
+                noted=True,
+            )
+        ],
+    )
 
 
 def _camera(world: WorldState, player: PlayerState, room_id: str) -> dict[str, str]:
@@ -475,6 +509,9 @@ def _do_move(
     travel = world.map.travel_ticks(room_id, step.room_id)
     if travel is None:
         blocked(world, player, room_id, "there is no passage that way")
+        return
+    if held_at_dinner(world, room_id, step.room_id):
+        blocked(world, player, room_id, "nobody leaves dinner before the lamps go out")
         return
     destination = world.map.room(step.room_id)
     perception = perceive(
@@ -509,6 +546,21 @@ def _do_move(
         destination=step.room_id,
         ticks_remaining=travel - 1,
     )
+
+
+def held_at_dinner(state: WorldState, origin: str, destination: str) -> bool:
+    """Whether dinner keeps a player from taking this passage.
+
+    From the dinner summons until the lamps go out the household is at table,
+    and the only way anyone may walk is the next step of the quickest way to it.
+    So everyone sets out on the night walk from the table or from the road to
+    it, and nobody is awake in the chambers, or on the stair, to see the
+    traitors go down.
+    """
+    if state.phase != "dinner":
+        return False
+    route = state.map.route(origin, state.map.gathering_room)
+    return not route or route[0] != destination
 
 
 def _advance_transit(world: WorldState, player: PlayerState) -> None:
@@ -987,10 +1039,10 @@ __all__ = [
     "advance_phase",
     "fall_asleep",
     "fork",
+    "held_at_dinner",
     "interrupted",
     "note_replan",
     "note_replan_capped",
-    "open_here_containers",
     "phase_complete",
     "replans_left",
     "route_steps",

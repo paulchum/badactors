@@ -10,7 +10,8 @@ apart.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import Literal
 
 from badactors.castle.contracts import (
     CustodyLink,
@@ -51,6 +52,29 @@ and ``wear`` are the two halves of changing an outer garment. ``plant`` and
 nobody, so the chain shows a gap rather than a culprit. ``destroyed`` is a sheet
 burned to ash, out of play.
 """
+
+
+AsideKind = Literal["diary", "reason"]
+
+REASONED: frozenset[str] = frozenset({"stay_silent", "declined"})
+"""Entry types whose ``private["reason"]`` is the actor's own account of a
+choice: why they kept silent, or let a chance pass."""
+
+
+def asides_of(entry: LedgerEntry) -> list[tuple[AsideKind, str]]:
+    """The private lines an entry's actor wrote, as (kind, words): a reason for
+    silence or for passing, and a diary line. Only they and the audience read
+    them."""
+    if entry.actor_id is None:
+        return []
+    lines: list[tuple[AsideKind, str]] = []
+    reason = entry.private.get("reason")
+    if entry.type in REASONED and reason:
+        lines.append(("reason", reason))
+    diary = entry.private.get("diary")
+    if diary:
+        lines.append(("diary", diary))
+    return lines
 
 
 def append(
@@ -94,6 +118,8 @@ def append(
     for record in entry.witnesses:
         if record.noted:
             state.notebook.setdefault(record.player_id, []).append(entry.seq)
+    if entry.actor_id is not None and asides_of(entry):
+        state.asides.setdefault(entry.actor_id, []).append(entry.seq)
     if cursor is not None:
         state.rng_cursor = cursor
     return entry
@@ -147,7 +173,7 @@ def replay_placements(ledger: Iterable[LedgerEntry]) -> dict[str, Placement]:
         thing_id = entry.payload.get("thing_id")
         if thing_id is None:
             continue
-        placements[thing_id] = _placement_from_payload(entry)
+        placements[thing_id] = placement_of(entry)
     return placements
 
 
@@ -156,15 +182,18 @@ def custody_chain(
     thing_id: str,
     *,
     limit: int | None = None,
+    before: int | None = None,
 ) -> list[CustodyLink]:
     """Every recorded move of one object, oldest first.
 
     ``limit`` keeps only the most recent links, which is how a partial chain is
     served without inventing a second source of truth. It reads backwards and
     stops once it has them, so a partial chain costs nothing like a full one.
+    ``before`` keeps only the moves recorded ahead of that entry: the chain as
+    it stood then.
     """
     links: list[CustodyLink] = []
-    for entry in reversed(ledger):
+    for entry in _backwards(ledger, before):
         if limit is not None and len(links) >= limit:
             break
         if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
@@ -172,6 +201,38 @@ def custody_chain(
                 CustodyLink(ledger_seq=entry.seq, tick=entry.tick, text=entry.text)
             )
     links.reverse()
+    return links
+
+
+def placement_before(
+    ledger: Sequence[LedgerEntry], thing_id: str, seq: int
+) -> Placement | None:
+    """Where an object was when entry ``seq`` was written, from the ledger alone."""
+    for entry in _backwards(ledger, seq):
+        if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
+            return placement_of(entry)
+    return None
+
+
+def _backwards(
+    ledger: Sequence[LedgerEntry], before: int | None
+) -> Iterator[LedgerEntry]:
+    """The entries ahead of ``before`` (all of them when ``None``), newest first."""
+    end = len(ledger) if before is None else min(len(ledger), before - 1)
+    for index in range(end - 1, -1, -1):
+        yield ledger[index]
+
+
+def traced_links(ledger: Sequence[LedgerEntry], seq: int) -> list[CustodyLink]:
+    """The custody links an inspection traced, as its entry froze them."""
+    packed = ledger[seq - 1].payload.get("links", "")
+    links: list[CustodyLink] = []
+    for link in packed.split(","):
+        if link:
+            moved = ledger[int(link) - 1]
+            links.append(
+                CustodyLink(ledger_seq=moved.seq, tick=moved.tick, text=moved.text)
+            )
     return links
 
 
@@ -211,6 +272,29 @@ def recent_records(
     return out
 
 
+def notebook_seqs(state: WorldState, player_id: str) -> list[int]:
+    """The entries in a player's notebook, oldest first: every record they
+    noted, and every record they chose to keep, by the entry it came from. A
+    record kept again moves to the end, so it stays within the notebook's
+    limit."""
+    order: dict[int, None] = {}
+    for seq in state.notebook.get(player_id, []):
+        entry = state.ledger[seq - 1]
+        kept = kept_by(entry, player_id)
+        filed = kept if kept is not None else seq
+        order.pop(filed, None)
+        order[filed] = None
+    return list(order)
+
+
+def kept_by(entry: LedgerEntry, player_id: str) -> int | None:
+    """The entry whose record this one keeps, if it is a note the player made
+    to remember it."""
+    if entry.type != "remember" or entry.actor_id != player_id:
+        return None
+    return int(entry.payload["seq"])
+
+
 def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
     """Rebuild every player's notebook from the ledger alone."""
     notebook: dict[str, list[int]] = {}
@@ -219,6 +303,45 @@ def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
             if record.noted:
                 notebook.setdefault(record.player_id, []).append(entry.seq)
     return notebook
+
+
+def replay_asides(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
+    """Rebuild every player's index of private lines from the ledger alone."""
+    asides: dict[str, list[int]] = {}
+    for entry in ledger:
+        if entry.actor_id is not None and asides_of(entry):
+            asides.setdefault(entry.actor_id, []).append(entry.seq)
+    return asides
+
+
+def replay_searches(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
+    """Rebuild every player's latest search of each room from the ledger alone."""
+    searched: dict[str, dict[str, int]] = {}
+    for entry in ledger:
+        if (
+            entry.type == "search"
+            and entry.payload.get("tool") == "search"
+            and entry.actor_id is not None
+            and entry.room_id is not None
+        ):
+            searched.setdefault(entry.actor_id, {})[entry.room_id] = entry.seq
+    return searched
+
+
+def replay_inspections(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
+    """Rebuild every player's latest inspection of each object from the ledger
+    alone."""
+    inspected: dict[str, dict[str, int]] = {}
+    for entry in ledger:
+        if (
+            entry.type == "inspect"
+            and entry.payload.get("tool") == "inspect"
+            and entry.actor_id is not None
+        ):
+            inspected.setdefault(entry.actor_id, {})[entry.payload["thing_id"]] = (
+                entry.seq
+            )
+    return inspected
 
 
 def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
@@ -231,7 +354,8 @@ def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
     return None
 
 
-def _placement_from_payload(entry: LedgerEntry) -> Placement:
+def placement_of(entry: LedgerEntry) -> Placement:
+    """Where a custody entry left its object."""
     where = entry.payload.get("where")
     if where == "held":
         return HeldBy(player_id=entry.payload["holder_id"])
@@ -295,15 +419,26 @@ def _where_phrase(state: WorldState, placement: Placement) -> str:
 
 __all__ = [
     "CUSTODY_TYPES",
+    "REASONED",
+    "AsideKind",
     "append",
     "append_perceived",
+    "asides_of",
     "custody_chain",
     "entry_at",
+    "kept_by",
     "move_object",
+    "notebook_seqs",
+    "placement_before",
+    "placement_of",
     "placement_payload",
     "recent_records",
+    "replay_asides",
+    "replay_inspections",
     "replay_notebook",
     "replay_placements",
+    "replay_searches",
     "seed_placements",
+    "traced_links",
     "witnessed_by",
 ]

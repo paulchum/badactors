@@ -266,10 +266,18 @@ def _pour(game: GameState, night: NightState, player_id: str, decision: Poison) 
 
 
 def declined(game: GameState, player_id: str, request: Request, decision: Pass) -> None:
-    """Letting a chance go is a choice, and it is written down as one."""
+    """Letting a chance go is a choice, and it is written down as one, with the
+    reason only its maker and the audience read."""
     world = game.world
     player = world.players[player_id]
-    what = {"poison": "I let the chance to poison pass.", "recruit": "I made no offer."}
+    what = {
+        "poison": "I let the chance to poison pass",
+        "recruit": "I made no offer",
+        "nominate": "I named nobody",
+    }
+    private = {"reason": decision.reason}
+    if decision.diary:
+        private["diary"] = decision.diary
     append(
         world,
         type="declined",
@@ -277,14 +285,16 @@ def declined(game: GameState, player_id: str, request: Request, decision: Pass) 
         actor_id=player_id,
         room_id=player.room_id,
         payload={"request": request.kind},
-        private={"diary": decision.diary} if decision.diary else {},
+        private=private,
         witnesses=[
             WitnessRecord(
                 player_id=player_id,
                 sense="own",
                 confidence="clear",
                 channel="direct",
-                text=what.get(request.kind, "I let it pass."),
+                text=f"{what.get(request.kind, 'I let it pass')}: {decision.reason}"[
+                    :400
+                ],
                 recorded_actor=player_id,
                 from_room=player.room_id,
             )
@@ -612,7 +622,8 @@ def conclave_turn(game: GameState) -> tuple[str, Request] | None:
         return pid, Request(
             kind="nominate",
             options=victims,
-            prompt="Name tonight's victim. The others here will hear you.",
+            prompt="Name tonight's victim, or pass. The others here will hear a "
+            "name; a pass is yours alone.",
         )
     return None
 
@@ -624,6 +635,9 @@ def conclave_act(
     if night is None:
         return
     night.asked_nominate.append(player_id)
+    if isinstance(decision, Pass):
+        declined(game, player_id, request, decision)
+        return
     if not isinstance(decision, Nominate):
         return
     night.nominations[player_id] = decision.target

@@ -26,14 +26,18 @@ from badactors.castle import kit, perceive
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.contracts import (
     MAX_PLAN_STEPS,
+    QUOTE_LIMIT,
     Blackmail,
     CleanUp,
     Counterfeit,
     Disguise,
+    Drop,
     Forge,
     Gaslight,
     Honeypot,
     Hook,
+    InRoom,
+    Inspect,
     Intent,
     Plan,
     Plant,
@@ -41,8 +45,10 @@ from badactors.castle.contracts import (
     Rumor,
     Sabotage,
     ScopedObservation,
+    Search,
     Steal,
     Step,
+    Take,
     Talk,
     Tamper,
     ToolUse,
@@ -54,7 +60,15 @@ from badactors.castle.contracts import (
 from badactors.castle.decisions import Decision, Poison
 from badactors.castle.director import run_phase
 from badactors.castle.game import living_faithful, living_traitors
-from badactors.castle.ledger import replay_notebook, replay_placements
+from badactors.castle.ledger import (
+    custody_chain,
+    replay_asides,
+    replay_inspections,
+    replay_notebook,
+    replay_placements,
+    replay_searches,
+)
+from badactors.castle.manipulation import outcomes
 from badactors.castle.night import poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import run_game, start_game
@@ -62,7 +76,7 @@ from badactors.castle.rules import GameConfig
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import advance_phase
 from castle_scenes import CAST, CASTLE, MODELS
-from castle_tools import act, give, paper, put, scene
+from castle_tools import act, give, last, on_mission, paper, put, scene, seen
 
 _SETTINGS = settings(
     max_examples=15,
@@ -121,7 +135,7 @@ def _tamper(seed: int) -> tuple[WorldState, str]:
 
 
 def _sabotage(seed: int) -> tuple[WorldState, str]:
-    world = advance_phase(scene(seed, sabotage={"trace": 0.5}))
+    world = on_mission(scene(seed, sabotage={"trace": 0.5}))
     return act(world, "knox", Sabotage(thing_id="clock_case")), "knox"
 
 
@@ -318,6 +332,7 @@ def test_property_whole_games_pass_the_leak_checker(
     assert played.game.status == "over"
     assert replay_placements(world.ledger) == world.placements
     assert replay_notebook(world.ledger) == world.notebook
+    assert replay_asides(world.ledger) == world.asides
 
 
 # -------------------------------------------- drawn tool use, every tick checked
@@ -514,3 +529,171 @@ def test_the_drawn_runs_reach_the_traitor_kit() -> None:
     run()
     wanted = {"forge", "hook", "gaslight", "rumor", "tamper", "clean_up", "disguise"}
     assert wanted <= set(_USED), sorted(wanted - set(_USED))
+
+
+# ------------------------------------------------ a search is a look, not a window
+
+_BOXES = {
+    "great_hall": ("clock_case", "sideboard"),
+    "dining_room": ("supply_crates",),
+    "chapel": ("cipher_chest",),
+    "study": ("steward_desk",),
+    "library": (),
+}
+
+
+@_SETTINGS
+@given(
+    seed=st.integers(min_value=0, max_value=4096),
+    room=st.sampled_from(sorted(_BOXES)),
+    moves=st.lists(st.integers(min_value=0, max_value=3), min_size=1, max_size=4),
+)
+def test_property_a_search_never_shows_what_was_hidden_after_it(
+    seed: int, room: str, moves: list[int]
+) -> None:
+    """Whatever is hidden, stowed or taken in a room after someone searched it,
+    what they see there is what is in plain sight now, plus what their search
+    found that is still exactly where they found it."""
+    world = scene(seed)
+    put(world, "mara", room)
+    world = act(world, "mara", Search())
+    found = {
+        thing_id: perceive.spot(placement)
+        for thing_id, placement in world.placements.items()
+        if perceive.spot(placement) is not None
+        and perceive.room_of(world, thing_id) == room
+    }
+    put(world, "mara", "kitchen")
+    put(world, "knox", room)
+    stowed: set[str] = set()
+    for move in moves:
+        sheet = paper(world)
+        give(world, "knox", sheet)
+        boxes = _BOXES[room]
+        if move == 0 or not boxes:
+            world = act(world, "knox", Drop(thing_id=sheet, hidden=True))
+        elif move == 1:
+            world = act(world, "knox", Drop(thing_id=sheet, into=boxes[0]))
+        elif move == 2:
+            world = act(world, "knox", Drop(thing_id=sheet))
+        else:
+            world = act(world, "knox", Search())
+            taken = sorted(
+                set(found) & set(perceive.visible_things(world, "knox", room))
+            )
+            if taken:
+                world = act(world, "knox", Take(thing_id=taken[0]))
+        now = perceive.spot(world.placements[sheet])
+        if now is not None and now != found.get(sheet):
+            stowed.add(sheet)
+    put(world, "knox", "kitchen")
+    put(world, "mara", room)
+
+    for view in seen(world, "mara").visible_objects:
+        placement = world.placements[view.id]
+        in_sight = isinstance(placement, InRoom) and not placement.hidden
+        assert in_sight or found.get(view.id) == perceive.spot(placement), view.id
+        assert view.id not in stowed or in_sight
+    assert replay_searches(world.ledger) == world.searched
+
+
+@_SETTINGS
+@given(
+    seed=st.integers(min_value=0, max_value=4096),
+    handlers=st.lists(
+        st.sampled_from(["sol", "knox", "june", "mara"]), min_size=1, max_size=4
+    ),
+)
+def test_property_an_inspection_never_learns_what_happened_after_it(
+    seed: int, handlers: list[str]
+) -> None:
+    """However often an object changes hands after someone inspected it, the
+    chain they are shown is the one they traced, every link older than their
+    look, until they inspect it again."""
+    world = scene(seed)
+    put(world, "iris", "dining_room")
+    world = act(world, "iris", Inspect(thing_id="silver_decanter"))
+    looked = last(world, "inspect").seq
+    traced = custody_chain(
+        world.ledger, "silver_decanter", limit=world.balance.tools.inspect.links
+    )
+    put(world, "iris", "kitchen")
+    for handler in handlers:
+        put(world, handler, "dining_room")
+        world = act(
+            world,
+            handler,
+            Take(thing_id="silver_decanter"),
+            Drop(thing_id="silver_decanter", hidden=False),
+        )
+        put(world, handler, "great_hall")
+    put(world, "iris", "dining_room")
+    view = next(
+        view
+        for view in seen(world, "iris").visible_objects
+        if view.id == "silver_decanter"
+    )
+    assert view.custody == traced
+    assert view.custody is not None
+    assert all(link.ledger_seq < looked for link in view.custody)
+    assert replay_inspections(world.ledger) == world.inspected
+
+
+# -------------------------------------------- a manipulation works only if taken in
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(seed=st.integers(min_value=0, max_value=5_000))
+def test_property_a_successful_manipulation_reached_its_target_first(
+    seed: int,
+) -> None:
+    """Every attempt judged a success put its words in front of its target
+    before the target did what it wanted: the target holds a record carrying
+    those words, written no later than the act that counted."""
+    game = start_game(CASTLE, CAST.first(10), seed=seed)
+    bot = HeuristicBot(seed=seed)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    ledger = played.game.world.ledger
+    for outcome in outcomes(played.game):
+        attempt = ledger[outcome.seq - 1]
+        if not outcome.success or attempt.quote is None:
+            continue
+        held = [
+            entry.seq
+            for entry in ledger
+            if (record := entry.record_for(outcome.target)) is not None
+            and record.quote is not None
+            and attempt.quote in record.quote
+        ]
+        assert held, (seed, outcome)
+
+
+# ------------------------------------------------- only a filibuster runs long
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(seed=st.integers(min_value=0, max_value=5_000))
+def test_property_only_a_filibuster_speaks_past_the_cap(seed: int) -> None:
+    """Every message said at the table, whatever it quotes, fits one message,
+    except a filibuster."""
+    game = start_game(CASTLE, CAST.first(10), seed=seed)
+    bot = HeuristicBot(seed=seed)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    for entry in played.game.world.ledger:
+        if entry.quote is not None and entry.type in _TABLE_SPEECH:
+            assert len(entry.quote) <= QUOTE_LIMIT, (seed, entry.type, entry.seq)
+
+
+_TABLE_SPEECH = frozenset(
+    {
+        "accuse",
+        "defend",
+        "question",
+        "answer",
+        "report",
+        "demand_alibi",
+        "cross_examine",
+        "alibi",
+        "vouch",
+    }
+)

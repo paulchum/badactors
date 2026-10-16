@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from badactors.castle.contracts import (
+    QUOTE_LIMIT,
     RECORD_LIMIT,
     CastlePhase,
     Contract,
@@ -37,10 +38,20 @@ RequestKind = Literal[
     "recruit",
     "recruit_answer",
     "nominate",
+    "exit_interview",
 ]
 
 TRAITOR_ONLY: frozenset[str] = frozenset({"poison", "recruit", "nominate"})
 """Requests whose very existence, and whose options, only a traitor may see."""
+
+AUDIENCE_ONLY: frozenset[str] = frozenset({"exit_interview"})
+"""Requests put only to a player out of the game, whose answers only the
+audience reads. Their words reach no player, so they are never checked for
+model names, and failing one is not a failed turn in the game."""
+
+PRIVATE_REQUESTS: frozenset[str] = TRAITOR_ONLY | {"recruit_answer"}
+"""Requests nobody else knows were put. A failure to answer one is its player's
+alone: anyone who saw them hesitate would learn the question had been asked."""
 
 
 class Request(Contract):
@@ -59,6 +70,9 @@ class Request(Contract):
     """Rooms an alibi may name."""
     limit: int | None = None
     """The longest a filibuster may run on this turn."""
+    refusal: str | None = Field(default=None, max_length=300)
+    """Why this player's last answer to this same question was refused. Asked
+    again with it, once; nobody else is told."""
 
 
 class _Decision(Contract):
@@ -93,11 +107,22 @@ class Answer(_Decision):
     text: Words
 
 
+def _reason_in_words(reason: str) -> str:
+    """A private reason, as given less any blank space round it. Only the
+    audience, and its giver, ever read it."""
+    kept = reason.strip()
+    if not kept:
+        raise ValueError("A reason must be given in words, not blank space.")
+    return kept
+
+
 class StaySilent(_Decision):
     """Say nothing on your turn. The reason is private and required."""
 
     kind: Literal["stay_silent"] = "stay_silent"
     reason: str = Field(min_length=1, max_length=300)
+
+    _reason = field_validator("reason")(_reason_in_words)
 
 
 class Vote(_Decision):
@@ -122,9 +147,13 @@ class Recruit(_Decision):
 
 
 class Pass(_Decision):
-    """Decline an optional move, such as poison or an offer."""
+    """Decline an optional move: poison, an offer, or naming a victim. The
+    reason is private and required, as for a silence."""
 
     kind: Literal["pass"] = "pass"
+    reason: str = Field(min_length=1, max_length=300)
+
+    _reason = field_validator("reason")(_reason_in_words)
 
 
 class Nominate(_Decision):
@@ -162,29 +191,32 @@ class DemandAlibi(_Decision):
 
 class CrossExamine(_Decision):
     """Instead of a question: read one of your own records to someone, word for
-    word, and make them answer it."""
+    word, and make them answer it. The question is kept short, so the record
+    read out and the question fit in one message together."""
 
     kind: Literal["cross_examine"] = "cross_examine"
     target: str
     evidence: int = Field(ge=1)
-    text: Words
+    text: str = Field(min_length=1, max_length=QUOTE_LIMIT // 2)
 
 
 class Alibi(_Decision):
-    """Where you were when an alibi was demanded, and who was with you."""
+    """Where you were when an alibi was demanded, and who was with you. Any
+    words of your own follow the claim, in the same message."""
 
     kind: Literal["alibi"] = "alibi"
     room: str
     companion: str | None = None
-    text: MaybeWords = ""
+    text: str = Field(default="", max_length=QUOTE_LIMIT // 2)
 
 
 class Vouch(_Decision):
-    """Confirm or deny that you were where someone's alibi puts you."""
+    """Confirm or deny that you were where someone's alibi puts you. Any words
+    of your own follow the answer, in the same message."""
 
     kind: Literal["vouch"] = "vouch"
     confirm: bool
-    text: MaybeWords = ""
+    text: str = Field(default="", max_length=QUOTE_LIMIT // 2)
 
 
 class Accept(_Decision):
@@ -195,6 +227,18 @@ class Accept(_Decision):
 class Refuse(_Decision):
     kind: Literal["refuse"] = "refuse"
     text: MaybeWords = ""
+
+
+class ExitAnswer(_Decision):
+    """An exit interview: what the player makes of what was done to them, and
+    a guess, in their own words, at which model family played each other seat.
+    Only the audience reads it."""
+
+    kind: Literal["exit_interview"] = "exit_interview"
+    text: str = Field(min_length=1, max_length=1000)
+    guesses: dict[str, Annotated[str, Field(min_length=1, max_length=80)]] = Field(
+        default_factory=dict
+    )
 
 
 type Decision = Annotated[
@@ -217,7 +261,8 @@ type Decision = Annotated[
     | DemandAlibi
     | CrossExamine
     | Alibi
-    | Vouch,
+    | Vouch
+    | ExitAnswer,
     Field(discriminator="kind"),
 ]
 
@@ -233,8 +278,9 @@ ANSWERS: dict[RequestKind, frozenset[str]] = {
     "endgame": frozenset({"endgame"}),
     "poison": frozenset({"poison", "pass"}),
     "recruit": frozenset({"recruit", "pass"}),
-    "nominate": frozenset({"nominate"}),
+    "nominate": frozenset({"nominate", "pass"}),
     "recruit_answer": frozenset({"accept", "refuse"}),
+    "exit_interview": frozenset({"exit_interview"}),
 }
 """The decisions each request accepts, beside any tools the request offers."""
 
@@ -251,6 +297,13 @@ class IllegalDecision(ValueError):
 def check_decision(request: Request, decision: Decision) -> None:
     """Raise :class:`IllegalDecision` unless ``decision`` legally answers."""
     allowed = ANSWERS[request.kind] | (set(request.tools) & TABLE_TOOLS)
+    if decision.kind in TABLE_TOOLS and decision.kind not in allowed:
+        # Out of the kit or out of place, it is refused the same way: only the
+        # player is told, and the words say nothing about whose kit holds what.
+        raise IllegalDecision(
+            f"You cannot use {decision.kind.replace('_', ' ')} on this turn: it is "
+            "not one of the tools offered to you."
+        )
     if decision.kind not in allowed:
         raise IllegalDecision(
             f"A {request.kind} turn cannot be answered with {decision.kind}."
@@ -266,6 +319,10 @@ def check_decision(request: Request, decision: Decision) -> None:
             raise IllegalDecision(f"{decision.room!r} is not a room in this castle.")
         if decision.companion is not None and decision.companion not in request.options:
             raise IllegalDecision(f"{decision.companion!r} is not a companion choice.")
+    if isinstance(decision, ExitAnswer):
+        unknown = sorted(set(decision.guesses) - set(request.options))
+        if unknown:
+            raise IllegalDecision(f"{unknown} are not seats you were asked about.")
     if isinstance(decision, Filibuster):
         if request.limit is None or len(decision.text) > request.limit:
             raise IllegalDecision("That filibuster runs past what the floor allows.")
@@ -275,6 +332,8 @@ def check_decision(request: Request, decision: Decision) -> None:
 
 __all__ = [
     "ANSWERS",
+    "AUDIENCE_ONLY",
+    "PRIVATE_REQUESTS",
     "TABLE_TOOLS",
     "TRAITOR_ONLY",
     "Accept",
@@ -286,6 +345,7 @@ __all__ = [
     "Defend",
     "DemandAlibi",
     "EndgameVote",
+    "ExitAnswer",
     "Filibuster",
     "IllegalDecision",
     "Nominate",

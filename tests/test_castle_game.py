@@ -4,27 +4,35 @@ round table and the endgame, played through the referee a model would face."""
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import CastMember
+from badactors.castle.cli import main as cli_main
 from badactors.castle.contracts import (
     DAY_ORDER,
     AtRoom,
     Drop,
     HeldBy,
+    Move,
     Offstage,
     Plan,
     Talk,
 )
 from badactors.castle.decisions import (
+    PRIVATE_REQUESTS,
     Accept,
     Accuse,
     Decision,
     EndgameVote,
     Pass,
+    PlanChoice,
     Poison,
     Recruit,
     Refuse,
@@ -32,6 +40,7 @@ from badactors.castle.decisions import (
     StaySilent,
     Vote,
 )
+from badactors.castle.episode import REFERENCE_BANNER, episode
 from badactors.castle.game import (
     GameState,
     NightState,
@@ -43,6 +52,7 @@ from badactors.castle.game import (
     shield_held_by,
     split,
 )
+from badactors.castle.ledger import CUSTODY_TYPES
 from badactors.castle.mapfile import CastSpecError
 from badactors.castle.missions import sabotaged, work_done
 from badactors.castle.night import (
@@ -53,15 +63,22 @@ from badactors.castle.night import (
     poison_turn,
     seat_dinner,
 )
-from badactors.castle.observe import GameObservation, assert_no_game_leak, observe_game
+from badactors.castle.observe import (
+    GameObservation,
+    assert_no_game_leak,
+    observe_game,
+    observed,
+)
 from badactors.castle.play import (
     GameRecord,
     Played,
+    Player,
     ReplayDiverged,
     TurnFailure,
     load_record,
     record,
     replay,
+    run_game,
     save_record,
     start_game,
 )
@@ -75,7 +92,9 @@ from castle_scenes import (
     CASTLE,
     MODELS,
     NO_POISON,
+    Script,
     of_type,
+    recruiting,
     referee,
     run_until,
 )
@@ -202,6 +221,50 @@ def test_a_day_runs_every_phase_to_its_tick_budget() -> None:
         assert ref.game.world.tick - start == budget.ticks(phase)
     assert seen == list(DAY_ORDER)
     assert (ref.game.world.day, ref.game.world.phase) == (2, "breakfast")
+
+
+def test_a_conclave_where_every_traitor_passes_kills_nobody() -> None:
+    def refuse_to_name(
+        observation: GameObservation, game: GameState
+    ) -> Decision | None:
+        kind, options = observation.request.kind, observation.request.options
+        if kind in ("nominate", "poison", "recruit"):
+            return Pass(reason="Not this time.")
+        if kind == "vote":
+            faithful = [pid for pid in options if game.roles[pid] == "faithful"]
+            return Vote(target=(faithful or options)[0])
+        return None
+
+    game = run_until(referee(seed=6, script=refuse_to_name), 2, "mission")
+    passes = [
+        e for e in of_type(game, "declined") if e.payload["request"] == "nominate"
+    ]
+    assert {e.actor_id for e in passes} == set(game.starting_traitors)
+    for entry in passes:
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+    assert not of_type(game, "nominate", "kill_attempt", "death")
+    choice = of_type(game, "conclave_choice")[0]
+    assert "named nobody" in (choice.quote or "")
+    news = of_type(game, "breakfast_news")[0]
+    assert "Nobody died in the night." in (news.quote or "")
+
+
+def test_a_pass_keeps_its_reason_for_the_audience_alone() -> None:
+    def squeamish(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "poison":
+            return Pass(reason="  Not with Mara watching.  ", diary="Too risky.")
+        return None
+
+    game = run_until(referee(seed=6, script=squeamish), 1, "night")
+    passed = [e for e in of_type(game, "declined") if e.payload["request"] == "poison"]
+    assert passed
+    entry = passed[0]
+    assert entry.private == {"reason": "Not with Mara watching.", "diary": "Too risky."}
+    (own,) = entry.witnesses
+    assert own.player_id == entry.actor_id
+    assert own.text == "I let the chance to poison pass: Not with Mara watching."
+    shown = episode(game)
+    assert "Not with Mara watching. · Too risky." in shown
 
 
 def test_night_sends_the_faithful_to_sleep_and_the_traitors_to_the_conclave() -> None:
@@ -442,7 +505,7 @@ def _recruiting(answer: Decision) -> tuple[GameState, str]:
         if kind == "recruit_answer":
             return answer
         if kind == "poison":
-            return Pass()
+            return Pass(reason="Not this time.")
         return _banish_a_traitor(observation, game)
 
     ref = referee(seed=11, script=script)
@@ -495,6 +558,45 @@ _STAGES = {
     "vouch": 3,
     "vote": 4,
 }
+
+
+def _order_on(day: int, absent: set[str]) -> list[str]:
+    game = _game()
+    world = game.world
+    world.day = day
+    for pid in world.seats:
+        room = "chapel" if pid in absent else world.map.gathering_room
+        world.players[pid].position = AtRoom(room_id=room)
+    open_table(game)
+    assert game.table is not None
+    return game.table.order
+
+
+def test_the_speaking_order_turns_a_seat_a_day_whoever_attends() -> None:
+    seats = _game().world.seats
+    assert _order_on(1, set()) == seats
+    assert _order_on(3, set())[0] == seats[2]
+    assert _order_on(3, {seats[0]})[0] == seats[2], "an absence shifts nobody"
+    assert _order_on(3, {seats[2]})[0] == seats[3]
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    day=st.integers(min_value=1, max_value=12),
+    first=st.sets(st.integers(min_value=0, max_value=9), max_size=6),
+    second=st.sets(st.integers(min_value=0, max_value=9), max_size=6),
+)
+def test_property_who_attends_never_reorders_the_others(
+    day: int, first: set[int], second: set[int]
+) -> None:
+    """Any two players at both tables speak in the same order at each, however
+    attendance differs."""
+    seats = _game().world.seats
+    one = _order_on(day, {seats[i] for i in first})
+    two = _order_on(day, {seats[i] for i in second})
+    both = [pid for pid in one if pid in two]
+    assert both == [pid for pid in two if pid in one]
+    assert sorted(one) == sorted(pid for i, pid in enumerate(seats) if i not in first)
 
 
 def test_the_round_table_runs_its_turns_in_order() -> None:
@@ -596,6 +698,50 @@ def test_the_endgame_ends_when_every_vote_is_to_end() -> None:
     assert "Every vote was to end the game." in (
         of_type(game, "game_over")[0].quote or ""
     )
+
+
+def _endgame_failing(failing: int) -> GameState:
+    """A final table where the first ``failing`` endgame voters in seat order
+    fail to answer, and everyone else votes to end."""
+    voters: list[str] = []
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        kind = observation.request.kind
+        if kind == "endgame":
+            voters.append(observation.viewer_id)
+            if len(voters) <= failing:
+                raise TurnFailure("the provider returned nothing")
+            return EndgameVote(choice="end")
+        if kind == "vote":
+            faithful = [
+                p for p in observation.request.options if game.roles[p] == "faithful"
+            ]
+            return Vote(target=(faithful or observation.request.options)[0])
+        return None
+
+    ref = referee(seed=9, endgame_at=10, script=script)
+    ref.run()
+    return ref.game
+
+
+def test_an_endgame_with_no_ballots_says_so_and_ends() -> None:
+    game = _endgame_failing(failing=99)
+    over = of_type(game, "game_over")[0].quote or ""
+    assert of_type(game, "turn_failed")
+    assert "Every vote" not in over
+    assert "No vote to end the game or to banish again was cast" in over
+    assert game.status == "over"
+
+
+def test_an_endgame_with_a_missing_ballot_names_who_cast_none() -> None:
+    game = _endgame_failing(failing=1)
+    failed = [
+        e for e in of_type(game, "turn_failed") if e.payload["request"] == "endgame"
+    ]
+    assert len(failed) == 1
+    silent = game.world.players[failed[0].actor_id or ""].name
+    over = of_type(game, "game_over")[0].quote or ""
+    assert f"Every vote cast was to end the game; {silent} cast none." in over
 
 
 def test_a_vote_to_banish_again_banishes_again() -> None:
@@ -700,6 +846,159 @@ def test_a_failed_turn_is_a_visible_failure_not_a_choice() -> None:
     assert any(logged.error for logged in ref.log if logged.player_id == "mara")
 
 
+def _failing(*kinds: str, answer: Decision | None = None) -> Script:
+    """Day one's table votes out the first traitor, so a recruitment window can
+    open; every decision of these kinds fails."""
+    recruit = recruiting(answer or Accept())
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind in kinds:
+            raise TurnFailure("the provider returned nothing")
+        return recruit(observation, game)
+
+    return script
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    seed=st.integers(min_value=0, max_value=2_000),
+    kinds=st.sampled_from(
+        [("poison", "nominate", "recruit"), ("poison", "recruit_answer")]
+    ),
+)
+def test_property_a_failure_on_a_private_decision_is_its_players_alone(
+    seed: int, kinds: tuple[str, ...]
+) -> None:
+    """A traitor who fails to decide on a dose at dinner, a nomination or an
+    offer, or a recruit who fails to answer one, hesitates where nobody can see
+    it: a hesitation anyone saw would say the question had been put."""
+    game = run_until(referee(seed=seed, script=_failing(*kinds)), 3, "breakfast")
+    failed = [
+        entry
+        for entry in of_type(game, "turn_failed")
+        if entry.payload["request"] in PRIVATE_REQUESTS
+    ]
+    assert failed, "no private decision was ever put"
+    for entry in failed:
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+
+
+def test_a_failed_poison_turn_is_not_seen_at_dinner() -> None:
+    game = run_until(referee(seed=6, script=_failing("poison")), 2, "breakfast")
+    failed = [
+        e for e in of_type(game, "turn_failed") if e.payload["request"] == "poison"
+    ]
+    assert failed, "no traitor was asked to poison"
+    for entry in failed:
+        assert entry.room_id == game.world.map.gathering_room
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+
+
+def _walking_out(who: str, exit_index: int) -> Script:
+    """At dinner, everyone of this role (or everyone, for ``"all"``) tries to
+    walk out of the hall."""
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        room = observation.world.room
+        if (
+            observation.request.kind == "plan"
+            and observation.phase == "dinner"
+            and room is not None
+            and who in ("all", game.roles[observation.viewer_id])
+        ):
+            exit_to = room.exits[exit_index % len(room.exits)]
+            return PlanChoice(plan=Plan(goal="slip out", steps=[Move(room_id=exit_to)]))
+        return None
+
+    return script
+
+
+def _sightings_of_the_stair(game: GameState) -> list[tuple[int, str]]:
+    """Every record a Faithful holds of a traitor going down to the conclave
+    room or coming back from it."""
+    crypt = game.world.map.conclave_room
+    return [
+        (entry.seq, record.player_id)
+        for entry in game.world.ledger
+        if entry.phase == "night"
+        and entry.type in ("move_depart", "move_arrive")
+        and entry.actor_id is not None
+        and game.roles[entry.actor_id] == "traitor"
+        and crypt in (entry.payload.get("destination"), entry.payload.get("origin"))
+        for record in entry.witnesses
+        if record.player_id != entry.actor_id
+        and record.sense == "saw"
+        and game.roles[record.player_id] == "faithful"
+    ]
+
+
+@settings(max_examples=8, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    seed=st.integers(min_value=0, max_value=2_000),
+    who=st.sampled_from(["traitor", "faithful", "all"]),
+    exit_index=st.integers(min_value=0, max_value=3),
+)
+def test_property_nobody_walks_out_of_dinner_to_watch_the_stair(
+    seed: int, who: str, exit_index: int
+) -> None:
+    """However the household tries to leave dinner, nobody does, and no Faithful
+    sees a traitor go down to the conclave or come back."""
+    ref = referee(seed=seed, script=_walking_out(who, exit_index))
+    game = run_until(ref, 3, "breakfast")
+    hall = game.world.map.gathering_room
+    walked = [
+        entry
+        for entry in of_type(game, "move_depart")
+        if entry.phase == "dinner" and entry.room_id == hall
+    ]
+    assert walked == []
+    assert _sightings_of_the_stair(game) == []
+
+
+def test_a_traitor_who_tries_to_leave_dinner_stays_at_table() -> None:
+    ref = referee(seed=3, script=_walking_out("traitor", 1))
+    game = run_until(ref, 2, "breakfast")
+    refused = [
+        entry
+        for entry in of_type(game, "blocked")
+        if entry.phase == "dinner" and game.roles[entry.actor_id or ""] == "traitor"
+    ]
+    assert refused, "no traitor tried to leave"
+    assert all(len(entry.witnesses) == 1 for entry in refused)
+    assert _sightings_of_the_stair(game) == []
+
+
+@pytest.mark.parametrize("blank", [" ", "   ", "\n\t "])
+def test_a_silence_needs_a_reason_in_words(blank: str) -> None:
+    with pytest.raises(ValidationError, match="in words"):
+        StaySilent(reason=blank)
+    with pytest.raises(ValidationError, match="in words"):
+        Pass(reason=blank)
+    with pytest.raises(ValidationError):
+        Pass.model_validate({"kind": "pass"})
+    assert StaySilent(reason=" biding my time ").reason == "biding my time"
+    assert Pass(reason="\tnot tonight ").reason == "not tonight"
+
+
+def test_a_blank_reason_for_silence_is_refused_and_asked_again() -> None:
+    asked: list[Request] = []
+
+    def blank(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "accuse" and observation.viewer_id == "mara":
+            asked.append(observation.request)
+            if observation.request.refusal is None:
+                return StaySilent.model_validate({"reason": "   "})
+            return StaySilent(reason="I have nothing yet.")
+        return None
+
+    game = run_until(referee(seed=6, script=blank), 1, "dinner")
+    assert len(asked) == 2
+    assert asked[1].refusal is not None and "in words" in asked[1].refusal
+    (silence,) = [e for e in of_type(game, "stay_silent") if e.actor_id == "mara"]
+    assert silence.private["reason"] == "I have nothing yet."
+    assert not [e for e in of_type(game, "turn_failed") if e.actor_id == "mara"]
+
+
 def test_an_illegal_answer_is_a_failed_turn() -> None:
     def cheat(observation: GameObservation, game: GameState) -> Decision | None:
         if observation.request.kind == "vote" and observation.viewer_id == "mara":
@@ -736,6 +1035,115 @@ def test_a_stored_game_replays_to_an_identical_ledger(tmp_path: Path) -> None:
     original = [entry.model_dump(mode="json") for entry in ref.game.world.ledger]
     assert [entry.model_dump(mode="json") for entry in again.world.ledger] == original
     assert json.loads(path.read_text())["winner"] == ref.game.winner
+
+
+# ------------------------------------------------------------------ provenance
+
+
+def _bot_game() -> GameRecord:
+    game = start_game(CASTLE, CAST, seed=5)
+    bot = HeuristicBot(seed=5)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    return record(CASTLE, CAST, played)
+
+
+def test_a_bot_game_is_recorded_as_the_bots_seat_by_seat() -> None:
+    stored = _bot_game()
+    assert set(stored.agents.values()) == {"bot:heuristic"}
+    assert {logged.agent for logged in stored.decisions} == {"bot:heuristic"}
+    assert stored.reference_bots
+    again = GameRecord.model_validate_json(stored.model_dump_json())
+    assert again.agents == stored.agents
+
+
+def test_a_record_cannot_credit_a_seat_to_another_model() -> None:
+    stored = _bot_game()
+    dumped = stored.model_dump(mode="json")
+    dumped["agents"]["mara"] = "model:somebody/else"
+    with pytest.raises(ValidationError, match="not the cast's model"):
+        GameRecord.model_validate(dumped)
+    dumped = stored.model_dump(mode="json")
+    dumped["decisions"][0]["agent"] = f"model:{CAST.models()['mara']}"
+    with pytest.raises(ValidationError, match="names another agent"):
+        GameRecord.model_validate(dumped)
+
+
+def test_castle_game_says_bots_played_and_shows_no_model(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "game.json"
+    cli_main(["--seed", "4", "--save", str(path)])
+    out = capsys.readouterr().out
+    assert out.startswith(REFERENCE_BANNER)
+    for model in CAST.models().values():
+        assert model not in out
+    assert "reference bot (heuristic)" in out
+    stored = load_record(path)
+    assert stored.reference_bots and set(stored.agents.values()) == {"bot:heuristic"}
+
+
+@dataclass(frozen=True)
+class _Labelled:
+    """A bot that says it is a model, as a model-backed player would."""
+
+    agent: str
+
+    def __call__(self, observation: GameObservation) -> Decision:
+        return HeuristicBot(seed=5)(observation)
+
+
+def test_a_model_seat_shows_its_model_and_no_banner() -> None:
+    game = start_game(CASTLE, CAST, seed=5)
+    bot = HeuristicBot(seed=5)
+    players: dict[str, Player] = {pid: bot for pid in game.world.seats}
+    players["mara"] = _Labelled(f"model:{CAST.models()['mara']}")
+    played = run_game(game, players, models=MODELS)
+    stored = record(CASTLE, CAST, played)
+    assert stored.agents["mara"] == f"model:{CAST.models()['mara']}"
+    assert not stored.reference_bots
+    shown = episode(played.game, agents=played.agents)
+    assert REFERENCE_BANNER not in shown
+    assert CAST.models()["mara"] in shown
+    assert CAST.models()["sol"] not in shown
+
+
+def test_each_logged_decision_names_the_entries_its_player_saw() -> None:
+    shown: list[GameObservation] = []
+
+    def watch(observation: GameObservation, game: GameState) -> Decision | None:
+        shown.append(observation)
+        return None
+
+    ref = referee(seed=8, script=watch)
+    game = run_until(ref, 2, "breakfast")
+    played = [logged for logged in ref.log if logged.kind != "exit_interview"]
+    assert len(shown) == len(played)
+    for observation, logged in zip(shown, played, strict=True):
+        assert logged.seen == observed(observation)
+        recent = {item.ledger_seq for item in observation.world.recent}
+        assert recent <= set(logged.seen)
+    for logged in played:
+        for seq in logged.seen:
+            entry = game.world.ledger[seq - 1]
+            held = entry.record_for(logged.player_id) is not None
+            assert held or entry.type in CUSTODY_TYPES, (logged.player_id, seq)
+
+
+def test_what_a_decision_saw_survives_the_record() -> None:
+    ref = referee(seed=8)
+    ref.run()
+    stored = record(
+        CASTLE,
+        CAST,
+        Played(game=ref.game, log=ref.log, observations=ref.observations),
+    )
+    again = GameRecord.model_validate_json(stored.model_dump_json())
+    assert [d.seen for d in again.decisions] == [d.seen for d in ref.log]
+    assert any(d.seen for d in again.decisions)
+    dumped = stored.model_dump(mode="json")
+    dumped["decisions"][0]["seen"] = [len(stored.ledger) + 1]
+    with pytest.raises(ValidationError, match="ledger does not hold"):
+        GameRecord.model_validate(dumped)
 
 
 def test_a_replay_asked_something_the_game_never_asked_fails() -> None:
