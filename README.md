@@ -11,7 +11,7 @@ The Castle is in progress and specified in [SPEC.md](SPEC.md).
 - **Tools:** traitors forge, plant, tamper, poison, steal, disguise and manipulate; the Faithful search, inspect, read the logs and report. Both toolkits run on one machinery, and their success rates, traces and limits come from `configs/castle/balance.json`.
 - **Harness:** `castle-live` plays a game with real models through OpenRouter, within a budget. It has been run end to end against a scripted mock provider; no real model has played the Castle yet.
 - **Truth:** every claim made aloud is fact-checked against the ledger and against what its speaker knew: whether it was true, and if not, whether the speaker lied, was mistaken, or had it planted by another player.
-- **Benchmark:** role-rotation schedules, OpenSkill ratings, the attacker-by-target matrix, a power analysis, and a verify bundle for every game. So far it has rated bots only.
+- **Benchmark:** a qualification gate, role-rotation schedules, OpenSkill ratings, the attacker-by-target matrix, a power analysis, and a verify bundle for every game. So far it has rated bots only.
 - **Show:** the audience feed, structural moment detection, and a Remotion composition for claim-versus-truth clips.
 - **Not done yet:** the spectator.
 
@@ -144,15 +144,31 @@ verify bundle per game under `out/replays/`:
 uv run castle-bench --bots --seeds 20
 ```
 
+Every model qualifies first. `castle-qualify` puts a frozen suite of 300
+questions, sampled from bot games across every request kind and role, to one
+model through the live harness, within the same three limits, and writes
+`out/qualify/<model>.json`. A model that fails more than 2% of its turns for
+transport, empty, unparseable or invalid answers is kept out of rated play;
+refusals and content filters are reported apart and never count. `--mock`
+runs the whole thing free and qualifies nobody; `--build` rewrites the suite,
+which only a deliberate change should do.
+
+```sh
+uv run castle-qualify anthropic/claude-opus-5.5 --dry-run --max-requests 700 --max-tokens 12000000 --max-dollars 40
+uv run castle-qualify anthropic/claude-opus-5.5 --max-requests 700 --max-tokens 12000000 --max-dollars 40
+```
+
 A paid run starts from a schedule. `--plan` prints the power estimate and
-writes `out/schedule.json` for the cast's models; each game of it is played with
+writes `out/schedule.json` for the cast's models, turning them by the compact
+rotation (`--rotation latin` for the full square); with `--qualified` it
+schedules only models that passed. Each game of it is played with
 `castle-live --schedule`, which takes the game's seed, seats and arm from the
 schedule; then `--records` replays, rates and bundles every saved game. Games
 from the single-model, invader and names-visible arms, unfinished games, and
 games any bot or mock played are listed as refused, with the reason.
 
 ```sh
-uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b
+uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b --qualified out/qualify
 uv run castle-live --schedule out/schedule.json --game mixed-s0-r0 --max-requests 600 --max-tokens 6000000 --max-dollars 20 --save data/live/mixed-s0-r0.json
 uv run castle-bench --records data/live
 ```

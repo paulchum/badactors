@@ -17,17 +17,18 @@ src/badactors/
     model harness   prompt, contract_schema, provider, mock_provider, harness, budget,
                     markers, fouls
     truth           claims, factcheck, metrics
-    benchmark       schedule, verify, power, sweep
+    benchmark       schedule, qualify, verify, power, sweep
     show            show, moments, clips
     CLIs            cli (castle-game), live (castle-live), sweep (castle-sweep),
-                    verify (castle-verify), power (castle-power), clips (castle-clips)
+                    qualify (castle-qualify), verify (castle-verify),
+                    power (castle-power), clips (castle-clips)
   bench/            ratings, leaderboard, matrix, steer, seats, dryrun, and
                     cli (castle-bench)
   server/           FastAPI app: owner-access guard and health check
 clips/render/       Remotion project for claim-versus-truth clips
 frontend/           React + Vite placeholder for the castle spectator
 scripts/            castle_three_days.py, a model-free walk through the world
-configs/castle/     castle map, cast and balance numbers
+configs/castle/     castle map, cast, balance numbers, and the frozen qualification suite
 ```
 
 ## Commands
