@@ -8,6 +8,7 @@ the leak checker first, model names included.
 
     uv run castle-game --seed 7
     uv run castle-game --seed 12 --players 8 --save data/game.json
+    uv run castle-game --seed 7 --feed data/feed.json
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from badactors.castle.episode import episode
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, save_record, start_game
 from badactors.castle.rules import GameConfig
+from badactors.castle.show import audience_feed, save_feed
 from badactors.castle.timeline import timeline
 
 _CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
@@ -40,6 +42,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--traitors", type=int, choices=(2, 3))
     parser.add_argument("--max-days", type=int)
     parser.add_argument("--save", help="Write a replayable game record to this path.")
+    parser.add_argument(
+        "--feed", help="Write the audience feed, which clips are made from, here."
+    )
     parser.add_argument(
         "--ledger",
         action="store_true",
@@ -75,9 +80,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.ledger:
         print()
         print(timeline(finished.world))
+    stored = record(castle, cast, played)
     if args.save:
-        save_record(record(castle, cast, played), args.save)
+        save_record(stored, args.save)
         print(f"Saved a replayable record to {args.save}.")
+    if args.feed:
+        save_feed(audience_feed(stored), args.feed)
+        print(f"Saved the audience feed to {args.feed}.")
 
 
 if __name__ == "__main__":
