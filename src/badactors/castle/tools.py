@@ -774,18 +774,32 @@ def _check_register(use: _Use, step: CheckRegister) -> None:
             payload={"thing_id": item.id},
         )
         return
-    day = registered(use.world.ledger, written[-1].words)
-    verdict = (
-        f"the register lists it, a decree of day {day}."
-        if day is not None
-        else "the register lists no such decree."
-    )
+    latest = written[-1]
+    day = registered(use.world.ledger, latest.words)
+    payload = {"thing_id": item.id, "listed": "false"}
+    if latest.signed == STEWARD:
+        # The Steward decrees aloud, in the official channel, and never on
+        # paper: a sheet under the Steward's name is not in the register,
+        # whatever words it copies.
+        verdict = (
+            f"the register has those words as said aloud on day {day}, but the "
+            "Steward puts no decree on paper: this sheet is not the Steward's."
+            if day is not None
+            else "the register lists no such decree."
+        )
+        if day is not None:
+            payload["copied"] = "true"
+    elif day is not None:
+        verdict = f"the register lists it, a decree of day {day}."
+        payload["listed"] = "true"
+    else:
+        verdict = "the register lists no such decree."
     _finding(
         use,
         item,
         own=f"I looked for the {item.name} in the {register.name}: {verdict}",
         describe="{seen} consulted the " + register.name + ".",
-        payload={"thing_id": item.id, "listed": "true" if day else "false"},
+        payload=payload,
     )
 
 

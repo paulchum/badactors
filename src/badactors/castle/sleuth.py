@@ -514,13 +514,22 @@ def _refused(order: Order) -> Order:
     )
 
 
+_FALSE_DECREE = (
+    "lists no such decree",
+    "puts no decree on paper",
+    "crude imitation",
+)
+"""What a register check or a seal inspection says of a decree that is not
+the Steward's."""
+
+
 def _debunked(items: Iterable[ObservationItem]) -> set[str]:
     """Papers this bot has itself found to be false decrees."""
     out: set[str] = set()
     for item in items:
         if item.target is None:
             continue
-        if "lists no such decree" in item.text or "crude imitation" in item.text:
+        if any(phrase in item.text for phrase in _FALSE_DECREE):
             out.add(item.target)
         if "not the Steward's clerk's" in item.text:
             out.add(item.target)
@@ -864,7 +873,7 @@ def _note_to_compare(mind: Mind) -> str | None:
             and item.target not in compared
             and (
                 (item.quote is not None and INCRIMINATING.search(item.quote))
-                or "lists no such decree" in item.text
+                or any(phrase in item.text for phrase in _FALSE_DECREE)
                 or "Steward's seal" in item.text
             )
         ):

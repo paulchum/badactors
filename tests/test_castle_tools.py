@@ -496,6 +496,31 @@ def test_the_register_lists_real_decrees() -> None:
     assert "a decree of day 1" in own(checked, "sol").text
 
 
+def test_a_counterfeit_copying_a_real_decree_is_still_exposed() -> None:
+    world = scene()
+    words = next(
+        entry.quote
+        for entry in world.ledger
+        if entry.type == "summoned" and entry.quote
+    )
+    sheet = paper(world)
+    put(world, "knox", "study")
+    give(world, "knox", sheet)
+    give(world, "knox", "steward_seal")
+    world = act(
+        world,
+        "knox",
+        Counterfeit(thing_id=sheet, text=words or "", intent=VOTE_MARA),
+    )
+    put(world, "sol", "study")
+    give(world, "sol", sheet)
+    world = act(world, "sol", CheckRegister(thing_id=sheet))
+    checked = last(world, "check_register")
+    assert checked.payload["listed"] == "false"
+    assert checked.payload["copied"] == "true"
+    assert "this sheet is not the Steward's" in own(checked, "sol").text
+
+
 def test_the_decree_carries_its_writers_hand() -> None:
     world, sheet = _decree(real_seal=True)
     world.balance = tuned(world.balance, compare_hands={"success": 1.0})
