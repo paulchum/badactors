@@ -87,11 +87,24 @@ from badactors.castle.manipulation import (
 from badactors.castle.night import end_night, poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.papers import glass_state, log_lines, writings
+from badactors.castle.perceive import room_of
 from badactors.castle.play import start_game
 from badactors.castle.table import open_table, table_act, table_advance, table_turn
 from badactors.castle.world import advance_phase, submit_plan, tick, valid_actions
 from castle_scenes import CAST, CASTLE, of_type, recruiting, referee, run_until
-from castle_tools import act, give, last, own, paper, put, refused, scene, seen, tuned
+from castle_tools import (
+    act,
+    give,
+    last,
+    on_mission,
+    own,
+    paper,
+    put,
+    refused,
+    scene,
+    seen,
+    tuned,
+)
 from castle_tools import uses as used
 
 VOTE_MARA = Intent(target="sol", effect="vote", want="mara", window="next_vote")
@@ -617,13 +630,36 @@ def test_backdating_works_only_on_the_guest_book() -> None:
 
 def test_sabotage_is_seen_as_work_unless_the_fumble_shows() -> None:
     for trace, saw in ((1.0, "fumbled at"), (0.0, "used")):
-        world = advance_phase(scene(sabotage={"trace": trace}))
+        world = on_mission(scene(sabotage={"trace": trace}))
         world = act(world, "knox", Sabotage(thing_id="clock_case"))
         entry = last(world, "sabotage")
         assert entry.type == "use"
         assert saw in own(entry, "sol").text
         assert own(entry, "sol").noted == (trace == 1.0)
         assert own(entry, "knox").text == "I worked the clock case, badly on purpose."
+
+
+@pytest.mark.parametrize("thing", ["sideboard", "supply_crates", "cipher_chest"])
+def test_sabotage_spoils_only_todays_station(thing: str) -> None:
+    world = on_mission(scene(), station="clock_case")
+    room = room_of(world, thing)
+    assert room is not None
+    put(world, "knox", room)
+    assert f"tool:sabotage:{thing}" not in valid_actions(world, "knox")
+    world = act(world, "knox", Sabotage(thing_id=thing))
+    blocked = refused(world)
+    assert blocked is not None and blocked.payload["refused"] == "sabotage"
+    assert [record.player_id for record in blocked.witnesses] == ["knox"]
+    assert not used(world, "sabotage")
+    put(world, "knox", "great_hall")
+    assert "tool:sabotage:clock_case" in valid_actions(world, "knox")
+
+
+def test_sabotage_needs_a_mission_briefed_today() -> None:
+    world = advance_phase(scene())
+    assert world.phase == "mission"
+    world = act(world, "knox", Sabotage(thing_id="clock_case"))
+    assert refused(world) is not None and not used(world, "sabotage")
 
 
 def test_sabotage_costs_the_pot_and_the_ledger_has_the_exact_sum() -> None:

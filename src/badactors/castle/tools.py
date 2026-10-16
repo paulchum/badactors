@@ -50,7 +50,6 @@ from badactors.castle.contracts import (
     HeldBy,
     Honeypot,
     Hook,
-    InRoom,
     Inspect,
     InspectSeal,
     Intent,
@@ -1135,7 +1134,7 @@ def _sabotage(use: _Use, step: Sabotage) -> None:
     item = use.reachable(step.thing_id)
     if item is None:
         return
-    if not item.container or not isinstance(use.world.placements.get(item.id), InRoom):
+    if item.id != todays_station(use.world):
         use.refuse(f"there is no work to spoil at the {item.name}")
         return
     fumble = use.attempt.roll("trace", use.attempt.numbers.trace, item.id)
@@ -1410,8 +1409,19 @@ def listing(names: list[str], room: int = 300) -> str:
     return text[:room]
 
 
+def todays_station(world: WorldState) -> str | None:
+    """The station today's mission is worked at, as the Steward briefed it: the
+    only work there is to spoil."""
+    for entry in reversed(world.ledger):
+        if entry.day < world.day:
+            return None
+        if entry.type == "mission_briefing":
+            return entry.payload.get("station")
+    return None
+
+
 def find_thing_of_kind(world: WorldState, kind: str) -> Thing | None:
     return next((item for item in world.map.things if item.kind == kind), None)
 
 
-__all__ = ["find_thing_of_kind", "listing", "use_tool"]
+__all__ = ["find_thing_of_kind", "listing", "todays_station", "use_tool"]

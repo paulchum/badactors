@@ -73,7 +73,7 @@ from badactors.castle.perceive import (
     visible_things,
     worn_garment,
 )
-from badactors.castle.tools import use_tool
+from badactors.castle.tools import todays_station, use_tool
 
 _FORKED = frozenset(
     {
@@ -393,7 +393,7 @@ def _tool_actions(
             offer(tool)
         offer("plant", held)
     if state.phase == "mission":
-        offer("sabotage", open_here_containers(state, near))
+        offer("sabotage", [t for t in near if t == todays_station(state)])
     garments = [t for t in near if things[t].kind == GARMENT]
     offer("disguise", garments)
     offer(
@@ -401,16 +401,6 @@ def _tool_actions(
         [t for t in near if things[t].kind in ("paper", "glass")],
     )
     return out
-
-
-def open_here_containers(state: WorldState, near: list[str]) -> list[str]:
-    things = {item.id: item for item in state.map.things}
-    return [
-        thing_id
-        for thing_id in near
-        if things[thing_id].container
-        and isinstance(state.placements.get(thing_id), InRoom)
-    ]
 
 
 def _heard_rumours(state: WorldState, player_id: str) -> bool:
@@ -1013,7 +1003,6 @@ __all__ = [
     "interrupted",
     "note_replan",
     "note_replan_capped",
-    "open_here_containers",
     "phase_complete",
     "replans_left",
     "route_steps",

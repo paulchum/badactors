@@ -74,7 +74,7 @@ from badactors.castle.rules import GameConfig
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import advance_phase
 from castle_scenes import CAST, CASTLE, MODELS
-from castle_tools import act, give, last, paper, put, scene, seen
+from castle_tools import act, give, last, on_mission, paper, put, scene, seen
 
 _SETTINGS = settings(
     max_examples=15,
@@ -133,7 +133,7 @@ def _tamper(seed: int) -> tuple[WorldState, str]:
 
 
 def _sabotage(seed: int) -> tuple[WorldState, str]:
-    world = advance_phase(scene(seed, sabotage={"trace": 0.5}))
+    world = on_mission(scene(seed, sabotage={"trace": 0.5}))
     return act(world, "knox", Sabotage(thing_id="clock_case")), "knox"
 
 
