@@ -18,3 +18,6 @@ tmp/
 *.sqlite3-wal
 *.sqlite3-shm
 output/
+
+# Bundled audience feeds: built from the engine by scripts/export_feeds.py.
+frontend/public/games/

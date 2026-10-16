@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "feeds": "cd .. && uv run python scripts/export_feeds.py",
+    "predev": "npm run feeds",
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm run feeds",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"
   },
   "dependencies": {
@@ -21,5 +25,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  }
 }
