@@ -485,8 +485,12 @@ def plan_request(game: GameState) -> Request:
     return Request(kind="plan", prompt=prompt)
 
 
+ERROR_LIMIT = 300
+"""The most of an error kept: as much as a retried request can carry back."""
+
+
 def _error(exc: Exception) -> str:
-    return (str(exc) or type(exc).__name__)[:200]
+    return (str(exc) or type(exc).__name__)[:ERROR_LIMIT]
 
 
 def refused(game: GameState, player_id: str, request: Request, error: str) -> int:

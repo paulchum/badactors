@@ -388,8 +388,17 @@ def _any_of(variants: Sequence[Schema], value: Any, path: str) -> list[str]:
             best = errors
     tags = _tags(variants)
     if tags and isinstance(value, dict):
-        return [f"{path}: kind must be one of {', '.join(tags)}"]
+        if len(tags) <= _LISTED:
+            return [f"{path}: kind must be one of {', '.join(tags)}"]
+        kind, tool = value.get("kind"), value.get("tool")
+        given = f"{kind}:{tool}" if tool is not None else str(kind)
+        return [f"{path}: {given!r} is not one of the steps you can take"]
     return best or [f"{path}: matches none of the allowed shapes"]
+
+
+_LISTED = 8
+"""Up to this many allowed kinds are named in an error; past it, the request
+already lists them."""
 
 
 def _discriminated(variant: Schema, value: Any) -> bool:

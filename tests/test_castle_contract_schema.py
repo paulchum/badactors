@@ -163,7 +163,9 @@ def test_plan_steps_are_filtered_to_the_players_kit() -> None:
         ROOT: {"kind": "plan", "diary": "", "plan": {"goal": "", "steps": [hook]}}
     }
     errors = validate(compile_schema(faithful), answer)
-    assert errors and "kind must be one of" in errors[0]
+    assert errors == [
+        f"{ROOT}.plan.steps[0]: 'tool:hook' is not one of the steps you can take"
+    ]
 
 
 def test_validation_errors_name_the_path_and_the_choices() -> None:
