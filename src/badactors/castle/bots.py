@@ -735,13 +735,13 @@ class Mind:
                 target=target,
                 diary=f"{self.n(target)} is hunting us. Tonight, quietly.",
             )
-        return Pass(diary="Not tonight. Save it.")
+        return Pass(reason="Not tonight. Save it.")
 
     def recruit(self) -> Decision:
         options = self.obs.request.options
         alone = not self.obs.fellow_traitors
         if not alone and self.roll("recruit") >= 0.3:
-            return Pass(diary="Two is company enough for now.")
+            return Pass(reason="Two is company enough for now.")
         threat = self.threat()
         target = min(options, key=lambda pid: (threat.get(pid, 0.0), self.roll(pid)))
         return Recruit(

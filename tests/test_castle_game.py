@@ -223,7 +223,7 @@ def test_a_conclave_where_every_traitor_passes_kills_nobody() -> None:
     ) -> Decision | None:
         kind, options = observation.request.kind, observation.request.options
         if kind in ("nominate", "poison", "recruit"):
-            return Pass()
+            return Pass(reason="Not this time.")
         if kind == "vote":
             faithful = [pid for pid in options if game.roles[pid] == "faithful"]
             return Vote(target=(faithful or options)[0])
@@ -241,6 +241,24 @@ def test_a_conclave_where_every_traitor_passes_kills_nobody() -> None:
     assert "named nobody" in (choice.quote or "")
     news = of_type(game, "breakfast_news")[0]
     assert "Nobody died in the night." in (news.quote or "")
+
+
+def test_a_pass_keeps_its_reason_for_the_audience_alone() -> None:
+    def squeamish(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "poison":
+            return Pass(reason="  Not with Mara watching.  ", diary="Too risky.")
+        return None
+
+    game = run_until(referee(seed=6, script=squeamish), 1, "night")
+    passed = [e for e in of_type(game, "declined") if e.payload["request"] == "poison"]
+    assert passed
+    entry = passed[0]
+    assert entry.private == {"reason": "Not with Mara watching.", "diary": "Too risky."}
+    (own,) = entry.witnesses
+    assert own.player_id == entry.actor_id
+    assert own.text == "I let the chance to poison pass: Not with Mara watching."
+    shown = episode(game)
+    assert "Not with Mara watching. · Too risky." in shown
 
 
 def test_night_sends_the_faithful_to_sleep_and_the_traitors_to_the_conclave() -> None:
@@ -481,7 +499,7 @@ def _recruiting(answer: Decision) -> tuple[GameState, str]:
         if kind == "recruit_answer":
             return answer
         if kind == "poison":
-            return Pass()
+            return Pass(reason="Not this time.")
         return _banish_a_traitor(observation, game)
 
     ref = referee(seed=11, script=script)
@@ -946,9 +964,14 @@ def test_a_traitor_who_tries_to_leave_dinner_stays_at_table() -> None:
 
 @pytest.mark.parametrize("blank", [" ", "   ", "\n\t "])
 def test_a_silence_needs_a_reason_in_words(blank: str) -> None:
-    with pytest.raises(ValidationError, match="reason in words"):
+    with pytest.raises(ValidationError, match="in words"):
         StaySilent(reason=blank)
-    assert StaySilent(reason=" biding my time ").reason == " biding my time "
+    with pytest.raises(ValidationError, match="in words"):
+        Pass(reason=blank)
+    with pytest.raises(ValidationError):
+        Pass.model_validate({"kind": "pass"})
+    assert StaySilent(reason=" biding my time ").reason == "biding my time"
+    assert Pass(reason="\tnot tonight ").reason == "not tonight"
 
 
 def test_a_blank_reason_for_silence_is_refused_and_asked_again() -> None:
@@ -964,7 +987,7 @@ def test_a_blank_reason_for_silence_is_refused_and_asked_again() -> None:
 
     game = run_until(referee(seed=6, script=blank), 1, "dinner")
     assert len(asked) == 2
-    assert asked[1].refusal is not None and "reason in words" in asked[1].refusal
+    assert asked[1].refusal is not None and "in words" in asked[1].refusal
     (silence,) = [e for e in of_type(game, "stay_silent") if e.actor_id == "mara"]
     assert silence.private["reason"] == "I have nothing yet."
     assert not [e for e in of_type(game, "turn_failed") if e.actor_id == "mara"]

@@ -101,18 +101,22 @@ class Answer(_Decision):
     text: Words
 
 
+def _reason_in_words(reason: str) -> str:
+    """A private reason, as given less any blank space round it. Only the
+    audience, and its giver, ever read it."""
+    kept = reason.strip()
+    if not kept:
+        raise ValueError("A reason must be given in words, not blank space.")
+    return kept
+
+
 class StaySilent(_Decision):
     """Say nothing on your turn. The reason is private and required."""
 
     kind: Literal["stay_silent"] = "stay_silent"
     reason: str = Field(min_length=1, max_length=300)
 
-    @field_validator("reason")
-    @classmethod
-    def a_reason_in_words(cls, reason: str) -> str:
-        if not reason.strip():
-            raise ValueError("A silence needs its reason in words, not blank space.")
-        return reason
+    _reason = field_validator("reason")(_reason_in_words)
 
 
 class Vote(_Decision):
@@ -137,9 +141,13 @@ class Recruit(_Decision):
 
 
 class Pass(_Decision):
-    """Decline an optional move: poison, an offer, or naming a victim."""
+    """Decline an optional move: poison, an offer, or naming a victim. The
+    reason is private and required, as for a silence."""
 
     kind: Literal["pass"] = "pass"
+    reason: str = Field(min_length=1, max_length=300)
+
+    _reason = field_validator("reason")(_reason_in_words)
 
 
 class Nominate(_Decision):

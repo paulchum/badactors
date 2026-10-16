@@ -108,7 +108,7 @@ def recruiting(answer: Decision) -> Script:
             first = game.starting_traitors[0]
             return Vote(target=first if first in options else options[0])
         if kind == "poison":
-            return Pass()
+            return Pass(reason="Not this time.")
         if kind == "recruit":
             unshielded = [pid for pid in options if shield_held_by(game, pid) is None]
             return Recruit(target=(unshielded or options)[0], text="Join us.")

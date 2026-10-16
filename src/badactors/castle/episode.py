@@ -306,11 +306,11 @@ def _render(
     elif kind == "poison":
         view.say("POISON", entry.text, _aside(game, entry))
     elif kind == "declined" and entry.payload.get("request") == "poison":
-        view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", diary)
+        view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", _why(entry))
     elif kind == "declined" and entry.payload.get("request") == "nominate":
-        view.say("CONCLAVE", f"{who} names nobody.", diary)
+        view.say("CONCLAVE", f"{who} names nobody.", _why(entry))
     elif kind == "declined":
-        view.say("NIGHT", f"{who} decides against recruiting tonight.", diary)
+        view.say("NIGHT", f"{who} decides against recruiting tonight.", _why(entry))
     elif kind == "recruit_offer":
         view.say("OFFER", f"{entry.text} “{entry.quote}”", diary)
     elif kind == "recruit_answer":
@@ -334,6 +334,15 @@ def _render(
         )
     elif kind == "conclave_missed":
         view.say("CONCLAVE", entry.text)
+
+
+def _why(entry: LedgerEntry) -> str:
+    """A private reason and any diary line, set off for the audience."""
+    return " · ".join(
+        value
+        for value in (entry.private.get("reason"), entry.private.get("diary"))
+        if value
+    )
 
 
 def _table_line(view: _Phase, entry: LedgerEntry, who: str, diary: str) -> None:

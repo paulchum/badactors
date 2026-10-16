@@ -217,7 +217,9 @@ def votes_for(target: Callable[[], str], day: int) -> Move_:
 
 
 def no_poison(observation: GameObservation, game: GameState) -> Decision | None:
-    return Pass() if observation.request.kind == "poison" else None
+    return (
+        Pass(reason="Not this time.") if observation.request.kind == "poison" else None
+    )
 
 
 def conclave_spares(*spared: str) -> Move_:
