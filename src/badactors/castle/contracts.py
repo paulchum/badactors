@@ -808,7 +808,10 @@ class WorldState(Contract):
     ledger: list[LedgerEntry] = Field(default_factory=list)
     ledger_seq: int = Field(default=0, ge=0)
     inspected: dict[str, list[str]] = Field(default_factory=dict)
-    searched: dict[str, list[str]] = Field(default_factory=dict)
+    searched: dict[str, dict[str, int]] = Field(default_factory=dict)
+    """For each player, the ledger entry of their latest search of each room. An
+    index over the ledger, kept as it grows: what the search found is frozen in
+    that entry, so a search is a look at one moment, never a window on the room."""
     replans: dict[str, int] = Field(default_factory=dict)
     kits: dict[str, Kit] = Field(default_factory=dict)
     """Who carries the traitor kit. Anyone not listed has the household's."""
@@ -861,6 +864,7 @@ class WorldState(Contract):
             ("kit", set(self.kits)),
             ("disguise", set(self.disguises) | set(self.disguises.values())),
             ("notebook", set(self.notebook)),
+            ("search", set(self.searched)),
         ):
             if not keys <= set(self.players):
                 raise ValueError(f"A {label} names someone who is not in this world.")

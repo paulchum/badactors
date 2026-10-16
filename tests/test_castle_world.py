@@ -60,7 +60,7 @@ from badactors.castle.director import (
     run_day,
     run_phase,
 )
-from badactors.castle.ledger import custody_chain, replay_placements
+from badactors.castle.ledger import custody_chain, replay_placements, replay_searches
 from badactors.castle.mapfile import (
     build_world,
     lint_map,
@@ -414,6 +414,45 @@ def test_hidden_objects_need_a_search() -> None:
     world = tick(world)
     assert "brass_key" in visible_things(world, "june", "library")
     assert "brass_key" not in visible_things(world, "mara", "library")
+
+
+def test_a_search_is_a_look_not_a_window() -> None:
+    """A search fixes what it found at that tick. Something hidden in the room
+    afterwards stays out of the searcher's sight, and something found and since
+    taken is no longer where they found it, until they search again."""
+    world = _walk(_world(), "june", "gallery", "library")
+    world = submit_plan(world, "june", Plan(steps=[Search()]))
+    world = tick(world)
+    world = _walk(world, "june", "gallery")
+    world = _walk(world, "knox", "gallery", "library")
+    world = submit_plan(
+        world,
+        "knox",
+        Plan(
+            steps=[
+                Take(thing_id="almanac"),
+                Drop(thing_id="almanac", hidden=True),
+                Search(),
+                Take(thing_id="brass_key"),
+            ]
+        ),
+    )
+    for _ in range(4):
+        world = tick(world)
+    assert world.placements["almanac"] == InRoom(room_id="library", hidden=True)
+    assert world.placements["brass_key"] == HeldBy(player_id="knox")
+    world = _walk(world, "knox", "gallery")
+    world = _walk(world, "june", "library")
+
+    here = visible_things(world, "june", "library")
+    assert "almanac" not in here, "hidden after June's search"
+    assert "brass_key" not in here, "taken since June found it"
+    assert_no_leak(build_observation(world, "june"), world)
+
+    world = submit_plan(world, "june", Plan(steps=[Search()]))
+    world = tick(world)
+    assert "almanac" in visible_things(world, "june", "library")
+    assert replay_searches(world.ledger) == world.searched
 
 
 # ------------------------------------------------------------------ whispers
@@ -1080,6 +1119,7 @@ class CastleMachine(RuleBasedStateMachine):
     def _check(self) -> None:
         world = self._now()
         _assert_custody(world)
+        assert replay_searches(world.ledger) == world.searched
         for player_id in world.seats:
             assert_no_leak(build_observation(world, player_id), world)
         assert world.ledger[: len(self.seen)] == self.seen, "ledger was rewritten"

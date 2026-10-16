@@ -30,10 +30,12 @@ from badactors.castle.contracts import (
     CleanUp,
     Counterfeit,
     Disguise,
+    Drop,
     Forge,
     Gaslight,
     Honeypot,
     Hook,
+    InRoom,
     Intent,
     Plan,
     Plant,
@@ -41,8 +43,10 @@ from badactors.castle.contracts import (
     Rumor,
     Sabotage,
     ScopedObservation,
+    Search,
     Steal,
     Step,
+    Take,
     Talk,
     Tamper,
     ToolUse,
@@ -54,7 +58,7 @@ from badactors.castle.contracts import (
 from badactors.castle.decisions import Decision, Poison
 from badactors.castle.director import run_phase
 from badactors.castle.game import living_faithful, living_traitors
-from badactors.castle.ledger import replay_notebook, replay_placements
+from badactors.castle.ledger import replay_notebook, replay_placements, replay_searches
 from badactors.castle.night import poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import run_game, start_game
@@ -62,7 +66,7 @@ from badactors.castle.rules import GameConfig
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import advance_phase
 from castle_scenes import CAST, CASTLE, MODELS
-from castle_tools import act, give, paper, put, scene
+from castle_tools import act, give, paper, put, scene, seen
 
 _SETTINGS = settings(
     max_examples=15,
@@ -514,3 +518,69 @@ def test_the_drawn_runs_reach_the_traitor_kit() -> None:
     run()
     wanted = {"forge", "hook", "gaslight", "rumor", "tamper", "clean_up", "disguise"}
     assert wanted <= set(_USED), sorted(wanted - set(_USED))
+
+
+# ------------------------------------------------ a search is a look, not a window
+
+_BOXES = {
+    "great_hall": ("clock_case", "sideboard"),
+    "dining_room": ("supply_crates",),
+    "chapel": ("cipher_chest",),
+    "study": ("steward_desk",),
+    "library": (),
+}
+
+
+@_SETTINGS
+@given(
+    seed=st.integers(min_value=0, max_value=4096),
+    room=st.sampled_from(sorted(_BOXES)),
+    moves=st.lists(st.integers(min_value=0, max_value=3), min_size=1, max_size=4),
+)
+def test_property_a_search_never_shows_what_was_hidden_after_it(
+    seed: int, room: str, moves: list[int]
+) -> None:
+    """Whatever is hidden, stowed or taken in a room after someone searched it,
+    what they see there is what is in plain sight now, plus what their search
+    found that is still exactly where they found it."""
+    world = scene(seed)
+    put(world, "mara", room)
+    world = act(world, "mara", Search())
+    found = {
+        thing_id: perceive.spot(placement)
+        for thing_id, placement in world.placements.items()
+        if perceive.spot(placement) is not None
+        and perceive.room_of(world, thing_id) == room
+    }
+    put(world, "mara", "kitchen")
+    put(world, "knox", room)
+    stowed: set[str] = set()
+    for move in moves:
+        sheet = paper(world)
+        give(world, "knox", sheet)
+        boxes = _BOXES[room]
+        if move == 0 or not boxes:
+            world = act(world, "knox", Drop(thing_id=sheet, hidden=True))
+        elif move == 1:
+            world = act(world, "knox", Drop(thing_id=sheet, into=boxes[0]))
+        elif move == 2:
+            world = act(world, "knox", Drop(thing_id=sheet))
+        else:
+            world = act(world, "knox", Search())
+            taken = sorted(
+                set(found) & set(perceive.visible_things(world, "knox", room))
+            )
+            if taken:
+                world = act(world, "knox", Take(thing_id=taken[0]))
+        now = perceive.spot(world.placements[sheet])
+        if now is not None and now != found.get(sheet):
+            stowed.add(sheet)
+    put(world, "knox", "kitchen")
+    put(world, "mara", room)
+
+    for view in seen(world, "mara").visible_objects:
+        placement = world.placements[view.id]
+        in_sight = isinstance(placement, InRoom) and not placement.hidden
+        assert in_sight or found.get(view.id) == perceive.spot(placement), view.id
+        assert view.id not in stowed or in_sight
+    assert replay_searches(world.ledger) == world.searched

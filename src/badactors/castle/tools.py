@@ -50,7 +50,6 @@ from badactors.castle.contracts import (
     HeldBy,
     Honeypot,
     Hook,
-    InContainer,
     InRoom,
     Inspect,
     InspectSeal,
@@ -99,9 +98,11 @@ from badactors.castle.perceive import (
     Perception,
     awake_in,
     carried_things,
+    pack_finds,
     perceive,
     room_of,
     seen_as,
+    spot,
     worn_garment,
 )
 
@@ -333,19 +334,13 @@ class _Use:
 
 def _search(use: _Use) -> None:
     world, room_id = use.world, use.room_id
-    hidden = sorted(
-        thing_id
+    finds = {
+        thing_id: where
         for thing_id, placement in world.placements.items()
-        if (
-            isinstance(placement, InRoom)
-            and placement.room_id == room_id
-            and placement.hidden
-        )
-        or (isinstance(placement, InContainer) and room_of(world, thing_id) == room_id)
-    )
-    world.searched.setdefault(use.player.id, [])
-    if room_id not in world.searched[use.player.id]:
-        world.searched[use.player.id].append(room_id)
+        if (where := spot(placement)) is not None
+        and room_of(world, thing_id) == room_id
+    }
+    hidden = sorted(finds)
     found = listing([thing(world, thing_id).name for thing_id in hidden])
     burned = ashes(world.ledger, room_id)
     own = (
@@ -361,12 +356,17 @@ def _search(use: _Use) -> None:
         own_text=own,
         silent=False,
     )
-    use.record(
+    entry = use.record(
         perception,
         type="search",
         text=f"{use.player.name} searched the {use.room_name}.",
-        payload={"found": str(len(hidden)), "ash": str(len(burned))},
+        payload={
+            "found": str(len(hidden)),
+            "finds": pack_finds(finds),
+            "ash": str(len(burned)),
+        },
     )
+    world.searched.setdefault(use.player.id, {})[room_id] = entry.seq
 
 
 def _inspect(use: _Use, step: Inspect) -> None:

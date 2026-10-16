@@ -118,7 +118,7 @@ def build_observation(
             _thing_view(state, viewer_id, thing_id)
             for thing_id in visible_things(state, viewer_id, room.id)
         ]
-        searched = set(state.searched.get(viewer_id, []))
+        searched = set(state.searched.get(viewer_id, {}))
         searched_here = room.id in searched
         facts = [
             fact.text
@@ -541,7 +541,7 @@ def _assert_searched(
     viewer_id: str,
 ) -> None:
     room = observation.room
-    here = room is not None and room.id in state.searched.get(viewer_id, [])
+    here = room is not None and room.id in state.searched.get(viewer_id, {})
     if observation.searched_here != here:
         raise LeakageError(
             "Observation misstates whether this viewer has searched this room."
@@ -558,7 +558,7 @@ def _assert_facts(
         return
     if room is None:
         raise LeakageError("A viewer in a passage cannot read facts in a room.")
-    searched = set(state.searched.get(viewer_id, []))
+    searched = set(state.searched.get(viewer_id, {}))
     private = state.map.room(room.id).private
     allowed = {
         fact.text

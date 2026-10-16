@@ -221,6 +221,20 @@ def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
     return notebook
 
 
+def replay_searches(ledger: Iterable[LedgerEntry]) -> dict[str, dict[str, int]]:
+    """Rebuild every player's latest search of each room from the ledger alone."""
+    searched: dict[str, dict[str, int]] = {}
+    for entry in ledger:
+        if (
+            entry.type == "search"
+            and entry.payload.get("tool") == "search"
+            and entry.actor_id is not None
+            and entry.room_id is not None
+        ):
+            searched.setdefault(entry.actor_id, {})[entry.room_id] = entry.seq
+    return searched
+
+
 def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
     """The entry with this sequence number. Sequence numbers are a gapless run
     from 1, so this is an index, not a search."""
@@ -304,6 +318,7 @@ __all__ = [
     "recent_records",
     "replay_notebook",
     "replay_placements",
+    "replay_searches",
     "seed_placements",
     "witnessed_by",
 ]
