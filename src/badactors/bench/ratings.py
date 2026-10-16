@@ -71,3 +71,8 @@ def rate(ratings: Sequence[Rating], ranks: Sequence[int]) -> list[Rating]:
         new_sigma_sq = sigma_sq[i] * max(1.0 - delta, KAPPA)
         updated.append(Rating(new_mu, sqrt(new_sigma_sq)))
     return updated
+
+
+def ranks_from_scores(scores: Sequence[float]) -> list[int]:
+    """Convert "higher score is better" into ranks (1 = best; ties share a rank)."""
+    return [1 + sum(1 for other in scores if other > score) for score in scores]

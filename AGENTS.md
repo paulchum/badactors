@@ -8,20 +8,14 @@ Frontier AI models play a hidden-role social-deduction game inside a simulated w
 
 ```text
 src/badactors/
-  schemas.py      data contract for the hidden-role game
-  engine/         deterministic referee for the current talk-only game
-  scoping.py      builds each player's prompt context from the authoritative state
-  agents/ host/   turn loop, prompts, host narration
-  providers/      OpenRouter provider and deterministic mock
-  castle/         the Castle: world core, game layer, bots, castle-game CLI
-  simulation/     persistent village world, worker, arena bridge
-  bench/          OpenSkill deception/detection ratings
-  clips/          moment detection; clips/render is a Remotion project
-  platform/       casting, ladder, leaderboard, play-money economy
-  server/         FastAPI app, SSE stream, world routes
-frontend/         React + Vite spectator app
-scripts/          live smoke run and persistence verifiers
-configs/          example cast and world; castle/ holds the castle map and cast
+  castle/         the Castle: world core, game layer, scoping, bots, castle-game and castle-sweep CLIs
+  providers/      OpenRouter transport and deterministic mock, to be ported into the castle harness
+  bench/          ratings.py: OpenSkill (Weng-Lin) ratings for the benchmark
+  clips/render/   Remotion project for claim-versus-truth clips
+  server/         FastAPI app: owner-access guard and health check
+frontend/         React + Vite placeholder for the castle spectator
+scripts/          castle_three_days.py, a model-free walk through the world
+configs/castle/   castle map, cast and balance numbers
 ```
 
 ## Commands
