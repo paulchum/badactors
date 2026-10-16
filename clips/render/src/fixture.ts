@@ -30,7 +30,7 @@ export const fixture: ClipProps = {
       "frames": 90
     }
   ],
-  "banner": "Reference bots: every seat was played by a seeded bot. No model.",
+  "banner": "REFERENCE BOTS · every seat was played by a seeded bot. No model played.",
   "claim": {
     "speaker": {
       "name": "Reference bot #1",

@@ -20,7 +20,10 @@ characters; a seat a bot played is a "Reference bot", and a game no model played
 says so on every frame. Each beat's length is set here, from its words, so the
 render is a function of the props alone.
 
-    uv run castle-game --seed 7 --feed data/feed.json
+:func:`highlights` prints the same moments for a terminal: the twist first, if
+the game has one, then the best of the rest, in about forty lines.
+
+    uv run castle-game --seed 7 --feed data/feed.json --highlights
     uv run castle-clips data/feed.json --top 1
 """
 
@@ -28,6 +31,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import textwrap
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -41,6 +46,7 @@ from badactors.castle.contracts import (
     Contract,
     Lighting,
 )
+from badactors.castle.episode import REFERENCE_BANNER
 from badactors.castle.moments import LineField
 from badactors.castle.show import (
     Feed,
@@ -56,7 +62,6 @@ FPS = 30
 WIDTH = 1080
 HEIGHT = 1920
 
-REFERENCE_BANNER = "Reference bots: every seat was played by a seeded bot. No model."
 LEDGER_ONLY = "What the ledger shows. Not yet fact-checked."
 FACT_CHECKED = "The fact-checker's verdict."
 
@@ -300,6 +305,12 @@ class _View:
         seat = self.seats[player_id]
         return seat.audience if self.by_model else seat.character
 
+    def names(self, player_ids: Sequence[str]) -> str:
+        labels = [self.name(pid) for pid in player_ids]
+        if len(labels) <= 1:
+            return "".join(labels)
+        return ", ".join(labels[:-1]) + " and " + labels[-1]
+
     def speaker(self, player_id: str) -> Speaker:
         seat: FeedSeat = self.seats[player_id]
         return Speaker(
@@ -432,6 +443,96 @@ class _View:
         ]
 
 
+# ---------------------------------------------------------------- highlights
+
+HIGHLIGHT_LINES = 40
+WIDTH_CHARS = 96
+PER_KIND = 2
+"""The most moments of one kind the highlights show, so a game's best stretch
+is not five banishments in a row."""
+
+
+def highlights(
+    feed: Feed, *, names: NameStyle = "character", lines: int = HIGHLIGHT_LINES
+) -> str:
+    """A game's best moments for a terminal, in about ``lines`` lines: the
+    twist ending called out first, then the rest by rank."""
+    view = _View(feed, names)
+    game = feed.game
+    out: list[str] = []
+    if game.reference_bots:
+        out.append(REFERENCE_BANNER)
+    out.append(f"{game.castle.upper()} · seed {game.seed} · {_result(feed)}")
+    traitors = view.names(game.starting_traitors)
+    recruits = [seat.id for seat in feed.seats if seat.recruited_by is not None]
+    joined = f"; recruited: {view.names(recruits)}" if recruits else ""
+    out.append(f"{len(feed.seats)} guests. The traitors: {traitors}{joined}.")
+    twist = next((m for m in feed.moments if m.kind == "twist_ending"), None)
+    if twist is not None:
+        out.extend(["", *_block(view, twist, "THE TWIST")])
+    out.extend(["", "THE BEST MOMENTS"])
+    shown: Counter[str] = Counter()
+    footer = 2
+    for moment in feed.moments:
+        if moment is twist or shown[moment.kind] >= PER_KIND:
+            continue
+        block = _block(view, moment, f"{sum(shown.values()) + 1}. {moment.label}")
+        if len(out) + len(block) + footer > lines:
+            break
+        out.extend(block)
+        shown[moment.kind] += 1
+    out.extend(
+        [
+            "",
+            f"{len(feed.moments)} moments in all. castle-clips makes a clip of "
+            "the first one a private line fits.",
+        ]
+    )
+    return "\n".join(out)
+
+
+def _result(feed: Feed) -> str:
+    game = feed.game
+    if game.winner is None:
+        return f"unfinished after day {game.days}"
+    side = "the Faithful" if game.winner == "faithful" else "the traitors"
+    return f"{side} win on day {game.days}"
+
+
+def _block(view: _View, moment: FeedMoment, title: str) -> list[str]:
+    """One moment: its title and when, its headline, and its claim and private
+    line when it has them."""
+    indent = " " * 4
+    ticks = (
+        f"tick {moment.first_tick}"
+        if moment.first_tick == moment.last_tick
+        else f"ticks {moment.first_tick}-{moment.last_tick}"
+    )
+    lines = [f"{title} · day {moment.day} · {ticks}"]
+    lines.extend(_wrapped(view.headline(moment), indent, 2))
+    if moment.claim is not None:
+        claim = view.event(moment.claim)
+        who = view.name(claim.actor or "")
+        lines.extend(_wrapped(f"{who}: “{view.quote(claim)}”", indent, 1))
+    if moment.line is not None:
+        held = view.event(moment.line.seq)
+        words = view.private(held, moment.line.field)
+        who = view.name(held.actor or "")
+        lines.extend(_wrapped(f"⟨{who}, privately: {words}⟩", indent, 2))
+    return lines
+
+
+def _wrapped(text: str, indent: str, most: int) -> list[str]:
+    return textwrap.wrap(
+        text,
+        width=WIDTH_CHARS,
+        initial_indent=indent,
+        subsequent_indent=indent,
+        max_lines=most,
+        placeholder=" …",
+    )
+
+
 # ----------------------------------------------------------------------- CLI
 
 
@@ -492,6 +593,7 @@ if __name__ == "__main__":
 __all__ = [
     "FPS",
     "HEIGHT",
+    "HIGHLIGHT_LINES",
     "LEDGER_ONLY",
     "REFERENCE_BANNER",
     "WIDTH",
@@ -508,6 +610,7 @@ __all__ = [
     "Witnessed",
     "clip_props",
     "clip_ready",
+    "highlights",
     "main",
     "write_props",
 ]

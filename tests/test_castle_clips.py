@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -12,13 +13,17 @@ from pathlib import Path
 import pytest
 
 from badactors.castle import clips, play, show
+from badactors.castle.cli import main as castle_game
 from badactors.castle.clips import (
+    HIGHLIGHT_LINES,
     LEDGER_ONLY,
+    PER_KIND,
     REFERENCE_BANNER,
     ClipProps,
     NotClipReady,
     clip_props,
     clip_ready,
+    highlights,
     main,
 )
 from badactors.castle.play import record
@@ -228,3 +233,38 @@ def test_the_composition_reads_the_props_python_writes() -> None:
     ):
         for field in model.model_fields:
             assert re.search(rf"\b{field}\??:", source), (model.__name__, field)
+
+
+# ------------------------------------------------------------------ highlights
+
+
+def test_highlights_call_out_the_twist_then_the_best_of_the_rest(
+    feeds: list[Feed],
+) -> None:
+    feed = feeds[SEEDS.index(56)]
+    shown = highlights(feed)
+    lines = shown.splitlines()
+    assert len(lines) <= HIGHLIGHT_LINES
+    assert lines[0] == REFERENCE_BANNER
+    twist = lines.index(next(line for line in lines if line.startswith("THE TWIST")))
+    assert twist < lines.index("THE BEST MOMENTS")
+    assert "still among them" in "\n".join(lines[twist : twist + 3])
+    labels = Counter(
+        line.split(" · ")[0].split(". ", 1)[1]
+        for line in lines
+        if re.match(r"^\d+\. ", line)
+    )
+    assert labels and max(labels.values()) <= PER_KIND
+    named = highlights(feed, names="model")
+    assert "Reference bot #" in named and "[Reference bot #" in named
+
+
+def test_castle_game_leads_with_the_highlights(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "feed.json"
+    castle_game(["--seed", "56", "--feed", str(path), "--highlights"])
+    out = capsys.readouterr().out
+    assert len(out.splitlines()) <= HIGHLIGHT_LINES + 1
+    assert "THE TWIST" in out and "══ DAY 1" not in out
+    assert out.splitlines()[-1] == f"Saved the audience feed to {path}."

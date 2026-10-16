@@ -9,6 +9,7 @@ the leak checker first, model names included.
     uv run castle-game --seed 7
     uv run castle-game --seed 12 --players 8 --save data/game.json
     uv run castle-game --seed 7 --feed data/feed.json
+    uv run castle-game --seed 7 --highlights
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
+from badactors.castle.clips import highlights
 from badactors.castle.episode import episode
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, save_record, start_game
@@ -44,6 +46,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--save", help="Write a replayable game record to this path.")
     parser.add_argument(
         "--feed", help="Write the audience feed, which clips are made from, here."
+    )
+    parser.add_argument(
+        "--highlights",
+        action="store_true",
+        help="Print only the game's best moments, the twist first, not the episode.",
     )
     parser.add_argument(
         "--model-names",
@@ -78,21 +85,26 @@ def main(argv: list[str] | None = None) -> None:
     )
     finished = played.game
     names: NameStyle = "model" if args.model_names else "character"
-    print(episode(finished, agents=played.agents, names=names))
-    print(
-        f"{played.observations} observations, every one leak-checked; "
-        f"{len(finished.world.ledger)} ledger entries; "
-        f"{sum(len(entry.rolls) for entry in finished.world.ledger)} recorded rolls."
-    )
+    stored = record(castle, cast, played)
+    feed = audience_feed(stored) if args.feed or args.highlights else None
+    if args.highlights and feed is not None:
+        print(highlights(feed, names=names))
+    else:
+        print(episode(finished, agents=played.agents, names=names))
+        print(
+            f"{played.observations} observations, every one leak-checked; "
+            f"{len(finished.world.ledger)} ledger entries; "
+            f"{sum(len(entry.rolls) for entry in finished.world.ledger)} recorded "
+            "rolls."
+        )
     if args.ledger:
         print()
         print(timeline(finished.world))
-    stored = record(castle, cast, played)
     if args.save:
         save_record(stored, args.save)
         print(f"Saved a replayable record to {args.save}.")
-    if args.feed:
-        save_feed(audience_feed(stored), args.feed)
+    if args.feed and feed is not None:
+        save_feed(feed, args.feed)
         print(f"Saved the audience feed to {args.feed}.")
 
 
