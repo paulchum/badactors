@@ -11,22 +11,31 @@
   --ink: #07090d;
   --text: #fff7ed;
   --traitor: #e13d45;
+  --reveal: #d89b1d;
+  -webkit-tap-highlight-color: transparent;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   background:
-    radial-gradient(circle at 50% 0%, rgb(225 61 69 / 16%), transparent 30rem),
+    radial-gradient(circle at 50% 0%, rgb(225 61 69 / 14%), transparent 30rem),
     linear-gradient(180deg, #111820 0%, var(--ink) 30%, #050609 100%);
+  background-attachment: fixed;
 }
 
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   color: var(--text);
 }
 
@@ -36,11 +45,116 @@ body {
   align-items: baseline;
   min-width: max-content;
   color: var(--text);
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 950;
   line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .brand-mask {
   color: var(--traitor);
+}
+
+/* A diary line: someone's own private words, on paper. */
+.diary {
+  background:
+    repeating-linear-gradient(180deg, transparent 0 23px, rgb(80 60 30 / 12%) 23px 24px),
+    linear-gradient(180deg, #efe4cc, #e3d4b4);
+  color: #2b2116;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-style: italic;
+  line-height: 24px;
+}
+
+/* The stamp: a verdict pressed on at an angle. */
+.stamp {
+  display: inline-block;
+  border: 3px solid currentColor;
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: rotate(-6deg);
+  mix-blend-mode: screen;
+}
+
+.stamp-in {
+  animation: stamp-in 380ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes stamp-in {
+  from {
+    opacity: 0;
+    transform: rotate(-6deg) scale(2.4);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-6deg) scale(1);
+  }
+}
+
+.caption-in {
+  animation: caption-in 420ms ease-out both;
+}
+
+@keyframes caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The curtain that drops on the answer, then lifts on the truth. */
+.curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgb(0 0 0 / 28%) 0 6px, transparent 6px 38px),
+    linear-gradient(180deg, #5b0d14, #2a0509);
+  animation: curtain 1500ms cubic-bezier(0.7, 0, 0.3, 1) both;
+}
+
+@keyframes curtain {
+  0% {
+    transform: translateY(-100%);
+  }
+  40%,
+  55% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-100%);
+  }
+}
+
+.token {
+  transition: transform 520ms cubic-bezier(0.4, 0, 0.2, 1), opacity 300ms;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stamp-in,
+  .caption-in,
+  .curtain,
+  .token {
+    animation: none !important;
+    transition: none !important;
+  }
+  .curtain {
+    display: none;
+  }
 }
