@@ -918,6 +918,32 @@ def test_a_traitor_who_tries_to_leave_dinner_stays_at_table() -> None:
     assert _sightings_of_the_stair(game) == []
 
 
+@pytest.mark.parametrize("blank", [" ", "   ", "\n\t "])
+def test_a_silence_needs_a_reason_in_words(blank: str) -> None:
+    with pytest.raises(ValidationError, match="reason in words"):
+        StaySilent(reason=blank)
+    assert StaySilent(reason=" biding my time ").reason == " biding my time "
+
+
+def test_a_blank_reason_for_silence_is_refused_and_asked_again() -> None:
+    asked: list[Request] = []
+
+    def blank(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "accuse" and observation.viewer_id == "mara":
+            asked.append(observation.request)
+            if observation.request.refusal is None:
+                return StaySilent.model_validate({"reason": "   "})
+            return StaySilent(reason="I have nothing yet.")
+        return None
+
+    game = run_until(referee(seed=6, script=blank), 1, "dinner")
+    assert len(asked) == 2
+    assert asked[1].refusal is not None and "reason in words" in asked[1].refusal
+    (silence,) = [e for e in of_type(game, "stay_silent") if e.actor_id == "mara"]
+    assert silence.private["reason"] == "I have nothing yet."
+    assert not [e for e in of_type(game, "turn_failed") if e.actor_id == "mara"]
+
+
 def test_an_illegal_answer_is_a_failed_turn() -> None:
     def cheat(observation: GameObservation, game: GameState) -> Decision | None:
         if observation.request.kind == "vote" and observation.viewer_id == "mara":

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from badactors.castle.contracts import (
     QUOTE_LIMIT,
@@ -106,6 +106,13 @@ class StaySilent(_Decision):
 
     kind: Literal["stay_silent"] = "stay_silent"
     reason: str = Field(min_length=1, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def a_reason_in_words(cls, reason: str) -> str:
+        if not reason.strip():
+            raise ValueError("A silence needs its reason in words, not blank space.")
+        return reason
 
 
 class Vote(_Decision):
