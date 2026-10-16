@@ -828,7 +828,7 @@ def test_only_the_host_writes_in_the_stewards_channel() -> None:
 def test_a_failed_turn_is_a_visible_failure_not_a_choice() -> None:
     def flaky(observation: GameObservation, game: GameState) -> Decision | None:
         if observation.request.kind == "vote" and observation.viewer_id == "mara":
-            raise TurnFailure("the provider returned nothing")
+            raise TurnFailure("the provider returned nothing", "empty")
         return None
 
     ref = referee(seed=6, script=flaky)
@@ -838,6 +838,7 @@ def test_a_failed_turn_is_a_visible_failure_not_a_choice() -> None:
     assert failed[0].payload == {
         "request": "vote",
         "error": "the provider returned nothing",
+        "reason": "empty",
     }
     seen = [record for record in failed[0].witnesses if record.player_id != "mara"]
     assert seen and all("did nothing" in record.text for record in seen)

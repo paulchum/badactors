@@ -7,7 +7,13 @@ answer that does not parse, does not answer the question, or names a model is
 refused privately and the question put once more, with the reason. A player that
 still fails to answer — a transport error, a refusal, a second bad answer — gets
 a visible ``turn_failed`` entry: the character hesitates and does nothing, and it
-is never dressed up as a choice.
+is never dressed up as a choice. The entry says why, by a reason class (see
+:data:`FailureReason`). Words that seek real-world harm are blocked and logged as
+a foul (``fouls``), and control tokens defused in a model's prompt are logged
+for the audience; both replay from the log, like everything else.
+
+A game stopped early — its budget spent, or the run aborted — keeps a partial
+record that replays to exactly where it stopped.
 
 Phases run on the world's clock. Missions and free time open with a plan from
 everyone and re-prompt on interruption, exactly as the phase-1 director does;
@@ -27,7 +33,7 @@ from typing import Literal, Protocol, Self
 
 from pydantic import Field, ValidationError, model_validator
 
-from badactors.castle.anonymity import Aliases, aliases, check_words
+from badactors.castle.anonymity import Aliases, aliases, check_words, public_words
 from badactors.castle.cast import Cast
 from badactors.castle.contracts import (
     CastleMap,
@@ -48,7 +54,13 @@ from badactors.castle.decisions import (
     RequestKind,
     check_decision,
 )
-from badactors.castle.director import prompt_everyone, prompt_interrupted
+from badactors.castle.director import (
+    interrupted,
+    opening,
+    prompt_everyone,
+    prompt_interrupted,
+)
+from badactors.castle.fouls import ContentScope, Foul, ScopeCheck, foul
 from badactors.castle.game import (
     GameState,
     fork_game,
@@ -119,8 +131,41 @@ def is_model(agent: str) -> bool:
     return agent.startswith("model:") and len(agent) > len("model:")
 
 
+FailureReason = Literal[
+    "transport", "content_filter", "refusal", "empty", "unparseable", "invalid"
+]
+"""Why a turn failed: no answer came back (transport), the provider stopped it
+(content_filter), the model declined in words (refusal), or what came back was
+empty, not JSON (unparseable), or not a legal answer (invalid)."""
+
+
 class TurnFailure(Exception):
-    """A player gave no usable answer. Raised by players, never by the rules."""
+    """A player gave no usable answer. Raised by players, never by the rules.
+
+    It fails the turn at once: a transport error, a content filter or a refusal
+    is a result, not a mistake a second ask could correct."""
+
+    def __init__(self, message: str = "", reason: FailureReason = "transport") -> None:
+        super().__init__(message)
+        self.reason: FailureReason = reason
+
+
+class BadAnswer(IllegalDecision):
+    """An answer came back but cannot be used: empty, not JSON, or not a legal
+    answer. Like any refused answer, the question is put once more with the
+    error."""
+
+    def __init__(self, message: str, reason: FailureReason) -> None:
+        super().__init__(message)
+        self.reason: FailureReason = reason
+
+
+class Defused(Contract):
+    """Control tokens defused in one of the records a model was shown, before
+    it was shown them (see ``markers``)."""
+
+    seq: int = Field(ge=1)
+    markers: list[str] = Field(min_length=1)
 
 
 class LoggedDecision(Contract):
@@ -136,9 +181,15 @@ class LoggedDecision(Contract):
     decision: Decision | None = None
     error: str | None = None
     refused: bool = False
+    reason: FailureReason | None = None
+    """Why a refused or failed answer could not be used."""
+    foul: str | None = None
+    """The real-world harm a blocked answer sought. Its words are not kept."""
     seen: list[int] = Field(default_factory=list)
     """The ledger entries whose content was in front of the player when they
     answered, by :func:`~badactors.castle.observe.observed`."""
+    defused: list[Defused] = Field(default_factory=list)
+    """Records whose control tokens were defused in the player's prompt."""
 
 
 type Turn = Callable[[GameState], tuple[str, Request] | None]
@@ -157,9 +208,12 @@ class Referee:
     models: tuple[str, ...] = ()
     log: list[LoggedDecision] = field(default_factory=list)
     observations: int = 0
+    scope: ContentScope = field(default_factory=ScopeCheck)
     aliases: Aliases = field(init=False)
     seen: list[int] = field(default_factory=list, init=False, repr=False)
     """What the observation behind the answer being taken showed."""
+    defused: list[Defused] = field(default_factory=list, init=False, repr=False)
+    """Forgeries defused in the prompt behind the answer being taken."""
     interviewed: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -210,34 +264,63 @@ class Referee:
         for attempt in (1, 2):
             decision: Decision | None = None
             self.seen = []
+            self.defused = []
             try:
                 decision = self.decide(player_id, asked)
                 check_decision(request, decision)
                 if request.kind not in AUDIENCE_ONLY:
                     check_words(decision, self.aliases)
+                    self.check_scope(decision)
             except TurnFailure as exc:
+                self._note_defused(player_id)
                 error = _error(exc)
-                self._log(player_id, request, error=error)
-                return None, self._failed(player_id, request, error)
+                self._log(player_id, request, error=error, reason=exc.reason)
+                return None, self._failed(player_id, request, error, exc.reason)
             except (IllegalDecision, ValidationError) as exc:
+                self._note_defused(player_id)
                 error = _error(exc)
-                self._log(player_id, request, decision, error=error, refused=True)
+                reason: FailureReason = getattr(exc, "reason", "invalid")
+                category = exc.category if isinstance(exc, Foul) else None
+                self._log(
+                    player_id,
+                    request,
+                    None if category is not None else decision,
+                    error=error,
+                    refused=True,
+                    reason=reason,
+                    foul=category,
+                )
+                if category is not None:
+                    foul(self.game, player_id, request, category)
                 if attempt == 2:
-                    return None, self._failed(player_id, request, error)
+                    return None, self._failed(player_id, request, error, reason)
                 refused(self.game, player_id, request, error)
                 asked = request.model_copy(update={"refusal": error})
                 continue
+            self._note_defused(player_id)
             self._log(player_id, request, decision)
             return decision, None
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def _failed(self, player_id: str, request: Request, error: str) -> int | None:
+    def check_scope(self, decision: Decision) -> None:
+        """Block words that seek real-world harm (see ``fouls``)."""
+        category = self.scope(public_words(decision))
+        if category is not None:
+            raise Foul(category)
+
+    def _note_defused(self, player_id: str) -> None:
+        for item in self.defused:
+            defused(self.game, player_id, item)
+
+    def _failed(
+        self, player_id: str, request: Request, error: str, reason: FailureReason
+    ) -> int | None:
         """A failed turn, for a decision in the game. A question only the
         audience hears is no turn in the game, and its failure is no failed
         turn: the record of it says the answer never came."""
         if request.kind in AUDIENCE_ONLY:
             return None
-        return turn_failed(self.game, player_id, request, error)
+        return turn_failed(self.game, player_id, request, error, reason)
 
     def _log(
         self,
@@ -247,6 +330,8 @@ class Referee:
         *,
         error: str | None = None,
         refused: bool = False,
+        reason: FailureReason | None = None,
+        foul: str | None = None,
     ) -> None:
         world = self.game.world
         self.log.append(
@@ -259,7 +344,10 @@ class Referee:
                 decision=decision,
                 error=error,
                 refused=refused,
+                reason=reason,
+                foul=foul,
                 seen=list(self.seen),
+                defused=list(self.defused),
             )
         )
 
@@ -293,6 +381,11 @@ class Referee:
             return submit_plan(self.game.world, player_id, decision.plan, private=diary)
         return self.game.world
 
+    def prefetch_plans(self, player_ids: Sequence[str]) -> None:
+        """The players about to be asked for a plan, in seat order. A referee
+        that can ask concurrently may start on them now; this one asks each in
+        turn, when it comes."""
+
     def drive(self, turn: Turn, act: Act) -> None:
         while self.game.status == "playing":
             step = turn(self.game)
@@ -308,6 +401,7 @@ class Referee:
         game = self.game
         phase = game.world.phase
         if phase in _PLANNED_AT_OPEN:
+            self.prefetch_plans(opening(game.world))
             game.world = prompt_everyone(game.world, self.ask_plan)
         while not phase_complete(game.world):
             before = game.world.ledger_seq
@@ -315,6 +409,7 @@ class Referee:
             if phase == "night":
                 self.night_tick()
             elif not phase_complete(game.world):
+                self.prefetch_plans(interrupted(game.world, before))
                 game.world = prompt_interrupted(game.world, self.ask_plan, before)
         self.close_phase(phase)
         self.exit_interviews()
@@ -420,17 +515,23 @@ def refused(game: GameState, player_id: str, request: Request, error: str) -> in
     ).seq
 
 
-def turn_failed(game: GameState, player_id: str, request: Request, error: str) -> int:
+def turn_failed(
+    game: GameState,
+    player_id: str,
+    request: Request,
+    error: str,
+    reason: FailureReason = "transport",
+) -> int:
     """The character hesitates and does nothing, and everyone present sees a
     failure, not a choice. A failure on a decision nobody else knows was put —
     a traitor's dose, nomination or offer, or the answer to an offer — is
     recorded for its player alone, or the hesitation would give the question
-    away."""
+    away. The payload keeps the error and its reason class for the audience."""
     world = game.world
     player = world.players[player_id]
     room_id = player.room_id
     text = f"{name(game, player_id)} failed to decide ({request.kind}) and did nothing."
-    payload = {"request": request.kind, "error": error}
+    payload = {"request": request.kind, "error": error, "reason": reason}
     if room_id is None or request.kind in PRIVATE_REQUESTS:
         return append(
             world,
@@ -471,6 +572,28 @@ def turn_failed(game: GameState, player_id: str, request: Request, error: str) -
     ).seq
 
 
+def defused(game: GameState, recipient: str, item: Defused) -> int:
+    """Log, for the audience alone, control tokens defused in a record before
+    it reached ``recipient``'s model. The record's true author is the actor: a
+    forgery attempt is evidence against whoever made it."""
+    world = game.world
+    source = world.ledger[item.seq - 1]
+    return append(
+        world,
+        type="tokens_defused",
+        text=(
+            f"Control tokens in entry {item.seq} were defused before it reached "
+            f"{name(game, recipient)}."
+        ),
+        actor_id=source.actor_id,
+        payload={
+            "source": str(item.seq),
+            "recipient": recipient,
+            "markers": " ".join(item.markers),
+        },
+    ).seq
+
+
 # ------------------------------------------------------------ playing and replay
 
 
@@ -506,15 +629,21 @@ def run_game(
     )
 
 
+Outcome = Literal["finished", "stopped:budget", "aborted:operator"]
+"""How a game ended: played out, stopped when its budget ran out, or aborted
+by an operator error (a bad key, no credit). Only a finished game is whole."""
+
+
 class GameRecord(Contract):
     """Everything needed to replay a game exactly, and the ledger it produced.
 
     ``cast`` is the casting as given, model ids included; who actually played
     each seat is ``agents``. A seat played by a reference bot says so, and is
-    never to be read as its cast model's result.
+    never to be read as its cast model's result. A game that did not finish
+    keeps the record of as far as it got, replays to there, and is never rated.
     """
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     seed: int
     world_id: str
     castle: CastleMap
@@ -524,9 +653,13 @@ class GameRecord(Contract):
     decisions: list[LoggedDecision]
     ledger: list[LedgerEntry]
     winner: Role | None
+    outcome: Outcome = "finished"
+    rated: bool = False
 
     @model_validator(mode="after")
     def every_seat_says_who_played_it(self) -> Self:
+        if self.rated and (self.outcome != "finished" or self.reference_bots):
+            raise ValueError("Only a finished game played by models can be rated.")
         cast = {member.id: member.model for member in self.cast.players}
         if set(self.agents) != set(cast):
             raise ValueError("Every seat in the cast needs its agent, and only those.")
@@ -574,6 +707,9 @@ def record(
     castle: CastleMap,
     cast: Cast,
     played: Played,
+    *,
+    outcome: Outcome = "finished",
+    rated: bool = False,
 ) -> GameRecord:
     game = played.game
     return GameRecord(
@@ -589,6 +725,8 @@ def record(
         decisions=played.log,
         ledger=game.world.ledger,
         winner=game.winner,
+        outcome=outcome,
+        rated=rated,
     )
 
 
@@ -603,9 +741,13 @@ class ReplayReferee(Referee):
 
     decisions: Sequence[LoggedDecision] = ()
     cursor: int = 0
+    stopped: bool = False
+    """The stored game did not finish: when its log runs out, so does the replay."""
 
     def decide(self, player_id: str, request: Request) -> Decision:
         if self.cursor >= len(self.decisions):
+            if self.stopped:
+                raise ReplayStopped(f"The game stopped at decision {self.cursor}.")
             raise ReplayDiverged(f"The log ran out at decision {self.cursor}.")
         logged = self.decisions[self.cursor]
         asked = (player_id, request.kind, self.game.world.tick)
@@ -616,15 +758,26 @@ class ReplayReferee(Referee):
             )
         self.cursor += 1
         self.seen = list(logged.seen)
+        self.defused = list(logged.defused)
         if logged.decision is not None:
             return logged.decision
+        if logged.foul is not None:
+            raise Foul(logged.foul)
         if logged.refused:
-            raise IllegalDecision(logged.error or "refused")
-        raise TurnFailure(logged.error or "failed")
+            raise BadAnswer(logged.error or "refused", logged.reason or "invalid")
+        raise TurnFailure(logged.error or "failed", logged.reason or "transport")
+
+    def check_scope(self, decision: Decision) -> None:
+        """Rulings come from the log: an answer logged as a foul was raised as
+        one above, and every other answer passed when it was given."""
 
 
 class ReplayDiverged(AssertionError):
     """A replay was asked something the stored game never asked."""
+
+
+class ReplayStopped(Exception):
+    """A replay of an unfinished game reached the point where it stopped."""
 
 
 def replay(stored: GameRecord) -> GameState:
@@ -642,8 +795,12 @@ def replay(stored: GameRecord) -> GameState:
         check_leaks=False,
         models=tuple(sorted(set(stored.cast.models().values()))),
         decisions=stored.decisions,
+        stopped=stored.outcome != "finished",
     )
-    finished = referee.run()
+    try:
+        finished = referee.run()
+    except ReplayStopped:
+        finished = referee.game
     if referee.cursor != len(stored.decisions):
         raise ReplayDiverged(
             f"Replay used {referee.cursor} of {len(stored.decisions)} decisions."
@@ -663,15 +820,21 @@ def load_record(path: str | Path) -> GameRecord:
 
 __all__ = [
     "UNKNOWN_AGENT",
+    "BadAnswer",
+    "Defused",
+    "FailureReason",
     "GameRecord",
     "LoggedDecision",
+    "Outcome",
     "Played",
     "Player",
     "Referee",
     "ReplayDiverged",
     "ReplayReferee",
+    "ReplayStopped",
     "TurnFailure",
     "agent_of",
+    "defused",
     "is_model",
     "load_record",
     "plan_request",
