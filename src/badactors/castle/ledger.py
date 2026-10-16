@@ -272,6 +272,29 @@ def recent_records(
     return out
 
 
+def notebook_seqs(state: WorldState, player_id: str) -> list[int]:
+    """The entries in a player's notebook, oldest first: every record they
+    noted, and every record they chose to keep, by the entry it came from. A
+    record kept again moves to the end, so it stays within the notebook's
+    limit."""
+    order: dict[int, None] = {}
+    for seq in state.notebook.get(player_id, []):
+        entry = state.ledger[seq - 1]
+        kept = kept_by(entry, player_id)
+        filed = kept if kept is not None else seq
+        order.pop(filed, None)
+        order[filed] = None
+    return list(order)
+
+
+def kept_by(entry: LedgerEntry, player_id: str) -> int | None:
+    """The entry whose record this one keeps, if it is a note the player made
+    to remember it."""
+    if entry.type != "remember" or entry.actor_id != player_id:
+        return None
+    return int(entry.payload["seq"])
+
+
 def replay_notebook(ledger: Iterable[LedgerEntry]) -> dict[str, list[int]]:
     """Rebuild every player's notebook from the ledger alone."""
     notebook: dict[str, list[int]] = {}
@@ -403,7 +426,9 @@ __all__ = [
     "asides_of",
     "custody_chain",
     "entry_at",
+    "kept_by",
     "move_object",
+    "notebook_seqs",
     "placement_before",
     "placement_of",
     "placement_payload",

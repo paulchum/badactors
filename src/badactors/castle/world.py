@@ -46,6 +46,7 @@ from badactors.castle.contracts import (
     Move,
     Plan,
     PlayerState,
+    Remember,
     Step,
     Take,
     Talk,
@@ -60,6 +61,7 @@ from badactors.castle.kit import refusal
 from badactors.castle.ledger import (
     append,
     append_perceived,
+    entry_at,
     move_object,
     placement_payload,
     seed_placements,
@@ -188,6 +190,11 @@ def tick(state: WorldState) -> WorldState:
         if isinstance(player.position, InTransit):
             _advance_transit(world, player)
             continue
+        # Making a note takes no time: notes at the head of a plan are made,
+        # and the tick still goes to the next step.
+        while player.plan.steps and isinstance(note := player.plan.steps[0], Remember):
+            player.plan.steps.pop(0)
+            _remember(world, player, note)
         if player.plan.steps:
             step = player.plan.steps.pop(0)
             _execute(world, player, step)
@@ -313,7 +320,7 @@ def valid_actions(state: WorldState, player_id: str) -> list[str]:
     room_id = player.room_id
     if room_id is None:
         return ["wait"]
-    actions = ["wait", "talk"]
+    actions = ["wait", "talk", "remember"]
     company = any(other != player_id for other in awake_in(state, room_id))
     if company:
         actions.append("whisper")
@@ -447,8 +454,39 @@ def _execute(world: WorldState, player: PlayerState, step: Step) -> None:
         _do_drop(world, player, room_id, step.thing_id, hidden=step.hidden)
     elif isinstance(step, Wear):
         change_garment(world, player, room_id, step.thing_id)
+    elif isinstance(step, Remember):
+        _remember(world, player, step)
     else:
         _do_wait(world, player, room_id, step.reason)
+
+
+def _remember(world: WorldState, player: PlayerState, step: Remember) -> None:
+    """File one of the player's own records in their notebook. Only they know:
+    the note is a private act, and what it keeps is a record they already
+    hold."""
+    room_id = player.room_id
+    entry = entry_at(world.ledger, step.seq)
+    record = entry.record_for(player.id) if entry is not None else None
+    if entry is None or record is None or room_id is None:
+        if room_id is not None:
+            blocked(world, player, room_id, "you hold no such record to keep")
+        return
+    append(
+        world,
+        type="remember",
+        text=f"{player.name} made a note to remember entry {entry.seq}.",
+        actor_id=player.id,
+        room_id=room_id,
+        payload={"seq": str(entry.seq)},
+        witnesses=[
+            own_record(
+                player.id,
+                room_id,
+                f"I made a note of what I recorded at t{entry.tick}.",
+                noted=True,
+            )
+        ],
+    )
 
 
 def _camera(world: WorldState, player: PlayerState, room_id: str) -> dict[str, str]:

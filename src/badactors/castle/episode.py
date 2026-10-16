@@ -300,6 +300,9 @@ def _render(
         view.say("FAILED", entry.text)
     elif kind == "refused":
         view.say("REFUSED", entry.text)
+    elif kind == "remember":
+        kept = game.world.ledger[int(entry.payload["seq"]) - 1]
+        view.say("NOTE", f"{who} makes a note to remember: {kept.text}")
     elif kind == "blocked" and "was full" in entry.payload.get("reason", ""):
         full = entry.payload["reason"].split(" and ")[0]
         view.say("MOVES", f"{who} was turned back at the door: {full}.")

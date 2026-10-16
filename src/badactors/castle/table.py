@@ -63,7 +63,7 @@ from badactors.castle.game import (
     victor,
 )
 from badactors.castle.kit import refusal
-from badactors.castle.ledger import append_perceived, recent_records
+from badactors.castle.ledger import append_perceived, notebook_seqs, recent_records
 from badactors.castle.perceive import perceive
 from badactors.castle.rng import draw
 from badactors.castle.steward import announce
@@ -438,7 +438,7 @@ def _reportable(world: WorldState, player_id: str) -> list[int]:
     whisper, or something they read that someone else wrote. Their own words
     are not theirs to report."""
     out: list[int] = []
-    for seq in world.notebook.get(player_id, []):
+    for seq in notebook_seqs(world, player_id):
         record = world.ledger[seq - 1].record_for(player_id)
         if (
             record is not None
@@ -453,7 +453,7 @@ def _reportable(world: WorldState, player_id: str) -> list[int]:
 def _citable(game: GameState, player_id: str) -> list[int]:
     """Records this player holds and can see: their notebook and recent memory."""
     world = game.world
-    seqs = set(world.notebook.get(player_id, []))
+    seqs = set(notebook_seqs(world, player_id))
     seqs.update(
         entry.seq
         for entry, _ in recent_records(

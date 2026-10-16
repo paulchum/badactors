@@ -38,6 +38,7 @@ from badactors.castle.contracts import (
     Plan,
     Read,
     ReadLog,
+    Remember,
     ScopedObservation,
     Search,
     SearchPerson,
@@ -1275,6 +1276,16 @@ class CastleMachine(RuleBasedStateMachine):
     @rule(data=st.data())
     def search(self, data: st.DataObject) -> None:
         self._act(data.draw(st.sampled_from(self._seated())), Search())
+
+    @precondition(lambda self: self.world is not None and bool(self._seated()))
+    @rule(data=st.data())
+    def remember(self, data: st.DataObject) -> None:
+        """Keep a record held, or try to keep one never held."""
+        pid = data.draw(st.sampled_from(self._seated()), label="who")
+        seq = data.draw(
+            st.integers(min_value=1, max_value=len(self._now().ledger)), label="keep"
+        )
+        self._act(pid, Remember(seq=seq), Wait())
 
     @precondition(lambda self: self.world is not None and bool(self._takers()))
     @rule(data=st.data())

@@ -41,8 +41,8 @@ The toolkits add four more:
   turned up belongs to the one who made it; anyone watching saw only the act;
 * **a covert act seen by its victim** — a pocket picked or a coat slipped into
   leaves its victim no record unless they caught the hand;
-* **a notebook** — every noted item must cite a record its viewer noted, and a
-  secret may only be the viewer's own.
+* **a notebook** — every noted item must cite a record its viewer noted, or one
+  they made a note to keep, and a secret may only be the viewer's own.
 """
 
 from __future__ import annotations
@@ -71,6 +71,7 @@ from badactors.castle.contracts import (
 from badactors.castle.ledger import (
     custody_chain,
     entry_at,
+    notebook_seqs,
     placement_before,
     recent_records,
     traced_links,
@@ -171,9 +172,10 @@ def build_observation(
 
 
 def notebook_items(state: WorldState, viewer_id: str) -> list[ObservationItem]:
-    """The viewer's most recent noted records, however long ago they were made."""
+    """The viewer's most recently noted or kept records, however long ago they
+    were made."""
     items: list[ObservationItem] = []
-    for seq in state.notebook.get(viewer_id, [])[-state.balance.notebook_limit :]:
+    for seq in notebook_seqs(state, viewer_id)[-state.balance.notebook_limit :]:
         entry = state.ledger[seq - 1]
         record = entry.record_for(viewer_id)
         if record is not None:
@@ -465,13 +467,27 @@ def _assert_notebook(
     observation: ScopedObservation, state: WorldState, viewer_id: str
 ) -> None:
     noted = set(state.notebook.get(viewer_id, []))
+    # A note to remember is the viewer's own act, so their own record of it,
+    # filed, is what lets the record it names into the notebook.
+    kept: set[int] = set()
+    for seq in noted:
+        note = state.ledger[seq - 1]
+        own = note.record_for(viewer_id)
+        if (
+            note.type == "remember"
+            and note.actor_id == viewer_id
+            and own is not None
+            and own.sense == "own"
+        ):
+            kept.add(int(note.payload["seq"]))
     for item in observation.evidence:
         entry = assert_item(item, viewer_id, state)
         record = entry.record_for(viewer_id)
-        if record is None or not record.noted or entry.seq not in noted:
+        filed = record is not None and record.noted and entry.seq in noted
+        if not filed and entry.seq not in kept:
             raise LeakageError(
                 f"Notebook item for entry {entry.seq} cites a record {viewer_id!r} "
-                "never noted: a notebook holds only what its viewer found."
+                "never noted or kept: a notebook holds only what its viewer found."
             )
         _assert_tool_audience(entry, item, viewer_id)
 

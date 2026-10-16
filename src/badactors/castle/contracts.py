@@ -648,8 +648,16 @@ class Wear(Contract):
     thing_id: str
 
 
+class Remember(Contract):
+    """Keep one of your own records in your notebook: ``seq`` is the ledger
+    entry it came from. Making a note takes no time, and nobody sees it."""
+
+    kind: Literal["remember"] = "remember"
+    seq: int = Field(ge=1)
+
+
 type Step = Annotated[
-    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait | Wear,
+    Move | Take | Drop | Use | ToolStep | Talk | Whisper | Wait | Wear | Remember,
     Field(discriminator="kind"),
 ]
 """One step of a plan. A tool step is itself one of many shapes, told apart by

@@ -23,23 +23,26 @@ from badactors.castle.contracts import (
     Move,
     ObservationItem,
     Plan,
+    Remember,
     ScopedObservation,
     Search,
     Take,
     Talk,
     ThingView,
     Wait,
+    Whisper,
     WitnessRecord,
     WorldState,
 )
 from badactors.castle.director import RoutineDecider, run_phase
-from badactors.castle.ledger import custody_chain
+from badactors.castle.ledger import custody_chain, replay_notebook
 from badactors.castle.mapfile import build_world, load_cast, load_map, load_world
 from badactors.castle.perceive import room_of
 from badactors.castle.scope import (
     LeakageError,
     assert_no_leak,
     build_observation,
+    item_for,
 )
 from badactors.castle.world import start, submit_plan, tick
 from castle_tools import act, last, put, scene
@@ -753,3 +756,99 @@ def test_a_search_is_remembered_only_by_the_searcher() -> None:
     world = tick(world)
     assert build_observation(world, "mara").searched_here is True
     assert build_observation(world, "sol").searched_here is False
+
+
+# ------------------------------------------------------- keeping a record
+
+
+def _overheard_sol() -> tuple[WorldState, LedgerEntry]:
+    """Mara hears Sol say something in the Great Hall: a record she holds but
+    did not note."""
+    world = scene()
+    world = act(world, "sol", Talk(text="I was in the cellar all afternoon."))
+    said = world.ledger[-1]
+    record = said.record_for("mara")
+    assert record is not None and not record.noted
+    return world, said
+
+
+def test_a_note_keeps_a_record_in_the_notebook_and_takes_no_time() -> None:
+    world, said = _overheard_sol()
+    world = submit_plan(
+        world,
+        "mara",
+        Plan(steps=[Remember(seq=said.seq), Move(room_id="dining_room")]),
+    )
+    world = tick(world)
+    assert world.players["mara"].room_id == "dining_room", "the note took no time"
+    note = next(e for e in world.ledger if e.type == "remember")
+    assert [record.player_id for record in note.witnesses] == ["mara"]
+    observation = build_observation(world, "mara")
+    assert said.seq in {item.ledger_seq for item in observation.evidence}
+    assert note.seq not in {item.ledger_seq for item in observation.evidence}
+    assert_no_leak(observation, world)
+    assert replay_notebook(world.ledger) == world.notebook
+
+
+def test_a_note_of_a_record_never_held_is_refused_privately() -> None:
+    world = scene()
+    put(world, "sol", "cellar")
+    world = act(world, "sol", Wait(reason="alone"))
+    unheard = world.ledger[-1]
+    assert unheard.type == "wait" and unheard.record_for("mara") is None
+    world = act(world, "mara", Remember(seq=unheard.seq), Wait())
+    refused = next(
+        e for e in world.ledger if e.type == "blocked" and e.actor_id == "mara"
+    )
+    assert [record.player_id for record in refused.witnesses] == ["mara"]
+    assert not [e for e in world.ledger if e.type == "remember"]
+    assert unheard.seq not in {
+        item.ledger_seq for item in build_observation(world, "mara").evidence
+    }
+
+
+def test_a_kept_record_stays_within_the_notebook_limit() -> None:
+    world, said = _overheard_sol()
+    world.balance = world.balance.model_copy(update={"notebook_limit": 2})
+    world = act(world, "mara", Remember(seq=said.seq), Wait())
+    for line in ("One.", "Two.", "Three."):
+        world = act(world, "sol", Whisper(to="mara", text=line))
+    shown = [item.ledger_seq for item in build_observation(world, "mara").evidence]
+    assert said.seq not in shown, "three noted whispers pushed it out"
+    world = act(world, "mara", Remember(seq=said.seq), Wait())
+    shown = [item.ledger_seq for item in build_observation(world, "mara").evidence]
+    assert len(shown) == 2 and shown[-1] == said.seq
+    assert_no_leak(build_observation(world, "mara"), world)
+
+
+def test_planted_leak_a_notebook_item_neither_noted_nor_kept() -> None:
+    world, said = _overheard_sol()
+    observation = build_observation(world, "mara")
+    record = said.record_for("mara")
+    assert record is not None
+    leaked = observation.model_copy(
+        update={"evidence": [*observation.evidence, item_for(said, record)]}
+    )
+    with pytest.raises(LeakageError, match="never noted or kept"):
+        assert_no_leak(leaked, world)
+
+
+def test_planted_leak_someone_elses_note_does_not_fill_your_notebook() -> None:
+    world, said = _overheard_sol()
+    world = act(world, "sol", Remember(seq=said.seq), Wait())
+    note = next(e for e in world.ledger if e.type == "remember")
+    own = note.record_for("sol")
+    assert own is not None
+    planted = own.model_copy(update={"player_id": "mara"})
+    world.ledger[note.seq - 1] = note.model_copy(
+        update={"witnesses": [*note.witnesses, planted]}
+    )
+    world.notebook.setdefault("mara", []).append(note.seq)
+    observation = build_observation(world, "mara")
+    record = said.record_for("mara")
+    assert record is not None
+    leaked = observation.model_copy(
+        update={"evidence": [*observation.evidence, item_for(said, record)]}
+    )
+    with pytest.raises(LeakageError, match="never noted or kept"):
+        assert_no_leak(leaked, world)
