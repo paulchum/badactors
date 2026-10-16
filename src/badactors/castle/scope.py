@@ -8,7 +8,7 @@ leak is therefore not a suspicious-looking string but a line with no provenance 
 which is why a new kind of leak cannot slip past a checker that was written before
 it existed.
 
-Eight classes of leak have their own guard, because each is a mistake a plausible
+Nine classes of leak have their own guard, because each is a mistake a plausible
 refactor could make:
 
 * **foreign room** — an object or memory from somewhere the viewer has not been;
@@ -17,6 +17,10 @@ refactor could make:
   the words said;
 * **another player's plan** — plan steps that are not the viewer's own;
 * **uninspected custody chain** — an object's history without an inspection;
+* **a look taken for a window** — what was hidden or stowed in a room after the
+  viewer searched it, or what happened to an object after they inspected it.
+  This guard reads the viewer's own search and inspection records, with their
+  ticks, never the indexes the builder keeps;
 * **laundered channel** — words shown through a channel, or under an author, other
   than the ones they arrived by, and above all a player's words in the Steward's
   channel, which only the host may use;
@@ -44,9 +48,11 @@ The toolkits add four more:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from badactors.castle.contracts import (
     AtRoom,
+    InRoom,
     Intent,
     InTransit,
     LedgerEntry,
@@ -65,6 +71,7 @@ from badactors.castle.contracts import (
 from badactors.castle.ledger import (
     custody_chain,
     entry_at,
+    placement_before,
     recent_records,
     traced_links,
 )
@@ -73,6 +80,7 @@ from badactors.castle.perceive import (
     carried_things,
     occupants,
     presence,
+    room_of,
     visible_things,
     worn_garment,
 )
@@ -189,12 +197,43 @@ def assert_no_leak(observation: ScopedObservation, state: WorldState) -> None:
             f"Observation shows {viewer_id!r} a secret that is not their own: a "
             "notebook holds only what its viewer found."
         )
-    _assert_objects(observation, state, viewer_id)
+    looks = _looks(state, viewer_id)
+    _assert_objects(observation, state, looks)
     _assert_plan(observation, state, viewer_id)
-    _assert_facts(observation, state, viewer_id)
-    _assert_searched(observation, state, viewer_id)
+    _assert_facts(observation, state, looks)
+    _assert_searched(observation, looks)
     _assert_presence(observation, state, viewer)
-    _assert_wearing(observation, state, viewer_id)
+    _assert_wearing(observation, state, viewer_id, looks)
+
+
+@dataclass(frozen=True)
+class _Looks:
+    """What a viewer has looked into for themselves, and when: the room each of
+    their searches was in and the object each inspection examined, latest
+    first. Read from the viewer's own records, never from the indexes the
+    builder keeps, so a builder that shows a search or an inspection as a live
+    window cannot vouch for itself."""
+
+    searches: dict[str, int]
+    inspections: dict[str, int]
+
+
+def _looks(state: WorldState, viewer_id: str) -> _Looks:
+    """Every search and inspection is filed in its user's notebook, so the
+    notebook narrows the scan; the viewer's own record of each is what counts."""
+    searches: dict[str, int] = {}
+    inspections: dict[str, int] = {}
+    for seq in state.notebook.get(viewer_id, []):
+        entry = entry_at(state.ledger, seq)
+        record = entry.record_for(viewer_id) if entry is not None else None
+        if entry is None or record is None or record.sense != "own":
+            continue
+        tool = entry.payload.get("tool")
+        if entry.type == "search" and tool == "search" and record.from_room:
+            searches[record.from_room] = entry.seq
+        elif entry.type == "inspect" and tool == "inspect":
+            inspections[entry.payload["thing_id"]] = entry.seq
+    return _Looks(searches=searches, inspections=inspections)
 
 
 # ------------------------------------------------------------------- leak guards
@@ -322,52 +361,74 @@ def _assert_hearing(
 def _assert_objects(
     observation: ScopedObservation,
     state: WorldState,
-    viewer_id: str,
+    looks: _Looks,
 ) -> None:
     room = observation.room
-    allowed_here = (
-        set(visible_things(state, viewer_id, room.id)) if room is not None else set()
-    )
-    held = set(carried_things(state, viewer_id))
-    inspected = set(state.inspected.get(viewer_id, {}))
+    held = set(carried_things(state, observation.viewer_id))
 
     for view in observation.visible_objects:
-        if view.id not in allowed_here:
+        if room is None or not _in_view(state, looks, room.id, view.id):
             raise LeakageError(
                 f"Observation shows object {view.id!r}, which is not visible from "
                 "where this viewer stands."
             )
-        _assert_custody(view, state, inspected)
+        _assert_custody(view, state, looks)
     for view in observation.carrying:
         if view.id not in held:
             raise LeakageError(
                 f"Observation says the viewer carries {view.id!r}, which they do not."
             )
-        _assert_custody(view, state, inspected)
+        _assert_custody(view, state, looks)
 
 
-def _assert_custody(
-    view: ThingView,
-    state: WorldState,
-    inspected: set[str],
-) -> None:
+def _in_view(state: WorldState, looks: _Looks, room_id: str, thing_id: str) -> bool:
+    """Whether the viewer can see this object here: it lies in plain sight, or
+    their latest search of the room found it exactly where it is now."""
+    placement = state.placements.get(thing_id)
+    if isinstance(placement, InRoom) and not placement.hidden:
+        return placement.room_id == room_id
+    searched = looks.searches.get(room_id)
+    return (
+        searched is not None
+        and room_of(state, thing_id) == room_id
+        and placement_before(state.ledger, thing_id, searched) == placement
+    )
+
+
+def _assert_custody(view: ThingView, state: WorldState, looks: _Looks) -> None:
     thing = next(item for item in state.map.things if item.id == view.id)
     honest = _written(state, view.id) if thing.kind == "paper" else None
     if view.written != honest:
         raise LeakageError(f"Observation misstates whether {view.id!r} is written on.")
     if view.custody is None:
         return
-    if view.id not in inspected:
+    inspected = looks.inspections.get(view.id)
+    if inspected is None:
         raise LeakageError(
             f"Observation reveals the custody chain of {view.id!r} without the "
             "viewer having inspected it."
         )
-    truth = {link.ledger_seq: link for link in custody_chain(state.ledger, view.id)}
-    invented = sorted({link.ledger_seq for link in view.custody} - set(truth))
+    shown = {link.ledger_seq for link in view.custody}
+    later = sorted(seq for seq in shown if seq > inspected)
+    if later:
+        raise LeakageError(
+            f"Custody chain for {view.id!r} shows entries {later}, written after "
+            "this viewer inspected it: an inspection is a look, not a window."
+        )
+    truth = {
+        link.ledger_seq: link
+        for link in custody_chain(
+            state.ledger,
+            view.id,
+            limit=state.balance.tools.inspect.links,
+            before=inspected,
+        )
+    }
+    invented = sorted(shown - set(truth))
     if invented:
         raise LeakageError(
             f"Custody chain for {view.id!r} cites entries {invented} that never "
-            "moved it."
+            "moved it within the links this viewer's inspection traced."
         )
     # A custody link is the one place an entry's own text reaches a player, so
     # it must be that text exactly — nothing added, nothing from ``private``.
@@ -524,6 +585,7 @@ def _assert_wearing(
     observation: ScopedObservation,
     state: WorldState,
     viewer_id: str,
+    looks: _Looks,
 ) -> None:
     garment = worn_garment(state, viewer_id)
     shown = observation.wearing
@@ -532,7 +594,7 @@ def _assert_wearing(
     ):
         raise LeakageError("Observation misstates what the viewer is wearing.")
     if shown is not None:
-        _assert_custody(shown, state, set(state.inspected.get(viewer_id, {})))
+        _assert_custody(shown, state, looks)
 
 
 def _wearing(state: WorldState, viewer_id: str) -> ThingView | None:
@@ -540,13 +602,9 @@ def _wearing(state: WorldState, viewer_id: str) -> ThingView | None:
     return _thing_view(state, viewer_id, garment.id) if garment is not None else None
 
 
-def _assert_searched(
-    observation: ScopedObservation,
-    state: WorldState,
-    viewer_id: str,
-) -> None:
+def _assert_searched(observation: ScopedObservation, looks: _Looks) -> None:
     room = observation.room
-    here = room is not None and room.id in state.searched.get(viewer_id, {})
+    here = room is not None and room.id in looks.searches
     if observation.searched_here != here:
         raise LeakageError(
             "Observation misstates whether this viewer has searched this room."
@@ -556,19 +614,18 @@ def _assert_searched(
 def _assert_facts(
     observation: ScopedObservation,
     state: WorldState,
-    viewer_id: str,
+    looks: _Looks,
 ) -> None:
     room = observation.room
     if not observation.known_facts:
         return
     if room is None:
         raise LeakageError("A viewer in a passage cannot read facts in a room.")
-    searched = set(state.searched.get(viewer_id, {}))
     private = state.map.room(room.id).private
     allowed = {
         fact.text
         for fact in state.map.facts
-        if fact.room_id == room.id and (not private or room.id in searched)
+        if fact.room_id == room.id and (not private or room.id in looks.searches)
     }
     extra = sorted(set(observation.known_facts) - allowed)
     if extra:

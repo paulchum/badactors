@@ -10,7 +10,7 @@ apart.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 
 from badactors.castle.contracts import (
     CustodyLink,
@@ -156,15 +156,18 @@ def custody_chain(
     thing_id: str,
     *,
     limit: int | None = None,
+    before: int | None = None,
 ) -> list[CustodyLink]:
     """Every recorded move of one object, oldest first.
 
     ``limit`` keeps only the most recent links, which is how a partial chain is
     served without inventing a second source of truth. It reads backwards and
     stops once it has them, so a partial chain costs nothing like a full one.
+    ``before`` keeps only the moves recorded ahead of that entry: the chain as
+    it stood then.
     """
     links: list[CustodyLink] = []
-    for entry in reversed(ledger):
+    for entry in _backwards(ledger, before):
         if limit is not None and len(links) >= limit:
             break
         if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
@@ -173,6 +176,25 @@ def custody_chain(
             )
     links.reverse()
     return links
+
+
+def placement_before(
+    ledger: Sequence[LedgerEntry], thing_id: str, seq: int
+) -> Placement | None:
+    """Where an object was when entry ``seq`` was written, from the ledger alone."""
+    for entry in _backwards(ledger, seq):
+        if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
+            return _placement_from_payload(entry)
+    return None
+
+
+def _backwards(
+    ledger: Sequence[LedgerEntry], before: int | None
+) -> Iterator[LedgerEntry]:
+    """The entries ahead of ``before`` (all of them when ``None``), newest first."""
+    end = len(ledger) if before is None else min(len(ledger), before - 1)
+    for index in range(end - 1, -1, -1):
+        yield ledger[index]
 
 
 def traced_links(ledger: Sequence[LedgerEntry], seq: int) -> list[CustodyLink]:
@@ -343,6 +365,7 @@ __all__ = [
     "custody_chain",
     "entry_at",
     "move_object",
+    "placement_before",
     "placement_payload",
     "recent_records",
     "replay_inspections",
