@@ -515,7 +515,7 @@ def test_a_world_that_lets_the_room_hear_whispers_is_caught(
 # ----------------------------------------------------------------- model names
 
 
-def test_a_player_naming_a_model_aloud_is_caught() -> None:
+def test_a_player_naming_a_model_aloud_is_refused_and_never_heard() -> None:
     def blurt(observation: GameObservation, game: GameState) -> Decision | None:
         if observation.request.kind == "accuse" and observation.viewer_id == "mara":
             return Accuse(
@@ -524,5 +524,11 @@ def test_a_player_naming_a_model_aloud_is_caught() -> None:
             )
         return None
 
-    with pytest.raises(LeakageError, match="model name"):
-        referee(seed=6, script=blurt).run()
+    ref = referee(seed=6, script=blurt)
+    ref.run()
+    assert ref.game.status == "over"
+    assert MODELS[0].casefold() not in ref.game.world.model_dump_json().casefold()
+    failed = of_type(ref.game, "turn_failed")
+    assert failed
+    assert {(e.actor_id, e.payload["request"]) for e in failed} == {("mara", "accuse")}
+    assert len(of_type(ref.game, "refused")) == len(failed)

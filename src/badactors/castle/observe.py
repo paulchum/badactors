@@ -35,10 +35,14 @@ first check. Each class of game secret has its guard:
   in its player's kit, and cites only records they hold;
 * **a failure on a private decision** — a hesitation over a dose, a nomination,
   an offer or the answer to one is its player's alone, since anyone who saw it
-  would learn the question had been put.
+  would learn the question had been put;
+* **a refused answer** — an answer refused and asked again is its player's
+  alone.
 
-Model names never enter the game state at all. :func:`assert_no_model_names`
-checks that a model name appears nowhere in an observation, quotes included.
+Model names never enter the game state at all, and a player's words that name
+one are refused before they are written (see ``anonymity``).
+:func:`assert_no_model_names` checks, by the same aliases, that no model name
+appears anywhere in an observation, quotes included.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from functools import lru_cache
 
 from pydantic import Field
 
+from badactors.castle.anonymity import Aliases, aliases
 from badactors.castle.contracts import (
     Build,
     CastleMap,
@@ -270,7 +275,15 @@ def assert_no_game_leak(
     if observation.world.viewer_id != viewer:
         raise LeakageError("Observation mixes two viewers.")
     # First, so a model name is reported as what it is, wherever it was put.
-    assert_no_model_names(observation, models)
+    assert_no_model_names(
+        observation,
+        models,
+        exempt=[
+            name
+            for player in world.players.values()
+            for name in (player.id, player.name)
+        ],
+    )
     assert_no_leak(observation.world, world)
     for item in observation.table:
         assert_item(item, viewer, world)
@@ -294,15 +307,19 @@ def assert_no_game_leak(
         )
 
 
-def assert_no_model_names(observation: GameObservation, models: Iterable[str]) -> None:
-    """No model name anywhere: not in a persona, a rule, or a quoted word."""
-    needles = _needles(tuple(sorted(set(models))))
-    if not needles:
-        return
+def assert_no_model_names(
+    observation: GameObservation,
+    models: Iterable[str],
+    *,
+    exempt: Iterable[str] = (),
+) -> None:
+    """No model name anywhere: not in a persona, a rule, or a quoted word.
+    ``exempt`` holds the characters' names and ids, which never count."""
+    known = _aliases(tuple(sorted(set(models))), tuple(sorted(set(exempt))))
     # The rulebook is the same long text in every observation of a game, so it is
     # checked once and remembered; everything else is checked every time.
-    found = _mention(needles, observation.rules) or _mention(
-        needles, observation.model_dump_json(exclude={"rules"})
+    found = _mention(known, observation.rules) or known.found(
+        observation.model_dump_json(exclude={"rules"})
     )
     if found:
         raise LeakageError(
@@ -312,24 +329,13 @@ def assert_no_model_names(observation: GameObservation, models: Iterable[str]) -
 
 
 @lru_cache(maxsize=32)
-def _needles(models: tuple[str, ...]) -> tuple[str, ...]:
-    """Each model's full id and its name without the provider, folded."""
-    return tuple(
-        sorted(
-            {
-                needle.casefold()
-                for model in models
-                for needle in (model, model.rsplit("/", 1)[-1])
-                if len(needle) >= 4
-            }
-        )
-    )
+def _aliases(models: tuple[str, ...], exempt: tuple[str, ...]) -> Aliases:
+    return aliases(models, exempt=exempt)
 
 
 @lru_cache(maxsize=64)
-def _mention(needles: tuple[str, ...], text: str) -> str | None:
-    folded = text.casefold()
-    return next((needle for needle in needles if needle in folded), None)
+def _mention(known: Aliases, text: str) -> str | None:
+    return known.found(text)
 
 
 # ------------------------------------------------------------- who may hold what
@@ -385,6 +391,8 @@ def _audience_of(entry: LedgerEntry, game: GameState) -> tuple[str, Audience] | 
         return "a whisper", lambda viewer: viewer in pair
     if kind == "declined":
         return "a private choice", lambda viewer: viewer == entry.actor_id
+    if kind == "refused":
+        return "a refused answer", lambda viewer: viewer == entry.actor_id
     if kind == "turn_failed" and payload.get("request") in PRIVATE_REQUESTS:
         return (
             "a failure on a private decision",

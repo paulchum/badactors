@@ -63,6 +63,9 @@ class Request(Contract):
     """Rooms an alibi may name."""
     limit: int | None = None
     """The longest a filibuster may run on this turn."""
+    refusal: str | None = Field(default=None, max_length=300)
+    """Why this player's last answer to this same question was refused. Asked
+    again with it, once; nobody else is told."""
 
 
 class _Decision(Contract):

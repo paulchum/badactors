@@ -278,6 +278,8 @@ def _render(
         _table_line(view, entry, who, diary)
     elif kind == "turn_failed":
         view.say("FAILED", entry.text)
+    elif kind == "refused":
+        view.say("REFUSED", entry.text)
     elif kind == "blocked" and "was full" in entry.payload.get("reason", ""):
         full = entry.payload["reason"].split(" and ")[0]
         view.say("MOVES", f"{who} was turned back at the door: {full}.")
