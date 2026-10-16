@@ -8,8 +8,9 @@ Frontier AI models play a hidden-role social-deduction game inside a simulated w
 
 ```text
 src/badactors/
-  castle/         the Castle: world core, game layer, scoping, bots, castle-game and castle-sweep CLIs
-  providers/      OpenRouter transport and deterministic mock, to be ported into the castle harness
+  castle/         the Castle: world core, game layer, scoping, bots, the model harness
+                  (prompt, contract_schema, provider, harness, budget, markers, fouls),
+                  and the castle-game, castle-live and castle-sweep CLIs
   bench/          ratings.py: OpenSkill (Weng-Lin) ratings for the benchmark
   clips/render/   Remotion project for claim-versus-truth clips
   server/         FastAPI app: owner-access guard and health check

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from badactors.castle.contracts import (
     GATHERINGS,
@@ -137,13 +137,31 @@ def observe(
     return observation
 
 
+def opening(state: WorldState) -> list[str]:
+    """Who a phase's opening prompt asks: every living, waking player, in seat
+    order."""
+    return [
+        player_id
+        for player_id in state.seats
+        if state.players[player_id].alive and not state.players[player_id].asleep
+    ]
+
+
+def interrupted(state: WorldState, since_seq: int) -> list[str]:
+    """Who a re-prompt after ``since_seq`` asks, in seat order. Whether one
+    player is asked depends only on that player's own records and budget, so
+    asking one never changes whether another is asked."""
+    return [
+        player_id
+        for player_id in state.seats
+        if _reprompt(state, player_id, since_seq) == "ask"
+    ]
+
+
 def prompt_everyone(state: WorldState, ask: Ask) -> WorldState:
     """The opening prompt of a phase: every living, waking player, in seat order."""
     world = state
-    for player_id in world.seats:
-        player = world.players[player_id]
-        if not player.alive or player.asleep:
-            continue
+    for player_id in opening(state):
         world = ask(world, player_id)
     return world
 
@@ -153,19 +171,28 @@ def prompt_interrupted(state: WorldState, ask: Ask, since_seq: int) -> WorldStat
     the phase's decision budget, and record it when the budget runs out."""
     world = state
     for player_id in world.seats:
-        if not would_interrupt(world, player_id, since_seq):
-            continue
-        # A gathering summons its own route; re-planning would let a player
-        # quietly ignore the call, so only the plan's exhaustion is honoured.
-        if world.phase in GATHERINGS and world.players[player_id].plan.steps:
-            continue
-        if replans_left(world, player_id) == 0:
+        verdict = _reprompt(world, player_id, since_seq)
+        if verdict == "capped":
             if not _already_capped(world, player_id):
                 world = note_replan_capped(world, player_id)
-            continue
-        world = note_replan(world, player_id)
-        world = ask(world, player_id)
+        elif verdict == "ask":
+            world = note_replan(world, player_id)
+            world = ask(world, player_id)
     return world
+
+
+def _reprompt(
+    state: WorldState, player_id: str, since_seq: int
+) -> Literal["ask", "capped", "skip"]:
+    if not would_interrupt(state, player_id, since_seq):
+        return "skip"
+    # A gathering summons its own route; re-planning would let a player
+    # quietly ignore the call, so only the plan's exhaustion is honoured.
+    if state.phase in GATHERINGS and state.players[player_id].plan.steps:
+        return "skip"
+    if replans_left(state, player_id) == 0:
+        return "capped"
+    return "ask"
 
 
 def _already_capped(state: WorldState, player_id: str) -> bool:
@@ -309,7 +336,9 @@ __all__ = [
     "DirectorStats",
     "RoutineDecider",
     "TickObserver",
+    "interrupted",
     "observe",
+    "opening",
     "prompt_everyone",
     "prompt_interrupted",
     "run_day",

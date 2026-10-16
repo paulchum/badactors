@@ -1,0 +1,1 @@
+{"ref": {"game_id": "greywater-7", "seat": "sol", "model": "openai/gpt-6.1-sol", "kind": "plan", "day": 1, "tick": 4, "ordinal": 0, "attempt": 1}, "mode": "tools", "status": 402, "body": {"error": {"code": 402, "message": "Insufficient credits. Add more using https://openrouter.ai/settings/credits"}}}

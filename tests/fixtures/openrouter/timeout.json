@@ -1,0 +1,1 @@
+{"ref": {"game_id": "greywater-7", "seat": "sol", "model": "openai/gpt-6.1-sol", "kind": "plan", "day": 1, "tick": 4, "ordinal": 0, "attempt": 1}, "mode": "tools", "error": "timeout: ReadTimeout"}
