@@ -96,10 +96,10 @@ def play_seating(
         check_leaks=check_leaks,
         models=sorted(set(scenario.cast.models().values())),
     )
-    stored = record(scenario.castle, scenario.cast, played)
+    stored = record(scenario.castle, scenario.cast, played, arm=seating.arm)
     if replays is not None:
         save_bundle(make_bundle(stored), replays / f"{seating.id}.json.gz")
-    return Finished(id=seating.id, record=stored, game=played.game, arm=seating.arm)
+    return Finished(id=seating.id, record=stored, game=played.game)
 
 
 def play_schedule(

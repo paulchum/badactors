@@ -4,8 +4,8 @@ Two sources of games:
 
 * ``--records DIR ...`` reads saved game records (``castle-live --save``), each
   with the harness log beside it when one was kept, replays each to check it,
-  and rates them. ``--schedule`` names the schedule they were played from, so
-  each game's arm is known; Corruption Test and names-visible games are not
+  and rates them. A game played from a schedule (``castle-live --schedule``)
+  names its arm in its record; Corruption Test and names-visible games are not
   rated.
 * ``--bots`` is a dry run: it plays the mixed arm of a schedule with reference
   bot profiles of known susceptibility, and spends nothing.
@@ -26,11 +26,14 @@ results: a record any seat of which a bot played is refused by the model board
 and listed with the reason.
 
 ``--plan`` writes the schedule for a paid run of the cast's models instead, and
-prints the power estimate from a bot pilot first (``castle-power``).
+prints the power estimate from a bot pilot first (``castle-power``). With
+``--qualified DIR`` it applies the reliability gate: every model needs a passing
+``castle-qualify`` result there, on the current suite, or nothing is scheduled.
 
     uv run castle-bench --bots --seeds 20
-    uv run castle-bench --records data/live --schedule out/schedule.json
-    uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b
+    uv run castle-bench --records data/live
+    uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b \\
+        --qualified out/qualify
 """
 
 from __future__ import annotations
@@ -49,16 +52,14 @@ from badactors.bench.steer import spearman
 from badactors.castle.cast import load_cast_file
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import load_record, replay
-from badactors.castle.power import arm_loads, plan, run_pilot
+from badactors.castle.power import PilotTooShort, arm_loads, plan, run_pilot
+from badactors.castle.qualify import Qualification, load_suite, result_path
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import (
-    ArmKind,
     Rotation,
     Scenario,
-    Schedule,
     Tier,
     check,
-    load_schedule,
     mixed_schedule,
     save_schedule,
 )
@@ -82,13 +83,12 @@ def parser() -> argparse.ArgumentParser:
     source.add_argument("--bots", action="store_true", help="A dry run with bots.")
     source.add_argument("--records", nargs="+", help="Saved records, or folders.")
     source.add_argument("--plan", action="store_true", help="Schedule a paid run.")
-    parser.add_argument("--schedule", help="The schedule the records were played from.")
     parser.add_argument("--out", default="out")
     parser.add_argument("--seeds", type=int, default=20)
     parser.add_argument("--profiles", type=int, help="Bot profiles (default: players).")
     parser.add_argument("--players", type=int, default=8)
     parser.add_argument("--traitors", type=int, choices=(2, 3), default=2)
-    parser.add_argument("--rotation", choices=("latin", "compact"), default="latin")
+    parser.add_argument("--rotation", choices=("compact", "latin"), default="compact")
     parser.add_argument("--seed", type=int, default=0, help="Deals the bot profiles.")
     parser.add_argument("--resamples", type=int, default=200, help="Bootstrap draws.")
     parser.add_argument("--no-leak-check", action="store_true")
@@ -101,6 +101,10 @@ def parser() -> argparse.ArgumentParser:
         help="With --plan: the cast's open-weight models; the rest are frontier.",
     )
     parser.add_argument("--pilot-seeds", type=int, default=6)
+    parser.add_argument(
+        "--qualified",
+        help="With --plan: castle-qualify's results; only models that passed play.",
+    )
     return parser
 
 
@@ -119,8 +123,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.bots:
         games, refused = dry_run(scenario, args, out, rotation)
     else:
-        schedule = load_schedule(args.schedule) if args.schedule else None
-        games, refused = read_records(args.records, schedule, out)
+        games, refused = read_records(args.records, out)
     write(games, refused, out, resamples=args.resamples, seed=args.seed)
 
 
@@ -195,13 +198,11 @@ def record_paths(sources: Sequence[str]) -> Iterator[Path]:
 
 
 def read_records(
-    sources: Sequence[str], schedule: Schedule | None, out: Path
+    sources: Sequence[str], out: Path
 ) -> tuple[list[Finished], list[Refusal]]:
     """Load, replay and bundle every record; refuse any that does not replay to
-    its own ledger."""
-    arms: dict[str, ArmKind] = (
-        {game.world_id: game.arm for game in schedule.games} if schedule else {}
-    )
+    its own ledger. A scheduled game goes by its schedule id, any other by its
+    file name."""
     games: list[Finished] = []
     refused: list[Refusal] = []
     for path in record_paths(sources):
@@ -212,7 +213,7 @@ def read_records(
             continue
         harness = path.with_suffix(".harness.jsonl")
         events = read_events(harness) if harness.exists() else []
-        name = stored.world_id if stored.world_id in arms else path.stem
+        name = stored.world_id if stored.arm is not None else path.stem
         try:
             game = replay(stored)
         except Exception as exc:
@@ -230,7 +231,6 @@ def read_records(
                 id=name,
                 record=stored,
                 game=game,
-                arm=arms.get(stored.world_id),
                 calls=tuple(e for e in events if e.get("event") == "call"),
                 spent=_spent(events),
             )
@@ -301,7 +301,8 @@ def summary(rated: Board) -> str:
             f"  {row.label:34} deception {row.deception.mu:5.1f} "
             f"[{row.deception.low:5.1f}, {row.deception.high:5.1f}]  detection "
             f"{row.detection.mu:5.1f} [{row.detection.low:5.1f}, "
-            f"{row.detection.high:5.1f}]  failed {row.failure_rate:.1%}"
+            f"{row.detection.high:5.1f}]  failed {row.reliability_rate:.1%}, "
+            f"refused {row.refusal_rate:.1%}"
         )
     reasons: dict[str, int] = {}
     for item in rated.refused:
@@ -311,22 +312,54 @@ def summary(rated: Board) -> str:
     return "\n".join(lines)
 
 
+def gate(models: Sequence[str], results: Path) -> list[str]:
+    """Each model the reliability gate keeps out of rated play, and why: no
+    result, a mock one, one on another suite, or one that did not pass."""
+    digest = load_suite().digest
+    out = []
+    for model in models:
+        path = result_path(results, model)
+        if not path.exists():
+            out.append(f"  {model}: no qualification result at {path}")
+            continue
+        found = Qualification.model_validate_json(path.read_text())
+        if found.mock:
+            out.append(f"  {model}: only a mock run, which qualifies nobody")
+        elif found.suite_digest != digest:
+            out.append(f"  {model}: qualified on another suite")
+        elif found.qualified is not True:
+            out.append(f"  {model}: {found.summary().splitlines()[0]}")
+    return out
+
+
 def plan_run(
     scenario: Scenario, args: argparse.Namespace, out: Path, rotation: Rotation
 ) -> None:
     """Print the power estimate, then write the schedule for the cast's models."""
     models = list(dict.fromkeys(scenario.cast.models().values()))
-    pilot = run_pilot(
-        scenario, seeds=args.pilot_seeds, entrants=len(models), rotation=rotation
-    )
-    print(plan(pilot, arm_loads(scenario, models, rotation=rotation)).summary())
-    print()
+    if args.qualified is None:
+        print(
+            "The reliability gate is not applied: pass --qualified with "
+            "castle-qualify's results.\n"
+        )
+    else:
+        unqualified = gate(models, Path(args.qualified))
+        if unqualified:
+            sys.exit("Not qualified for rated play:\n" + "\n".join(unqualified))
     tiers: dict[str, Tier] = {}
     if args.open_weight is not None:
         unknown = sorted(set(args.open_weight) - set(models))
         if unknown:
             sys.exit(f"Not in the cast: {', '.join(unknown)}.")
         tiers = {m: "open" if m in args.open_weight else "frontier" for m in models}
+    try:
+        pilot = run_pilot(
+            scenario, seeds=args.pilot_seeds, entrants=len(models), rotation=rotation
+        )
+    except PilotTooShort as exc:
+        sys.exit(str(exc))
+    print(plan(pilot, arm_loads(scenario, models, rotation=rotation)).summary())
+    print()
     schedule = mixed_schedule(
         scenario, models, seeds=list(range(args.seeds)), rotation=rotation, tiers=tiers
     )

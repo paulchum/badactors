@@ -901,8 +901,6 @@ class _Finder:
 
     def gaslit(self) -> Iterable[Moment]:
         for claim in self.of_type("alibi", "vouch"):
-            if claim.type == "vouch" and claim.payload.get("confirm") != "true":
-                continue  # Refusing to vouch is denying the memory, not holding it.
             target = claim.actor_id
             attacker = planted_by(self.game, claim)
             if attacker is None or target is None:

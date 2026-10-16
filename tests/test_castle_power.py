@@ -53,14 +53,17 @@ def test_head_to_head() -> None:
 def test_an_arms_load_is_what_one_seed_gives_the_rarest_entrant_and_pair() -> None:
     entrants = [f"p{i}" for i in range(8)]
     load = arm_load(arm_games(SCENARIO, "mixed", entrants, seeds=[0, 1]))
-    assert load.games == 8
-    assert load.traitor_games == 2
-    assert load.faithful_games == 6
-    assert 1 <= load.meetings <= 2
+    assert (load.games, load.traitor_games, load.faithful_games) == (4, 1, 3)
+    assert 0 < load.meetings <= 1
+    latin = arm_load(
+        arm_games(SCENARIO, "mixed", entrants, seeds=[0, 1], rotation="latin")
+    )
+    assert (latin.games, latin.traitor_games, latin.faithful_games) == (8, 2, 6)
+    assert 1 <= latin.meetings <= 2
     loads = {found.arm: found for found in arm_loads(SCENARIO, entrants)}
     assert set(loads) == {"mixed", "names_visible", "invader", "single"}
     assert loads["single"].games == 1 and loads["single"].meetings == 2 * 6
-    assert loads["invader"].games == 16
+    assert loads["invader"].games == 2 * 4
 
 
 @pytest.fixture(scope="module")
@@ -74,7 +77,7 @@ def test_the_plan_reads_the_pilot_and_gives_every_arm_seeds(
     pilot_plan: tuple[Pilot, Plan],
 ) -> None:
     pilot, found = pilot_plan
-    assert len(pilot.games) == 16
+    assert len(pilot.games) == 2 * 4
     assert all(f.record.reference_bots for f in pilot.games)
     assert set(pilot.shrink) == {"deception", "detection"}
     assert all(shrink.b > 0 for shrink in pilot.shrink.values())

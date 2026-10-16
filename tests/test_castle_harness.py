@@ -80,6 +80,26 @@ def test_a_full_ten_seat_game_runs_through_model_players() -> None:
     assert not live.harness.of("prefetch_unused")
 
 
+def test_a_scheduled_game_keeps_its_arm_and_only_the_mixed_arm_is_rated() -> None:
+    cast = CAST.first(8)
+    for arm, rated in (("mixed", True), ("single", False), ("invader", False)):
+        live = play_live(
+            CASTLE,
+            cast,
+            seed=2,
+            config=GameConfig.shipped(max_days=2),
+            provider=BotProvider(HeuristicBot(seed=2)),
+            models=mock_models(MODELS),
+            limits=FREE,
+            world_id=f"bench-{arm}-s2-r0",
+            arm=arm,  # type: ignore[arg-type]
+        )
+        stored = live.record
+        assert (stored.arm, stored.rated) == (arm, rated)
+        assert stored.world_id == f"bench-{arm}-s2-r0"
+        assert replay(stored).world.id == stored.world_id
+
+
 def test_every_mode_plays_the_same_game() -> None:
     expected = _dumped(bot_game(3, max_days=2).game.world.ledger)
     for mode in ("json_schema", "json_object", "prompt"):

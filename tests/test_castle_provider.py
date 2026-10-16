@@ -37,7 +37,7 @@ SCHEMA = {
     "required": ["decision"],
     "additionalProperties": False,
 }
-KEY = "sk-or-v1-0123456789abcdef"
+KEY = "not-a-real-key"
 
 
 def call(mode: Mode, model: str = "openai/gpt-6.1-sol") -> ProviderCall:

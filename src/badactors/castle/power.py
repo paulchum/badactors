@@ -6,7 +6,7 @@ profile — and answers two questions from it, at a stated effect size, a
 significance level and a power.
 
 * **Ratings.** How many games before two neighbouring entrants, a rating gap
-  apart, are told apart? The pilot is rated at checkpoints, and each role's
+  apart, are told apart? The pilot is rated after every game, and each role's
   sigma is fitted as ``c * n ** -b`` over the games an entrant played in that
   role; Weng-Lin sigma shrinks more slowly than ``1 / sqrt(n)``, so the
   exponent is fitted, not assumed. Two entrants are separated when the gap is
@@ -29,8 +29,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from math import ceil, exp, log, sqrt
 from pathlib import Path
@@ -41,11 +42,13 @@ from badactors.bench.dryrun import play_schedule, profiles
 from badactors.bench.leaderboard import Finished, board
 from badactors.bench.matrix import ALL, matrix
 from badactors.bench.ratings import BETA
+from badactors.bench.seats import Numbers, ledger_metrics
 from badactors.castle.cast import load_cast_file
+from badactors.castle.game import GameState
 from badactors.castle.mapfile import load_map
+from badactors.castle.play import ArmKind
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import (
-    ArmKind,
     Rotation,
     Scenario,
     Schedule,
@@ -56,9 +59,6 @@ from badactors.castle.schedule import (
 )
 
 _CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
-
-CHECKPOINTS = (0.25, 0.5, 0.75, 1.0)
-"""The shares of the pilot rated, to see sigma shrink."""
 
 
 def z(probability: float) -> float:
@@ -140,7 +140,7 @@ def run_pilot(
     *,
     seeds: int,
     entrants: int,
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
     seed: int = 0,
 ) -> Pilot:
     """Play the mixed arm with ``entrants`` reference bot profiles over
@@ -152,9 +152,13 @@ def run_pilot(
     played = play_schedule(games, scenario, levels)
     ordered = sorted(played, key=lambda f: (f.record.seed, f.id))
     points: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    for share in CHECKPOINTS:
-        upto = ordered[: max(1, round(share * len(ordered)))]
-        rated = board(upto, reference=True)
+    numbers = {id(f.game): ledger_metrics(f.game) for f in ordered}
+
+    def known(game: GameState) -> Mapping[str, Numbers]:
+        return numbers[id(game)]
+
+    for count in range(1, len(ordered) + 1):
+        rated = board(ordered[:count], reference=True, metrics=known)
         for row in rated.rows.values():
             points["deception"].append((row.traitor_games, row.deception.sigma))
             points["detection"].append((row.faithful_games, row.detection.sigma))
@@ -174,13 +178,27 @@ def run_pilot(
         seeds=seeds,
         entrants=entrants,
         games=played,
-        shrink={
-            role: fit_shrink(found_points) for role, found_points in points.items()
-        },
+        shrink=_shrinks(points, seeds),
         meetings=meetings,
         attempts=dict(attempts),
         successes=dict(successes),
     )
+
+
+class PilotTooShort(ValueError):
+    """The pilot was too short to see sigma shrink in some role."""
+
+
+def _shrinks(
+    points: Mapping[str, Sequence[tuple[float, float]]], seeds: int
+) -> dict[str, Shrink]:
+    try:
+        return {role: fit_shrink(found) for role, found in points.items()}
+    except ValueError as exc:
+        raise PilotTooShort(
+            f"{exc} A pilot of {seeds} seeds gives every entrant as many games "
+            "in a role at every point; give it more seeds."
+        ) from exc
 
 
 # ------------------------------------------------------------------ the arms
@@ -430,7 +448,7 @@ def arm_loads(
     scenario: Scenario,
     entrants: Sequence[str],
     *,
-    rotation: Rotation = "latin",
+    rotation: Rotation = "compact",
     seeds: Sequence[int] = range(4),
 ) -> list[ArmLoad]:
     """What a seed of each arm of the Corruption Test gives, for this cast."""
@@ -465,7 +483,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--players", type=int, default=8)
     parser.add_argument("--traitors", type=int, choices=(2, 3), default=2)
-    parser.add_argument("--rotation", choices=("latin", "compact"), default="latin")
+    parser.add_argument("--rotation", choices=("compact", "latin"), default="compact")
     parser.add_argument("--rating-gap", type=float, default=2.0)
     parser.add_argument("--cell-gap", type=float, default=0.15)
     parser.add_argument("--alpha", type=float, default=0.05)
@@ -482,13 +500,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     entrants = args.entrants or args.players
     rotation: Rotation = args.rotation
-    pilot = run_pilot(
-        scenario,
-        seeds=args.pilot_seeds,
-        entrants=entrants,
-        rotation=rotation,
-        seed=args.seed,
-    )
+    try:
+        pilot = run_pilot(
+            scenario,
+            seeds=args.pilot_seeds,
+            entrants=entrants,
+            rotation=rotation,
+            seed=args.seed,
+        )
+    except PilotTooShort as exc:
+        sys.exit(str(exc))
     names = list(profiles(entrants, seed=args.seed))
     estimate = plan(
         pilot,
@@ -508,6 +529,7 @@ if __name__ == "__main__":
 __all__ = [
     "ArmLoad",
     "Pilot",
+    "PilotTooShort",
     "Plan",
     "Shrink",
     "arm_load",

@@ -60,7 +60,7 @@ def test_the_seed_draws_the_same_traitor_seats_whoever_plays_them() -> None:
 
 
 def test_the_latin_square_seats_every_entrant_everywhere_once_a_seed() -> None:
-    schedule = mixed_schedule(scenario(), MODELS, seeds=[0, 1, 2])
+    schedule = mixed_schedule(scenario(), MODELS, seeds=[0, 1, 2], rotation="latin")
     check(schedule)
     for seed in (0, 1, 2):
         games = [game for game in schedule.games if game.seed == seed]
@@ -120,7 +120,7 @@ def test_single_model_castles_are_one_game_a_seed() -> None:
 
 def test_the_invader_goes_round_every_seat_both_ways() -> None:
     a, b = MODELS[:2]
-    games = invader_arm(scenario(), a, b, seeds=[3])
+    games = invader_arm(scenario(), a, b, seeds=[3], rotation="latin")
     assert {game.group for game in games} == {
         "lab0-model-0-in-lab1-model-1",
         "lab1-model-1-in-lab0-model-0",
@@ -133,6 +133,9 @@ def test_the_invader_goes_round_every_seat_both_ways() -> None:
     assert seats_of_a == set(invaded[0].seats)
     coverage = check(Schedule(players=8, traitors=2, rotation="latin", games=games))
     assert coverage[0].pairs == coverage[0].pairs_wanted == 4
+    compact = invader_arm(scenario(), a, b, seeds=[3])
+    assert len(compact) == 2 * 4
+    check(Schedule(players=8, traitors=2, rotation="compact", games=compact))
 
 
 def test_the_corruption_test_has_four_arms_and_names_visible_is_never_rated() -> None:
@@ -208,7 +211,10 @@ def test_every_latin_schedule_covers_both_roles_and_every_pair(
     players: int, traitors: int, entrants: int, seed: int
 ) -> None:
     schedule = mixed_schedule(
-        scenario(players, traitors), MODELS[:entrants], seeds=[seed, seed + 1]
+        scenario(players, traitors),
+        MODELS[:entrants],
+        seeds=[seed, seed + 1],
+        rotation="latin",
     )
     for cover in check(schedule):
         assert cover.pairs == cover.pairs_wanted == entrants * (entrants - 1)

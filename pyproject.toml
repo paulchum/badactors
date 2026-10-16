@@ -23,6 +23,7 @@ castle-clips = "badactors.castle.clips:main"
 castle-game = "badactors.castle.cli:main"
 castle-live = "badactors.castle.live:main"
 castle-power = "badactors.castle.power:main"
+castle-qualify = "badactors.castle.qualify:main"
 castle-sweep = "badactors.castle.sweep:main"
 castle-verify = "badactors.castle.verify:main"
 

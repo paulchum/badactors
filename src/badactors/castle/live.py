@@ -10,13 +10,29 @@ does not fit the budget it stops there unless ``--allow-partial`` is given.
     uv run castle-live --seed 7 --max-requests 600 --max-tokens 4000000 \\
         --max-dollars 15 --save data/live/seed7.json --record data/live/seed7.jsonl
 
+A benchmark game comes from a schedule (``castle-bench --plan``): ``--schedule``
+and ``--game`` take its seed, its seats and its arm from there, and the record
+keeps the arm, so ``castle-bench`` rates it, or refuses it, without the
+schedule.
+
+    uv run castle-live --schedule out/schedule.json --game mixed-s0-r0 \\
+        --max-requests 600 --max-tokens 4000000 --max-dollars 15
+
 ``--dry-run`` prints the estimate and spends nothing. ``--mock`` plays the whole
 harness against the seeded bot behind a mock provider: no key, no network, no
-cost, and the same ledger as ``castle-game`` with the same seed.
+cost, and the same ledger as ``castle-game`` with the same seed. Its seats are
+recorded as ``mock:<id>``, never as the model, and it is never rated.
 
 The saved record names ``model:<id>`` for every seat, replays to the identical
 ledger, and says how the game ended. A game stopped by its budget, or aborted
 by a 401, 402 or 403, is saved as far as it got and is never rated.
+
+Beside the record go the harness log (``.harness.jsonl``: every call's tokens
+and cost, mode changes, stops) and the game's verify bundle
+(``.bundle.json.gz``): the record and a hashed receipt of every provider call —
+provider, model id, attempt, the SHA-256 of the request and of the response,
+and why an answer could not be used — chained to one head, which
+``castle-verify`` checks. The receipt never holds a key, a header or a word.
 """
 
 from __future__ import annotations
@@ -45,6 +61,14 @@ from badactors.castle.provider import (
     load_models,
 )
 from badactors.castle.rules import GameConfig
+from badactors.castle.schedule import (
+    Schedule,
+    ScheduleError,
+    Seating,
+    load_schedule,
+    traitor_seats,
+)
+from badactors.castle.verify import Bundle, HashingProvider, make_bundle, save_bundle
 
 _ROOT = Path(__file__).resolve().parents[3]
 _CONFIGS = _ROOT / "configs" / "castle"
@@ -56,12 +80,15 @@ def parser() -> argparse.ArgumentParser:
         prog="castle-live",
         description="Play one Castle game with real models, within a budget.",
     )
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--seed", type=int, help="The game's seed (default 7).")
     parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
     parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
     parser.add_argument("--players", type=int, help="Seat the first N of the cast.")
     parser.add_argument("--traitors", type=int, choices=(2, 3))
     parser.add_argument("--max-days", type=int)
+    scheduled = parser.add_argument_group("a benchmark game")
+    scheduled.add_argument("--schedule", help="A schedule from castle-bench --plan.")
+    scheduled.add_argument("--game", help="Which of its games to play, by id.")
     budget = parser.add_argument_group("budget (all three required)")
     budget.add_argument("--max-requests", type=int)
     budget.add_argument("--max-tokens", type=int)
@@ -117,21 +144,39 @@ def main(argv: list[str] | None = None) -> None:
 
     castle = load_map(args.map)
     cast = load_cast_file(args.cast)
-    if args.players is not None:
-        cast = cast.first(args.players)
+    seed = 7 if args.seed is None else args.seed
+    seating: Seating | None = None
     overrides: dict[str, int] = {}
-    if args.traitors is not None:
-        overrides["traitors"] = args.traitors
     if args.max_days is not None:
         overrides["max_days"] = args.max_days
+    if args.schedule or args.game:
+        schedule, seating = scheduled(args)
+        try:
+            cast = seating.cast(cast.first(schedule.players))
+        except ScheduleError as exc:
+            sys.exit(f"{exc} Pass the cast the schedule was planned from.")
+        overrides["traitors"] = schedule.traitors
+        seed = seating.seed
+    else:
+        if args.players is not None:
+            cast = cast.first(args.players)
+        if args.traitors is not None:
+            overrides["traitors"] = args.traitors
     config = GameConfig.shipped(**overrides)
+    if seating is not None and seating.traitors != traitor_seats(
+        castle, cast, seed=seed, config=config
+    ):
+        sys.exit(
+            f"Seed {seed} draws other traitor seats in this castle than the "
+            f"schedule planned for {seating.id}; pass the map it was planned with."
+        )
 
     models = _models(cast, args)
     estimate = preflight(
         castle,
         cast,
         models,
-        seed=args.seed,
+        seed=seed,
         config=config,
         max_tokens=args.max_output_tokens,
     )
@@ -144,12 +189,16 @@ def main(argv: list[str] | None = None) -> None:
             "--allow-partial to play until it runs out."
         )
 
-    save = Path(args.save) if args.save else _default_save(args.seed)
+    save = (
+        Path(args.save)
+        if args.save
+        else _default_save(seating.id if seating is not None else f"seed{seed}")
+    )
     harness = HarnessLog(save.with_suffix(".harness.jsonl"))
     provider: Provider
     closers = []
     if args.mock:
-        provider = BotProvider(HeuristicBot(seed=args.seed))
+        provider = BotProvider(HeuristicBot(seed=seed))
     else:
         key = os.environ.get("OPENROUTER_API_KEY", "")
         if not key:
@@ -157,13 +206,16 @@ def main(argv: list[str] | None = None) -> None:
         openrouter = OpenRouterProvider(api_key=key, timeout=args.timeout)
         closers.append(openrouter.aclose)
         provider = openrouter
+    provider = HashingProvider(
+        provider, harness, "mock:bot" if args.mock else "openrouter"
+    )
     if args.record:
         provider = RecordingProvider(provider, Path(args.record))
 
     live = play_live(
         castle,
         cast,
-        seed=args.seed,
+        seed=seed,
         config=config,
         provider=provider,
         models=models,
@@ -174,9 +226,36 @@ def main(argv: list[str] | None = None) -> None:
         check_leaks=not args.no_leak_check,
         concurrent=not args.sequential,
         closers=closers,
+        mock=args.mock,
+        world_id=seating.world_id if seating is not None else "castle-game",
+        arm=seating.arm if seating is not None else None,
     )
     save_record(live.record, save)
-    print(report(live, save))
+    bundle = make_bundle(live.record, live.harness.events)
+    save_bundle(bundle, bundle_path(save))
+    print(report(live, save, bundle))
+
+
+def scheduled(args: argparse.Namespace) -> tuple[Schedule, Seating]:
+    """The schedule, and the game of it ``--game`` names."""
+    if not (args.schedule and args.game):
+        sys.exit("--schedule and --game go together: a schedule, and its game.")
+    if args.players is not None or args.traitors is not None:
+        sys.exit("A scheduled game takes its seats and traitors from the schedule.")
+    schedule = load_schedule(args.schedule)
+    seating = next((game for game in schedule.games if game.id == args.game), None)
+    if seating is None:
+        sys.exit(f"{args.schedule} has no game {args.game!r}.")
+    if seating.names_visible:
+        sys.exit(
+            "castle-live does not show models on the roster yet, so it cannot "
+            "play a names-visible game."
+        )
+    if args.seed is not None and args.seed != seating.seed:
+        sys.exit(
+            f"Game {seating.id} is played on seed {seating.seed}, not {args.seed}."
+        )
+    return schedule, seating
 
 
 def _models(cast: Cast, args: argparse.Namespace) -> dict[str, ModelInfo]:
@@ -192,12 +271,17 @@ def _models(cast: Cast, args: argparse.Namespace) -> dict[str, ModelInfo]:
     return {model: known[model] for model in wanted}
 
 
-def _default_save(seed: int) -> Path:
+def _default_save(name: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return _ROOT / "data" / "live" / f"seed{seed}-{stamp}.json"
+    return _ROOT / "data" / "live" / f"{name}-{stamp}.json"
 
 
-def report(live: LiveGame, save: Path) -> str:
+def bundle_path(save: Path) -> Path:
+    """Where the verify bundle of the record at ``save`` goes."""
+    return save.with_suffix(".bundle.json.gz")
+
+
+def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     stored = live.record
     failures = Counter(
         (entry.actor_id, entry.payload.get("reason", "?"))
@@ -206,6 +290,7 @@ def report(live: LiveGame, save: Path) -> str:
     )
     spent = live.budget.spent
     lines = [
+        *([f"Arm: {stored.arm}, {stored.world_id}."] if stored.arm else []),
         f"Outcome: {stored.outcome}"
         + (f" ({live.referee.stopped_by})" if live.referee.stopped_by else "")
         + (f"; winner: {stored.winner}" if stored.winner else ""),
@@ -221,6 +306,10 @@ def report(live: LiveGame, save: Path) -> str:
             f"({change['why']})"
         )
     lines.append(f"Saved the record to {save} and the harness log beside it.")
+    lines.append(
+        f"Verify bundle: {bundle_path(save)}, {len(bundle.exchanges)} exchanges, "
+        f"head {bundle.head}."
+    )
     return "\n".join(lines)
 
 

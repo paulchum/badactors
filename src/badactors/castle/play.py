@@ -108,9 +108,10 @@ class Player(Protocol):
     """Anything that answers a decision from what one player may know.
 
     A player says what it is in an ``agent`` attribute — ``bot:<name>`` for a
-    reference bot, ``model:<id>`` for a model — which the record keeps beside
-    every answer. One that does not say is recorded as ``unknown``, never as a
-    model. A player may also give an exit interview, through an ``interview``
+    reference bot, ``model:<id>`` for a model, ``mock:<id>`` for the seeded bot
+    answering for a model behind the mock provider — which the record keeps
+    beside every answer. One that does not say is recorded as ``unknown``,
+    never as a model. A player may also give an exit interview, through an ``interview``
     method taking an :class:`~badactors.castle.interview.ExitObservation`; one
     that cannot is recorded as giving none.
     """
@@ -131,12 +132,28 @@ def is_model(agent: str) -> bool:
     return agent.startswith("model:") and len(agent) > len("model:")
 
 
+def is_mock(agent: str) -> bool:
+    """A seat the seeded bot played for its cast model, behind the mock
+    provider: the whole harness ran, but no model answered."""
+    return agent.startswith("mock:") and len(agent) > len("mock:")
+
+
 FailureReason = Literal[
     "transport", "content_filter", "refusal", "empty", "unparseable", "invalid"
 ]
 """Why a turn failed: no answer came back (transport), the provider stopped it
 (content_filter), the model declined in words (refusal), or what came back was
 empty, not JSON (unparseable), or not a legal answer (invalid)."""
+
+RELIABILITY_FAILURES: frozenset[FailureReason] = frozenset(
+    {"transport", "empty", "unparseable", "invalid"}
+)
+"""The failures the reliability gate counts. A refusal and a content filter are
+results, not breakage (SPEC §6), and are counted apart."""
+
+RELIABILITY_GATE = 0.02
+"""A model failing more than this share of its qualification turns, counting
+only reliability failures, is excluded from rated play (SPEC §6)."""
 
 
 class TurnFailure(Exception):
@@ -634,6 +651,13 @@ def run_game(
 
 
 Outcome = Literal["finished", "stopped:budget", "aborted:operator"]
+
+ArmKind = Literal["single", "mixed", "invader", "names_visible"]
+"""The kind of castle a benchmark game is scheduled in (SPEC §7): every seat one
+model, the rated mixed cast, one model invading another's castle, or the mixed
+cast with models shown on the roster."""
+
+UNRATED_ARMS: frozenset[ArmKind] = frozenset({"single", "invader", "names_visible"})
 """How a game ended: played out, stopped when its budget ran out, or aborted
 by an operator error (a bad key, no credit). Only a finished game is whole."""
 
@@ -659,11 +683,16 @@ class GameRecord(Contract):
     winner: Role | None
     outcome: Outcome = "finished"
     rated: bool = False
+    arm: ArmKind | None = None
+    """The arm of the benchmark schedule this game was played from; ``None``
+    for a game played from no schedule, and for records older than the field."""
 
     @model_validator(mode="after")
     def every_seat_says_who_played_it(self) -> Self:
         if self.rated and (self.outcome != "finished" or self.reference_bots):
             raise ValueError("Only a finished game played by models can be rated.")
+        if self.rated and self.arm in UNRATED_ARMS:
+            raise ValueError(f"A game of the {self.arm} arm is never rated.")
         cast = {member.id: member.model for member in self.cast.players}
         if set(self.agents) != set(cast):
             raise ValueError("Every seat in the cast needs its agent, and only those.")
@@ -671,6 +700,10 @@ class GameRecord(Contract):
             if is_model(agent) and agent != f"model:{cast[seat]}":
                 raise ValueError(
                     f"Seat {seat!r} was played by {agent!r}, not the cast's model."
+                )
+            if is_mock(agent) and agent != f"mock:{cast[seat]}":
+                raise ValueError(
+                    f"Seat {seat!r} was mocked as {agent!r}, not the cast's model."
                 )
         for decision in self.decisions:
             if decision.agent != self.agents.get(decision.player_id):
@@ -714,6 +747,7 @@ def record(
     *,
     outcome: Outcome = "finished",
     rated: bool = False,
+    arm: ArmKind | None = None,
 ) -> GameRecord:
     game = played.game
     return GameRecord(
@@ -731,6 +765,7 @@ def record(
         winner=game.winner,
         outcome=outcome,
         rated=rated,
+        arm=arm,
     )
 
 
@@ -823,7 +858,11 @@ def load_record(path: str | Path) -> GameRecord:
 
 
 __all__ = [
+    "RELIABILITY_FAILURES",
+    "RELIABILITY_GATE",
     "UNKNOWN_AGENT",
+    "UNRATED_ARMS",
+    "ArmKind",
     "BadAnswer",
     "Defused",
     "FailureReason",
@@ -839,6 +878,7 @@ __all__ = [
     "TurnFailure",
     "agent_of",
     "defused",
+    "is_mock",
     "is_model",
     "load_record",
     "plan_request",

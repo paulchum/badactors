@@ -79,6 +79,8 @@ from badactors.castle.observe import (
     observed,
 )
 from badactors.castle.play import (
+    UNRATED_ARMS,
+    ArmKind,
     BadAnswer,
     Defused,
     GameRecord,
@@ -151,10 +153,12 @@ class ModelPlayer:
     slots: asyncio.Semaphore | None = None
     """Shared by every seat of the same model: how many of its calls may be in
     flight at once."""
+    mock: bool = False
+    """The provider is the mock one: the seeded bot answers for the model."""
 
     @property
     def agent(self) -> str:
-        return f"model:{self.model}"
+        return f"{'mock' if self.mock else 'model'}:{self.model}"
 
     def __call__(self, observation: GameObservation) -> Decision:
         raise RuntimeError("A model seat is asked through the LiveReferee.")
@@ -528,9 +532,15 @@ def play_live(
     closers: Sequence[Closer] = (),
     game_id: str | None = None,
     players: Mapping[str, Player] | None = None,
+    mock: bool = False,
+    world_id: str = "castle-game",
+    arm: ArmKind | None = None,
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
-    the seats they name, and return its record."""
+    the seats they name, and return its record. With ``mock``, the provider is
+    the mock one: its seats are recorded as ``mock:<id>`` and never rated. A
+    game played from a schedule passes its ``world_id`` and ``arm``, which the
+    record keeps; a game of an arm that is never rated is not."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -558,11 +568,12 @@ def play_live(
             log=log,
             max_tokens=max_tokens,
             slots=slots[model],
+            mock=mock,
         )
         for seat, model in seat_models.items()
     }
     seated.update(players or {})
-    game = start_game(castle, cast, seed=seed, config=config)
+    game = start_game(castle, cast, seed=seed, config=config, world_id=world_id)
     referee = LiveReferee(
         fork_game(game),
         seated,
@@ -591,7 +602,13 @@ def play_live(
         cast,
         played,
         outcome=referee.outcome,
-        rated=referee.outcome == "finished" and not players,
+        rated=(
+            referee.outcome == "finished"
+            and not players
+            and not mock
+            and arm not in UNRATED_ARMS
+        ),
+        arm=arm,
     )
     log.write(
         "spent",

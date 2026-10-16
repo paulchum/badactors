@@ -14,8 +14,9 @@ from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, save_record, start_game
+from badactors.castle.qualify import Qualification, load_suite, result_path
 from badactors.castle.rules import GameConfig
-from badactors.castle.schedule import Scenario, mixed_schedule, save_schedule
+from badactors.castle.schedule import Scenario, mixed_schedule
 from badactors.castle.verify import load_bundle, verify
 from castle_scenes import CAST, CASTLE
 
@@ -65,7 +66,7 @@ def test_a_dry_run_writes_both_boards_apart_and_a_bundle_per_game(
         "played by reference bots"
     }
     bots = board["reference_bots"]
-    assert bots["reference_bots"] and bots["games"] == 16
+    assert bots["reference_bots"] and bots["games"] == 2 * 4
     assert all(row["label"].startswith("Reference bot") for row in bots["rows"])
     assert {row["entrant"] for row in bots["rows"]} == {
         f"bot:heuristic/p{i}" for i in range(4)
@@ -74,7 +75,7 @@ def test_a_dry_run_writes_both_boards_apart_and_a_bundle_per_game(
     assert found["models"]["entrants"] == []
     assert found["reference_bots"]["label"].startswith("Reference bots")
     replays = sorted((out / "replays" / "bots").iterdir())
-    assert len(replays) == 16 and not (out / "replays" / "models").exists()
+    assert len(replays) == 2 * 4 and not (out / "replays" / "models").exists()
     assert verify(load_bundle(replays[0])) == []
     profiles = json.loads((out / "profiles.json").read_text())
     assert set(profiles["susceptibility"]) == {f"bot:heuristic/p{i}" for i in range(4)}
@@ -84,7 +85,6 @@ def test_saved_records_are_replayed_rated_and_bundled(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     schedule = mixed_schedule(SCENARIO, MODELS, seeds=[0], rotation="compact")
-    save_schedule(schedule, tmp_path / "schedule.json")
     games = tmp_path / "games"
     for seating in schedule.games:
         cast = seating.cast(SCENARIO.cast)
@@ -104,7 +104,7 @@ def test_saved_records_are_replayed_rated_and_bundled(
             check_leaks=False,
         )
         path = games / f"{seating.id}.json"
-        save_record(record(CASTLE, cast, played, rated=True), path)
+        save_record(record(CASTLE, cast, played, rated=True, arm=seating.arm), path)
         calls = [
             {"event": "call", "ref": {"seat": seat}, "dollars": 0.02}
             for seat in seating.seats
@@ -118,6 +118,24 @@ def test_saved_records_are_replayed_rated_and_bundled(
     bot = HeuristicBot(seed=9)
     played = run_game(bot_game, dict.fromkeys(bot_game.world.seats, bot))
     save_record(record(CASTLE, cast, played), games / "bot-game.json")
+    seating = schedule.games[0]
+    single = seating.model_copy(update={"id": "single-x-s0-r0", "arm": "single"})
+    alone = start_game(
+        CASTLE,
+        seating.cast(cast),
+        seed=seating.seed,
+        config=SCENARIO.config,
+        world_id=single.world_id,
+    )
+    played_alone = run_game(
+        alone,
+        {seat: Posing(model, seating.seed) for seat, model in seating.seats.items()},
+        check_leaks=False,
+    )
+    save_record(
+        record(CASTLE, seating.cast(cast), played_alone, arm="single"),
+        games / "single.json",
+    )
     forged = record(CASTLE, cast, played)
     ledger = list(forged.ledger)
     ledger[5] = ledger[5].model_copy(update={"tick": ledger[5].tick + 3})
@@ -128,8 +146,6 @@ def test_saved_records_are_replayed_rated_and_bundled(
         [
             "--records",
             str(games),
-            "--schedule",
-            str(tmp_path / "schedule.json"),
             "--resamples",
             "5",
             "--out",
@@ -142,11 +158,14 @@ def test_saved_records_are_replayed_rated_and_bundled(
     assert {row["entrant"] for row in models["rows"]} == set(MODELS)
     refused = {item["game"]: item["reason"] for item in models["refused"]}
     assert refused["bot-game"] == "played by reference bots"
+    assert refused[single.world_id].startswith("single-model arm")
     assert refused["forged"] == "its ledger is not the one its replay writes"
     assert models["cost_per_game"]["median"] == pytest.approx(0.16)
     assert all(row["cost"]["per_game"] for row in models["rows"])
     assert board["reference_bots"]["games"] == 1
-    assert len(list((out / "replays" / "models").iterdir())) == len(schedule.games)
+    assert {p.name for p in (out / "replays" / "models").iterdir()} == {
+        f"{game.world_id}.json.gz" for game in [*schedule.games, single]
+    }
     assert [p.name for p in (out / "replays" / "bots").iterdir()] == [
         "bot-game.json.gz"
     ]
@@ -165,7 +184,7 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
             "--seeds",
             "2",
             "--pilot-seeds",
-            "1",
+            "2",
             "--open-weight",
             *open_weight,
             "--out",
@@ -173,8 +192,69 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
         ]
     )
     printed = capsys.readouterr().out
+    assert printed.startswith("The reliability gate is not applied")
     assert printed.index("POWER") < printed.index("Schedule: mixed")
     written = json.loads((out / "schedule.json").read_text())
     assert written["tiers"][open_weight[0]] == "open"
     with pytest.raises(SystemExit, match="Not in the cast"):
         main(["--plan", "--pilot-seeds", "1", "--open-weight", "nobody/none"])
+    with pytest.raises(SystemExit, match="give it more seeds"):
+        main(["--plan", "--pilot-seeds", "1", "--out", str(out)])
+
+
+def test_a_planned_run_schedules_only_qualified_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    models = list(dict.fromkeys(CAST.first(8).models().values()))
+    results = tmp_path / "qualify"
+    digest = load_suite().digest
+
+    def passed(model: str, **changes: object) -> None:
+        found = Qualification(
+            model=model,
+            provider="openrouter",
+            mock=False,
+            suite_version=1,
+            suite_digest=digest,
+            questions=300,
+            outcome="finished",
+            turns=300,
+            answered=300,
+            retried=0,
+            failed={},
+            reliability_failures=0,
+            refusals=0,
+            content_filters=0,
+            rate=0.0,
+            qualified=True,
+            by_stratum={},
+            spent={"requests": 300, "tokens": 1, "dollars": 0.0},
+        ).model_copy(update=changes)
+        path = result_path(results, model)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(found.model_dump_json())
+
+    for model in models[2:]:
+        passed(model)
+    passed(models[0], mock=True, qualified=None)
+    planning = ["--plan", "--seeds", "2", "--pilot-seeds", "2", "--out"]
+    with pytest.raises(SystemExit) as stopped:
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    refused = str(stopped.value.code)
+    assert f"{models[0]}: only a mock run" in refused
+    assert f"{models[1]}: no qualification result" in refused
+    assert not any(f"{model}:" in refused for model in models[2:])
+    assert not (tmp_path / "out" / "schedule.json").exists()
+
+    passed(models[0])
+    passed(models[1], suite_digest="0" * 64)
+    with pytest.raises(SystemExit, match="qualified on another suite"):
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    passed(models[1], rate=0.03, reliability_failures=9, qualified=False)
+    with pytest.raises(SystemExit, match="does NOT qualify"):
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+
+    passed(models[1])
+    main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    assert (tmp_path / "out" / "schedule.json").exists()
+    assert "gate is not applied" not in capsys.readouterr().out
