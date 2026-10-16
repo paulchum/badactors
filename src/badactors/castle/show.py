@@ -13,7 +13,8 @@ declared intent, what an exit interview told and guessed), every witness record
 with its confidence, and every roll with the chance it was rolled against. Beside
 the events sit what a viewer needs to draw the game: the rooms and their light,
 where every player stood at the end of every tick (walking, asleep and dead
-included), each dinner's seating plan, and who played each seat.
+included), each dinner's seating plan, who played each seat, and the game's
+moments (``moments``), best first, which is all a clip is made from.
 
 Players only ever know characters, but audience media names each seat by the
 model that played it (SPEC §8). :class:`Naming` does that renaming for the feed
@@ -52,6 +53,7 @@ from badactors.castle.contracts import (
 )
 from badactors.castle.game import GameState
 from badactors.castle.interview import ExitWhy, why_out
+from badactors.castle.moments import Moment, detect
 from badactors.castle.play import (
     GameRecord,
     Outcome,
@@ -395,6 +397,12 @@ class Seating(Contract):
     order: list[str]
 
 
+class FeedMoment(Moment):
+    """A moment, with its headline as audience media prints it."""
+
+    audience: Named | None = None
+
+
 class Feed(Contract):
     feed: Literal["badactors.castle.feed"] = FEED
     version: Literal[1] = FEED_VERSION
@@ -407,6 +415,8 @@ class Feed(Contract):
     positions: list[Frame]
     """One frame for every tick of the game, from the first to the last."""
     seatings: list[Seating]
+    moments: list[FeedMoment]
+    """Every moment the ledger's shape gives, best first (see ``moments``)."""
 
 
 # ------------------------------------------------------------------ building
@@ -475,6 +485,12 @@ def audience_feed(stored: GameRecord) -> Feed:
             )
             for entry in ledger
             if entry.type == "seating"
+        ],
+        moments=[
+            FeedMoment(
+                **moment.model_dump(), audience=named(naming, moment.headline, None)
+            )
+            for moment in detect(game)
         ],
     )
 
@@ -709,6 +725,7 @@ __all__ = [
     "Feed",
     "FeedEvent",
     "FeedGame",
+    "FeedMoment",
     "FeedPassage",
     "FeedRoll",
     "FeedRoom",
