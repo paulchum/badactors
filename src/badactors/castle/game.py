@@ -37,7 +37,7 @@ from badactors.castle.contracts import (
     WitnessRecord,
     WorldState,
 )
-from badactors.castle.ledger import append
+from badactors.castle.ledger import CUSTODY_TYPES, append, placement_of
 from badactors.castle.mapfile import MapError, build_world
 from badactors.castle.perceive import room_of
 from badactors.castle.rng import draw
@@ -563,14 +563,16 @@ def _seal_missing(game: GameState) -> None:
     home = world.map.placements.get(seal.id)
     if world.placements.get(seal.id) == home:
         return
-    left = max(
-        (
-            entry.seq
-            for entry in world.ledger
-            if entry.payload.get("thing_id") == seal.id and entry.type == "take"
-        ),
-        default=0,
-    )
+    # When it last left home: passing it from hand to hand afterwards is not
+    # leaving again, and only going back and being taken once more is.
+    left = 0
+    at_home = False
+    for entry in world.ledger:
+        if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == seal.id:
+            here = placement_of(entry) == home
+            if at_home and not here:
+                left = entry.seq
+            at_home = here
     noticed = any(
         entry.seq > left
         for entry in world.ledger

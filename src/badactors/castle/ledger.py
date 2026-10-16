@@ -147,7 +147,7 @@ def replay_placements(ledger: Iterable[LedgerEntry]) -> dict[str, Placement]:
         thing_id = entry.payload.get("thing_id")
         if thing_id is None:
             continue
-        placements[thing_id] = _placement_from_payload(entry)
+        placements[thing_id] = placement_of(entry)
     return placements
 
 
@@ -184,7 +184,7 @@ def placement_before(
     """Where an object was when entry ``seq`` was written, from the ledger alone."""
     for entry in _backwards(ledger, seq):
         if entry.type in CUSTODY_TYPES and entry.payload.get("thing_id") == thing_id:
-            return _placement_from_payload(entry)
+            return placement_of(entry)
     return None
 
 
@@ -296,7 +296,8 @@ def entry_at(ledger: Sequence[LedgerEntry], seq: int) -> LedgerEntry | None:
     return None
 
 
-def _placement_from_payload(entry: LedgerEntry) -> Placement:
+def placement_of(entry: LedgerEntry) -> Placement:
+    """Where a custody entry left its object."""
     where = entry.payload.get("where")
     if where == "held":
         return HeldBy(player_id=entry.payload["holder_id"])
@@ -366,6 +367,7 @@ __all__ = [
     "entry_at",
     "move_object",
     "placement_before",
+    "placement_of",
     "placement_payload",
     "recent_records",
     "replay_inspections",

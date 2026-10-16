@@ -40,6 +40,7 @@ from badactors.castle.contracts import (
     Search,
     SearchPerson,
     Steal,
+    Step,
     Take,
     Talk,
     Tamper,
@@ -86,9 +87,10 @@ from badactors.castle.manipulation import (
 from badactors.castle.night import end_night, poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.papers import glass_state, log_lines, writings
+from badactors.castle.play import start_game
 from badactors.castle.table import open_table, table_act, table_advance, table_turn
 from badactors.castle.world import advance_phase, submit_plan, tick, valid_actions
-from castle_scenes import of_type, recruiting, referee, run_until
+from castle_scenes import CAST, CASTLE, of_type, recruiting, referee, run_until
 from castle_tools import act, give, last, own, paper, put, refused, scene, seen, tuned
 from castle_tools import uses as used
 
@@ -664,6 +666,33 @@ def test_sabotage_costs_the_pot_and_the_ledger_has_the_exact_sum() -> None:
 
 
 # --------------------------------------------------------------------- steal
+
+
+def test_the_seal_is_announced_missing_once_each_time_it_leaves_the_desk() -> None:
+    game = start_game(CASTLE, CAST, seed=13)
+
+    def notices() -> int:
+        return sum(
+            entry.payload.get("thing_id") == "steward_seal"
+            for entry in of_type(game, "missing_notice")
+        )
+
+    def hand(pid: str, room: str, *steps: Step) -> None:
+        put(game.world, pid, room)
+        game.world = act(game.world, pid, *steps)
+        missing_items(game)
+
+    hand("mara", "study", Search(), Take(thing_id="steward_seal"))
+    assert notices() == 1
+    hand("mara", "great_hall", Drop(thing_id="steward_seal"))
+    hand("sol", "great_hall", Take(thing_id="steward_seal"))
+    hand("sol", "great_hall", Drop(thing_id="steward_seal"))
+    hand("june", "great_hall", Take(thing_id="steward_seal"))
+    assert notices() == 1, "passing it hand to hand is not leaving the desk again"
+    hand("june", "study", Drop(thing_id="steward_seal", into="steward_desk"))
+    assert notices() == 1
+    hand("iris", "study", Search(), Take(thing_id="steward_seal"))
+    assert notices() == 2, "taken from the desk again, it is missed again"
 
 
 def test_steal_lifts_a_shield_and_the_owner_reports_it_missing() -> None:
@@ -1261,7 +1290,6 @@ def test_the_same_use_from_the_same_state_writes_the_same_ledger(name: str) -> N
 
 def test_a_whole_game_of_tools_replays_identically() -> None:
     from badactors.castle.play import Played, record, replay
-    from castle_scenes import CAST, CASTLE
 
     ref = referee(seed=9)
     ref.run()
