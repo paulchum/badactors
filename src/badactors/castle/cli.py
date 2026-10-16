@@ -22,7 +22,7 @@ from badactors.castle.episode import episode
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, save_record, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import audience_feed, save_feed
+from badactors.castle.show import NameStyle, audience_feed, save_feed
 from badactors.castle.timeline import timeline
 
 _CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
@@ -44,6 +44,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--save", help="Write a replayable game record to this path.")
     parser.add_argument(
         "--feed", help="Write the audience feed, which clips are made from, here."
+    )
+    parser.add_argument(
+        "--model-names",
+        action="store_true",
+        help="Name each seat by the model that played it, as audience media do; "
+        "a seat a bot played is a Reference bot.",
     )
     parser.add_argument(
         "--ledger",
@@ -71,7 +77,8 @@ def main(argv: list[str] | None = None) -> None:
         models=list(cast.models().values()),
     )
     finished = played.game
-    print(episode(finished, agents=played.agents))
+    names: NameStyle = "model" if args.model_names else "character"
+    print(episode(finished, agents=played.agents, names=names))
     print(
         f"{played.observations} observations, every one leak-checked; "
         f"{len(finished.world.ledger)} ledger entries; "

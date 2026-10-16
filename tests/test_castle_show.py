@@ -3,7 +3,9 @@ its record."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -12,12 +14,26 @@ from badactors.castle import play
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cli import main as cli_main
 from badactors.castle.contracts import AtRoom, WorldState
-from badactors.castle.play import GameRecord, ReplayDiverged, record, run_game
+from badactors.castle.decisions import Decision
+from badactors.castle.episode import episode
+from badactors.castle.observe import GameObservation
+from badactors.castle.play import (
+    GameRecord,
+    Player,
+    ReplayDiverged,
+    record,
+    replay,
+    run_game,
+)
 from badactors.castle.show import (
+    BOT_COLOUR,
     Feed,
+    Naming,
     Whereabouts,
     audience_feed,
+    audience_names,
     load_feed,
+    model_name,
     save_feed,
 )
 from castle_scenes import CAST, CASTLE, MODELS
@@ -175,3 +191,153 @@ def test_castle_game_writes_the_feed(
     assert f"Saved the audience feed to {path}." in capsys.readouterr().out
     written = load_feed(path)
     assert written.game.seed == 4 and len(written.seats) == 8
+
+
+# ---------------------------------------------------------------------- naming
+
+
+@pytest.mark.parametrize(
+    ("model", "name"),
+    [
+        ("anthropic/claude-opus-5.5", "Claude Opus 5.5"),
+        ("openai/gpt-6.1-sol", "GPT-6.1 Sol"),
+        ("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
+        ("x-ai/grok-4.7", "Grok 4.7"),
+        ("deepseek/deepseek-v4-pro-0813", "DeepSeek V4 Pro 0813"),
+        ("moonshotai/kimi-k3", "Kimi K3"),
+        ("qwen/qwen3.8-27b", "Qwen3.8 27B"),
+        ("z-ai/glm-5.3", "GLM 5.3"),
+        ("mistralai/mistral-medium-3-5", "Mistral Medium 3.5"),
+    ],
+)
+def test_a_model_id_reads_as_its_name(model: str, name: str) -> None:
+    assert model_name(model) == name
+
+
+def test_seats_on_one_model_are_numbered_and_a_bot_seat_is_a_reference_bot() -> None:
+    agents = {
+        "mara": "model:anthropic/claude-opus-5.5",
+        "sol": "bot:heuristic",
+        "iris": "model:anthropic/claude-opus-5.5",
+        "knox": "model:x-ai/grok-4.7",
+        "june": "unknown",
+    }
+    assert audience_names(agents, list(agents)) == {
+        "mara": "Claude Opus 5.5 #1",
+        "sol": "Reference bot",
+        "iris": "Claude Opus 5.5 #2",
+        "knox": "Grok 4.7",
+        "june": "Unlabelled seat",
+    }
+    bots = {pid: "bot:heuristic" for pid in ("mara", "sol")}
+    assert audience_names(bots, list(bots)) == {
+        "mara": "Reference bot #1",
+        "sol": "Reference bot #2",
+    }
+
+
+def test_narration_names_the_model_and_a_quote_brackets_it() -> None:
+    characters = {"knox": "Knox", "ash": "Ash", "hale": "Hale"}
+    agents = {
+        "knox": "model:x-ai/grok-4.7",
+        "ash": "model:anthropic/claude-opus-5.5",
+        "hale": "bot:heuristic",
+    }
+    naming = Naming.of(characters, agents, "model")
+    assert naming.narration("Knox poisoned Ash's glass.") == (
+        "Grok 4.7 poisoned Claude Opus 5.5's glass."
+    )
+    assert naming.words("I think Hale is lying, not Ash.") == (
+        "I think [Reference bot] is lying, not [Claude Opus 5.5]."
+    )
+    assert naming.narration("Knox wrote: “Meet me in the crypt. — Ash”") == (
+        "Grok 4.7 wrote: “Meet me in the crypt. — [Claude Opus 5.5]”"
+    )
+    # Only whole names: ash in the grate, a hallway and Ashford stay as they are.
+    assert naming.words("Ashford found ash in the Hallway.") == (
+        "Ashford found ash in the Hallway."
+    )
+    plain = Naming.of(characters, agents)
+    assert plain.narration("Knox poisoned Ash's glass.") == "Knox poisoned Ash's glass."
+    assert plain.words("I think Hale is lying.") == "I think Hale is lying."
+
+
+def _unbracketed(feed: Feed, words: str) -> str:
+    for seat in feed.seats:
+        words = words.replace(f"[{seat.audience}]", seat.character)
+    return words
+
+
+def test_the_feed_carries_both_names_and_quotes_still_match_the_ledger(
+    feed: Feed,
+) -> None:
+    labels = [seat.audience for seat in feed.seats]
+    assert labels == [f"Reference bot #{n}" for n in range(1, len(labels) + 1)]
+    assert {seat.colour for seat in feed.seats} == {BOT_COLOUR}
+    characters = re.compile(
+        r"(?<!\w)(?:" + "|".join(seat.character for seat in feed.seats) + r")(?!\w)"
+    )
+    bracketed = 0
+    for event in feed.events:
+        named = event.audience
+        if named is None:
+            assert characters.search(event.text) is None
+            continue
+        assert characters.search(named.text or event.text) is None, event.seq
+        if named.quote is not None:
+            assert event.quote is not None
+            assert characters.search(named.quote) is None
+            assert _unbracketed(feed, named.quote) == event.quote
+            bracketed += 1
+        for key, line in named.private.items():
+            assert _unbracketed(feed, line) == event.private[key]
+    assert bracketed > 0
+
+
+@dataclass(frozen=True)
+class _Labelled:
+    """A bot that says it is a model, as a model-backed player would."""
+
+    agent: str
+
+    def __call__(self, observation: GameObservation) -> Decision:
+        return HeuristicBot(seed=5)(observation)
+
+
+def test_a_model_seat_is_named_by_its_model() -> None:
+    game = play.start_game(CASTLE, CAST, seed=5)
+    bot = HeuristicBot(seed=5)
+    players: dict[str, Player] = {pid: bot for pid in game.world.seats}
+    players["mara"] = _Labelled(f"model:{CAST.models()['mara']}")
+    played = run_game(game, players, check_leaks=False, models=MODELS)
+    feed = audience_feed(record(CASTLE, CAST, played))
+    mara, *rest = feed.seats
+    assert (mara.audience, mara.played_by, mara.model) == (
+        "Claude Opus 5.5",
+        "model",
+        "anthropic/claude-opus-5.5",
+    )
+    assert mara.colour != BOT_COLOUR
+    assert [seat.audience for seat in rest] == [
+        f"Reference bot #{n}" for n in range(1, len(rest) + 1)
+    ]
+    assert not feed.game.reference_bots
+
+
+def test_the_episode_names_seats_by_model_only_when_asked(stored: GameRecord) -> None:
+    game = replay(stored)
+    plain = episode(game, agents=stored.agents)
+    named = episode(game, agents=stored.agents, names="model")
+    assert "Reference bot #" not in plain and "accused Ash" in plain
+    assert "[Reference bot #" in named and "accused Ash" not in named
+    assert named.startswith("REFERENCE BOTS")
+    for model in CAST.models().values():
+        assert model not in named and model_name(model) not in named
+
+
+def test_castle_game_names_seats_by_model_behind_a_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli_main(["--seed", "4", "--players", "8", "--model-names"])
+    out = capsys.readouterr().out
+    assert "Reference bot #8  as" in out and "[Reference bot #" in out

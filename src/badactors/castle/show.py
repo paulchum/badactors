@@ -15,13 +15,23 @@ the events sit what a viewer needs to draw the game: the rooms and their light,
 where every player stood at the end of every tick (walking, asleep and dead
 included), each dinner's seating plan, and who played each seat.
 
+Players only ever know characters, but audience media names each seat by the
+model that played it (SPEC §8). :class:`Naming` does that renaming for the feed
+and the episode alike: narration names the model, and a quote keeps the model's
+words exactly, with each character's name replaced by the model's in square
+brackets, so the edit shows and the quote still matches the ledger. Seats one
+model shares are numbered, and a seat a reference bot played is a "Reference
+bot", never a model. The feed carries both names, so a renderer can switch.
+
 Nothing here reaches a player. The feed is the audience's, and holds the truth.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import re
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -57,6 +67,175 @@ FEED_VERSION: Literal[1] = 1
 
 PlayedBy = Literal["model", "bot", "unknown"]
 
+NameStyle = Literal["character", "model"]
+"""How audience media names seats: by character, as the players know them, or
+by the model that played each one."""
+
+REFERENCE_BOT = "Reference bot"
+UNLABELLED = "Unlabelled seat"
+
+# ---------------------------------------------------------------------- naming
+
+_CASED = {"gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "oss": "OSS"}
+_VERSION = re.compile(r"^[a-z]?\d[\d.]*[a-z]?$")
+
+
+def model_name(model: str) -> str:
+    """A model id as the audience reads it: "anthropic/claude-opus-5.5" is
+    "Claude Opus 5.5", and "openai/gpt-6.1-sol" is "GPT-6.1 Sol"."""
+    slug = model.rpartition("/")[2].partition(":")[0]
+    tokens: list[str] = []
+    for token in slug.split("-"):
+        if token.isdigit() and tokens and tokens[-1].replace(".", "").isdigit():
+            tokens[-1] += f".{token}"
+        elif token:
+            tokens.append(token)
+    words: list[str] = []
+    for token in tokens:
+        if token in _CASED:
+            word = _CASED[token]
+        elif re.match(r"^o\d", token):
+            word = token
+        elif _VERSION.match(token):
+            word = token.upper()
+        else:
+            word = token[:1].upper() + token[1:]
+        if words and words[-1] == "GPT" and word[:1].isdigit():
+            words[-1] += f"-{word}"
+        else:
+            words.append(word)
+    return " ".join(words) or model
+
+
+_LAB_COLOURS = {
+    "anthropic": "#D97757",
+    "openai": "#10A37F",
+    "google": "#4C8BF5",
+    "x-ai": "#C9CED6",
+    "deepseek": "#7B8CFF",
+    "moonshotai": "#B07CFF",
+    "qwen": "#F2B134",
+    "z-ai": "#2EC4B6",
+    "meta": "#5AA9FF",
+    "mistralai": "#FA6E2A",
+}
+_SPARE_COLOURS = ("#E06C9F", "#9CCB5A", "#56C7E8", "#E8C547", "#C38D6B")
+BOT_COLOUR = "#8A8F98"
+
+
+def seat_colour(agent: str) -> str:
+    """The colour a seat is drawn in: its lab's, or a reference bot's grey. Labs
+    are told apart by name and colour, never by logo."""
+    if not is_model(agent):
+        return BOT_COLOUR
+    lab = agent.removeprefix("model:").partition("/")[0]
+    if lab in _LAB_COLOURS:
+        return _LAB_COLOURS[lab]
+    return _SPARE_COLOURS[sum(lab.encode()) % len(_SPARE_COLOURS)]
+
+
+def audience_names(agents: Mapping[str, str], seats: Sequence[str]) -> dict[str, str]:
+    """What audience media calls each seat, in seat order: the model that
+    played it, a "Reference bot", or an unlabelled seat. Seats that share a
+    name are numbered in seat order ("Claude Opus 5.5 #3")."""
+    base: dict[str, str] = {}
+    for pid in seats:
+        agent = agents.get(pid, "")
+        if is_model(agent):
+            base[pid] = model_name(agent.removeprefix("model:"))
+        elif agent.startswith("bot:"):
+            base[pid] = REFERENCE_BOT
+        else:
+            base[pid] = UNLABELLED
+    shared = Counter(base.values())
+    seen: Counter[str] = Counter()
+    names: dict[str, str] = {}
+    for pid in seats:
+        label = base[pid]
+        if shared[label] > 1:
+            seen[label] += 1
+            label = f"{label} #{seen[label]}"
+        names[pid] = label
+    return names
+
+
+class Naming:
+    """Names every seat one way, in what the audience reads.
+
+    ``labels`` is the name to use for each seat, and ``characters`` its
+    character's name, both by seat. Narration names the label outright; inside
+    a quote, where the words are a model's own, a character's name becomes the
+    label in square brackets. Naming by character changes nothing."""
+
+    def __init__(self, labels: Mapping[str, str], characters: Mapping[str, str]):
+        self.labels = dict(labels)
+        self.characters = dict(characters)
+        self._renamed = {
+            self.characters[pid]: label
+            for pid, label in self.labels.items()
+            if label != self.characters[pid]
+        }
+        alternatives = "|".join(
+            re.escape(name) for name in sorted(self._renamed, key=len, reverse=True)
+        )
+        self._pattern = (
+            re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)") if alternatives else None
+        )
+
+    @classmethod
+    def of(
+        cls,
+        characters: Mapping[str, str],
+        agents: Mapping[str, str] | None,
+        style: NameStyle = "character",
+    ) -> Naming:
+        """Naming for seats with these characters (in seat order) and agents."""
+        if style == "character":
+            return cls(labels=characters, characters=characters)
+        return cls(
+            labels=audience_names(agents or {}, list(characters)),
+            characters=characters,
+        )
+
+    def name(self, player_id: str) -> str:
+        return self.labels[player_id]
+
+    def names(self, player_ids: Sequence[str]) -> str:
+        """ "A", "A and B", "A, B and C"."""
+        labels = [self.name(pid) for pid in player_ids]
+        if len(labels) <= 1:
+            return "".join(labels)
+        return ", ".join(labels[:-1]) + " and " + labels[-1]
+
+    def narration(self, text: str) -> str:
+        """Narration, which may hold quotes in curly marks: names outside the
+        quotes are replaced, and names inside them bracketed."""
+        if self._pattern is None:
+            return text
+        out: list[str] = []
+        last = 0
+        for quoted in _QUOTED.finditer(text):
+            out.append(self._swap(text[last : quoted.start()], bracket=False))
+            out.append(self._swap(quoted.group(0), bracket=True))
+            last = quoted.end()
+        out.append(self._swap(text[last:], bracket=False))
+        return "".join(out)
+
+    def words(self, text: str) -> str:
+        """A model's own words, with every character's name bracketed."""
+        return self._swap(text, bracket=True)
+
+    def _swap(self, text: str, *, bracket: bool) -> str:
+        if self._pattern is None:
+            return text
+        renamed = self._renamed
+        if bracket:
+            return self._pattern.sub(lambda match: f"[{renamed[match[0]]}]", text)
+        return self._pattern.sub(lambda match: renamed[match[0]], text)
+
+
+_QUOTED = re.compile(r"“[^”]*(?:”|$)")
+
 
 class FeedGame(Contract):
     world_id: str
@@ -83,6 +262,10 @@ class FeedSeat(Contract):
     id: str
     seat: int = Field(ge=1)
     character: str
+    """The name the players know."""
+    audience: str
+    """The name audience media uses: the model, or a "Reference bot"."""
+    colour: str
     agent: str
     played_by: PlayedBy
     model: str | None = None
@@ -122,6 +305,16 @@ class FeedThing(Contract):
     name: str
 
 
+class Named(Contract):
+    """Words as audience media prints them, seats named by model, where that
+    differs from the ledger's: each field is set only if it changed."""
+
+    text: str | None = None
+    quote: str | None = None
+    private: dict[str, str] = Field(default_factory=dict)
+    told: list[str] | None = None
+
+
 class FeedWitness(Contract):
     """What one player wrote down of an event, as the light let them."""
 
@@ -135,6 +328,7 @@ class FeedWitness(Contract):
     recorded_actor: str | None = None
     from_room: str | None = None
     noted: bool = False
+    audience: Named | None = None
 
 
 class FeedRoll(Contract):
@@ -170,6 +364,9 @@ class FeedEvent(Contract):
     guesses: dict[str, str] | None = None
     witnesses: list[FeedWitness] = Field(default_factory=list)
     rolls: list[FeedRoll] = Field(default_factory=list)
+    audience: Named | None = None
+    """The same words with seats named by model, where any differ. A renderer
+    shows these or the ledger's, as it names the seats."""
 
 
 class Whereabouts(Contract):
@@ -229,6 +426,9 @@ def audience_feed(stored: GameRecord) -> Feed:
     ).world
     world = game.world
     ledger = stored.ledger
+    naming = Naming.of(
+        {pid: world.players[pid].name for pid in world.seats}, stored.agents, "model"
+    )
     return Feed(
         game=FeedGame(
             world_id=stored.world_id,
@@ -245,7 +445,7 @@ def audience_feed(stored: GameRecord) -> Feed:
             payouts=dict(game.payouts),
             starting_traitors=list(game.starting_traitors),
         ),
-        seats=_seats(stored, game),
+        seats=_seats(stored, game, naming),
         rooms=[
             FeedRoom(
                 id=room.id,
@@ -265,7 +465,7 @@ def audience_feed(stored: GameRecord) -> Feed:
             FeedThing(id=thing.id, kind=thing.kind, name=thing.name)
             for thing in world.map.things
         ],
-        events=[_event(world, entry) for entry in ledger],
+        events=[_event(world, entry, naming) for entry in ledger],
         positions=positions(start, ledger),
         seatings=[
             Seating(
@@ -287,7 +487,7 @@ def played_by(agent: str) -> PlayedBy:
     return "unknown"
 
 
-def _seats(stored: GameRecord, game: GameState) -> list[FeedSeat]:
+def _seats(stored: GameRecord, game: GameState, naming: Naming) -> list[FeedSeat]:
     world = game.world
     recruiters = {
         offer.target: offer.recruiter
@@ -310,6 +510,8 @@ def _seats(stored: GameRecord, game: GameState) -> list[FeedSeat]:
                 id=pid,
                 seat=index,
                 character=player.name,
+                audience=naming.name(pid),
+                colour=seat_colour(agent),
                 agent=agent,
                 played_by=played_by(agent),
                 model=agent.removeprefix("model:") if is_model(agent) else None,
@@ -332,12 +534,14 @@ def _seats(stored: GameRecord, game: GameState) -> list[FeedSeat]:
 _PARSED = frozenset({"intent", "told", "guesses"})
 
 
-def _event(world: WorldState, entry: LedgerEntry) -> FeedEvent:
+def _event(world: WorldState, entry: LedgerEntry, naming: Naming) -> FeedEvent:
     private = entry.private
     intent = private.get("intent")
     told = private.get("told")
     guesses = private.get("guesses")
     light = world.map.room(entry.room_id).lighting if entry.room_id else None
+    lines = {key: value for key, value in private.items() if key not in _PARSED}
+    truths = json.loads(told) if told is not None else None
     return FeedEvent(
         seq=entry.seq,
         tick=entry.tick,
@@ -350,9 +554,9 @@ def _event(world: WorldState, entry: LedgerEntry) -> FeedEvent:
         text=entry.text,
         quote=entry.quote,
         payload=dict(entry.payload),
-        private={key: value for key, value in private.items() if key not in _PARSED},
+        private=lines,
         intent=Intent.parse(intent) if intent is not None else None,
-        told=json.loads(told) if told is not None else None,
+        told=truths,
         guesses=json.loads(guesses) if guesses is not None else None,
         witnesses=[
             FeedWitness(
@@ -366,6 +570,7 @@ def _event(world: WorldState, entry: LedgerEntry) -> FeedEvent:
                 recorded_actor=record.recorded_actor,
                 from_room=record.from_room,
                 noted=record.noted,
+                audience=named(naming, record.text, record.quote),
             )
             for record in entry.witnesses
         ],
@@ -379,6 +584,35 @@ def _event(world: WorldState, entry: LedgerEntry) -> FeedEvent:
             )
             for roll in entry.rolls
         ],
+        audience=named(naming, entry.text, entry.quote, lines, truths),
+    )
+
+
+def named(
+    naming: Naming,
+    text: str,
+    quote: str | None,
+    private: Mapping[str, str] | None = None,
+    told: Sequence[str] | None = None,
+) -> Named | None:
+    """The audience's form of some words, or ``None`` if naming changes none.
+    Narration names the model; a quote and a private line, which are the
+    player's own words, bracket it."""
+    renamed = naming.narration(text)
+    words = naming.words(quote) if quote is not None else None
+    lines = {
+        key: naming.words(value)
+        for key, value in (private or {}).items()
+        if naming.words(value) != value
+    }
+    truths = [naming.narration(line) for line in told] if told is not None else None
+    if renamed == text and words == quote and not lines and truths == told:
+        return None
+    return Named(
+        text=renamed if renamed != text else None,
+        quote=words if words != quote else None,
+        private=lines,
+        told=truths if truths != told else None,
     )
 
 
@@ -467,8 +701,11 @@ def load_feed(path: str | Path) -> Feed:
 
 
 __all__ = [
+    "BOT_COLOUR",
     "FEED",
     "FEED_VERSION",
+    "REFERENCE_BOT",
+    "UNLABELLED",
     "Feed",
     "FeedEvent",
     "FeedGame",
@@ -479,12 +716,19 @@ __all__ = [
     "FeedThing",
     "FeedWitness",
     "Frame",
+    "NameStyle",
+    "Named",
+    "Naming",
     "PlayedBy",
     "Seating",
     "Whereabouts",
     "audience_feed",
+    "audience_names",
     "load_feed",
+    "model_name",
+    "named",
     "played_by",
     "positions",
     "save_feed",
+    "seat_colour",
 ]

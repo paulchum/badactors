@@ -8,6 +8,10 @@ shows its declared intent and the rolls its user never learned: whether a
 forgery betrays its writer, whether poison left residue, whether an edit to a
 log shows. Physical noise is condensed: each phase shows who went where, and what
 was said, searched, taken or hidden along the way.
+
+Seats are named by character unless the episode is asked to name them as audience
+media does, by the model that played each one (see ``show.Naming``): then a
+character's name inside anyone's words becomes the model's in square brackets.
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from badactors.castle.contracts import CastlePhase, Intent, LedgerEntry, PlayerState
-from badactors.castle.game import GameState, name, names
+from badactors.castle.game import GameState
+from badactors.castle.show import NameStyle, Naming
 
 WIDTH = 96
 _TAG = 10
@@ -91,14 +96,23 @@ _HIDDEN: dict[str, tuple[str, str, str]] = {
 means for the tool that wrote it."""
 
 
-def episode(game: GameState, *, agents: Mapping[str, str] | None = None) -> str:
+def episode(
+    game: GameState,
+    *,
+    agents: Mapping[str, str] | None = None,
+    names: NameStyle = "character",
+) -> str:
     """The whole game, day by day, as the audience sees it.
 
     ``agents`` says who played each seat. A seat played by a model shows the
     model; one played by a reference bot says so and shows no model, and a game
     no model played opens by saying that, so a bot's play is never read as a
-    model's."""
+    model's. ``names`` picks how seats are named: by character, or by the model
+    that played each one, as audience media names them."""
     world = game.world
+    naming = Naming.of(
+        {pid: world.players[pid].name for pid in world.seats}, agents, names
+    )
     out: list[str] = []
     castle = world.map.name.upper()
     if agents and not any(agent.startswith("model:") for agent in agents.values()):
@@ -106,24 +120,31 @@ def episode(game: GameState, *, agents: Mapping[str, str] | None = None) -> str:
     out.append(f"{castle} · seed {world.seed}")
     starting = game.starting_traitors
     out.append(
-        f"{len(world.seats)} guests. The traitors: {names(game, starting)}"
-        + _recruited(game)
+        f"{len(world.seats)} guests. The traitors: {naming.names(starting)}"
+        + _recruited(game, naming)
         + "."
     )
     out.append("")
     looks = {pid: _look(world.players[pid]) for pid in world.seats}
     width = max(len(look) for look in looks.values())
+    named = max(len(naming.name(pid)) for pid in world.seats)
     for pid in world.seats:
         player = world.players[pid]
-        model = f"  {_played_by(agents[pid])}" if agents and pid in agents else ""
         mark = "T" if pid in starting else " "
+        if names == "model":
+            out.append(
+                f"  {mark} {naming.name(pid):<{named}}  as {player.name:<7} "
+                f"{looks[pid]}"
+            )
+            continue
+        model = f"  {_played_by(agents[pid])}" if agents and pid in agents else ""
         out.append(f"  {mark} {player.name:<7} {looks[pid]:<{width}}{model}")
 
     for day, phase, entries in _grouped(world.ledger):
         if phase == "breakfast":
             out.append("")
             out.append(f"══ DAY {day} ".ljust(WIDTH, "═"))
-        body = _render_phase(game, phase, entries)
+        body = _render_phase(game, naming, phase, entries)
         if not body:
             continue
         out.append("")
@@ -132,7 +153,7 @@ def episode(game: GameState, *, agents: Mapping[str, str] | None = None) -> str:
 
     out.append("")
     out.append("═" * WIDTH)
-    out.append(_result(game))
+    out.append(_result(game, naming))
     return "\n".join(out)
 
 
@@ -194,18 +215,18 @@ def _heading(game: GameState, phase: CastlePhase, entries: list[LedgerEntry]) ->
     return label
 
 
-def _recruited(game: GameState) -> str:
+def _recruited(game: GameState, naming: Naming) -> str:
     joined = [offer.target for offer in game.offers if offer.answer == "accepted"]
-    return f"; recruited: {names(game, joined)}" if joined else ""
+    return f"; recruited: {naming.names(joined)}" if joined else ""
 
 
-def _result(game: GameState) -> str:
+def _result(game: GameState, naming: Naming) -> str:
     world = game.world
     if game.winner is None:
         return f"Unfinished after day {world.day}."
     side = "The Faithful" if game.winner == "faithful" else "The traitors"
     shares = ", ".join(
-        f"{name(game, pid)} {coins}" for pid, coins in game.payouts.items()
+        f"{naming.name(pid)} {coins}" for pid, coins in game.payouts.items()
     )
     return (
         f"{side} win on day {world.day}. The pot of {game.pot} coins goes to "
@@ -219,11 +240,20 @@ def _result(game: GameState) -> str:
 @dataclass
 class _Phase:
     game: GameState
+    naming: Naming
     lines: list[str] = field(default_factory=list)
     paths: dict[str, list[str]] = field(default_factory=dict)
 
+    def name(self, player_id: str) -> str:
+        return self.naming.name(player_id)
+
     def say(self, tag: str, text: str, aside: str = "") -> None:
-        body = text + (f"  ⟨{aside}⟩" if aside else "")
+        """One line. The text is narration, which may quote someone; an aside
+        holds the actor's own private words, besides what only the audience
+        knows of the act."""
+        naming = self.naming
+        text = naming.narration(text)
+        body = text + (f"  ⟨{naming.words(aside)}⟩" if aside else "")
         wrapped = textwrap.wrap(
             body,
             width=WIDTH,
@@ -234,9 +264,9 @@ class _Phase:
 
 
 def _render_phase(
-    game: GameState, phase: CastlePhase, entries: list[LedgerEntry]
+    game: GameState, naming: Naming, phase: CastlePhase, entries: list[LedgerEntry]
 ) -> list[str]:
-    view = _Phase(game)
+    view = _Phase(game, naming)
     work: list[str] = []
     for entry in entries:
         _render(view, phase, entry, work)
@@ -244,7 +274,7 @@ def _render_phase(
         view.say("WORK", "Exact work, which nobody sees: " + ", ".join(work) + ".")
     if view.paths and phase in ("mission", "free_time"):
         routes = "; ".join(
-            f"{name(game, pid)} → {' → '.join(rooms)}"
+            f"{view.name(pid)} → {' → '.join(rooms)}"
             for pid, rooms in view.paths.items()
         )
         view.say("MOVES", routes)
@@ -257,7 +287,7 @@ def _render(
     game = view.game
     kind = entry.type
     actor = entry.actor_id
-    who = name(game, actor) if actor else ""
+    who = view.name(actor) if actor else ""
     diary = entry.private.get("diary", "")
     if kind in _STEWARD_TYPES:
         view.say("STEWARD", entry.quote or entry.text)
@@ -269,7 +299,7 @@ def _render(
         )
     elif kind == "awarded":
         holder = entry.payload.get("holder_id", "")
-        view.say("SECRET", f"The Steward slips a shield token to {name(game, holder)}.")
+        view.say("SECRET", f"The Steward slips a shield token to {view.name(holder)}.")
     elif kind == "move_arrive" and actor:
         room = game.world.map.room(entry.room_id or "").name
         view.paths.setdefault(actor, []).append(room)
@@ -277,14 +307,14 @@ def _render(
             view.say("NIGHT", f"{who} slips down to the {room}.")
     elif kind == "talk" and actor:
         to = entry.payload.get("to")
-        aimed = f" (to {name(game, to)})" if to else ""
+        aimed = f" (to {view.name(to)})" if to else ""
         view.say("SAYS", f"{who}{aimed}: “{entry.quote}”")
     elif kind == "whisper" and actor:
         tool = entry.payload.get("tool") or "whisper"
         view.say(
             _TAGS.get(tool, tool.upper())[:_TAG],
-            f"{who} → {name(game, entry.payload['to'])}: “{entry.quote}”",
-            _aside(game, entry),
+            f"{who} → {view.name(entry.payload['to'])}: “{entry.quote}”",
+            _aside(view, entry),
         )
     elif kind == "search" and actor:
         found = _own_text(entry)
@@ -304,7 +334,7 @@ def _render(
     elif kind == "exit_interview":
         guesses = json.loads(entry.private.get("guesses", "{}"))
         guessed = ", ".join(
-            f"{name(game, pid)}: {family}" for pid, family in guesses.items()
+            f"{view.name(pid)}: {family}" for pid, family in guesses.items()
         )
         said = f" “{entry.quote}”" if entry.quote else ""
         view.say(
@@ -319,7 +349,7 @@ def _render(
         full = entry.payload["reason"].split(" and ")[0]
         view.say("MOVES", f"{who} was turned back at the door: {full}.")
     elif kind == "poison":
-        view.say("POISON", entry.text, _aside(game, entry))
+        view.say("POISON", entry.text, _aside(view, entry))
     elif kind == "declined" and entry.payload.get("request") == "poison":
         view.say("DINNER", f"{who} could poison a neighbour, and doesn't.", _why(entry))
     elif kind == "declined" and entry.payload.get("request") == "nominate":
@@ -336,7 +366,7 @@ def _render(
         view.say("CONCLAVE", f"The Steward, to the traitors: “{entry.quote}”")
     elif kind == "kill_attempt":
         method = entry.payload.get("method")
-        target = name(game, entry.payload["target"])
+        target = view.name(entry.payload["target"])
         if method == "poison":
             view.say("KILL", f"Tonight's attempt: poison, for {target}.")
         else:
@@ -345,7 +375,7 @@ def _render(
         view.say("SHIELD", entry.text)
     elif kind == "death":
         view.say(
-            "DEATH", f"{name(game, entry.payload['player'])}: {entry.payload['cause']}."
+            "DEATH", f"{view.name(entry.payload['player'])}: {entry.payload['cause']}."
         )
     elif kind == "conclave_missed":
         view.say("CONCLAVE", entry.text)
@@ -373,7 +403,7 @@ def _table_line(view: _Phase, entry: LedgerEntry, who: str, diary: str) -> None:
         view.say(
             "FILIBUSTER",
             f"{entry.text} ({len(speech)} characters) “{speech[:120]}…”",
-            _aside(view.game, entry),
+            _aside(view, entry),
         )
     else:
         view.say("TABLE", f"{entry.text} “{entry.quote}”", diary)
@@ -382,7 +412,6 @@ def _table_line(view: _Phase, entry: LedgerEntry, who: str, diary: str) -> None:
 def _tool_line(view: _Phase, entry: LedgerEntry, who: str) -> None:
     """A tool's use as the audience sees it: what really happened, the user's
     own account where that says more, and the hidden truths."""
-    game = view.game
     tool = entry.payload["tool"]
     text = entry.text
     own = _own_text(entry)
@@ -393,23 +422,22 @@ def _tool_line(view: _Phase, entry: LedgerEntry, who: str) -> None:
         text = own.replace("I ", f"{who} ", 1) if own.startswith("I ") else own
     if entry.quote and entry.type in ("write", "read"):
         text += f" “{entry.quote[:300]}”"
-    view.say(_TAGS.get(tool, tool.upper())[:_TAG], text, _aside(game, entry))
+    view.say(_TAGS.get(tool, tool.upper())[:_TAG], text, _aside(view, entry))
 
 
-def _aside(game: GameState, entry: LedgerEntry) -> str:
+def _aside(view: _Phase, entry: LedgerEntry) -> str:
     """What only the audience knows of an act: its intent, the rolls that
     decided what it left behind, and the diary."""
+    game = view.game
     parts: list[str] = []
     rendered = entry.private.get("intent")
     if rendered is not None:
         intent = Intent.parse(rendered)
         want = (
-            name(game, intent.want)
-            if intent.want in game.world.players
-            else intent.want
+            view.name(intent.want) if intent.want in game.world.players else intent.want
         )
         parts.append(
-            f"intent: {name(game, intent.target)} to {intent.effect} {want}, "
+            f"intent: {view.name(intent.target)} to {intent.effect} {want}, "
             f"{intent.window.replace('_', ' ')}"
         )
     tool = entry.payload.get("tool")
@@ -417,7 +445,7 @@ def _aside(game: GameState, entry: LedgerEntry) -> str:
         if tool == owner and key in entry.payload:
             parts.append(yes if entry.payload[key] == "true" else no)
     if tool == "poison" and entry.payload.get("seen_by"):
-        seen = names(game, entry.payload["seen_by"].split(","))
+        seen = view.naming.names(entry.payload["seen_by"].split(","))
         parts.append(f"seen by {seen}")
     diary = entry.private.get("diary")
     if diary:
