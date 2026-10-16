@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "games": [
+    {
+      "id": "seed-56",
+      "file": "seed-56.json",
+      "castle": "Greywater Castle",
+      "seed": 56,
+      "winner": "traitor",
+      "days": 4,
+      "ticks": 81,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 20,
+      "kinds": {
+        "exit_reveal": 7,
+        "gaslit": 1,
+        "manipulation_backfire": 2,
+        "manipulation_success": 2,
+        "poisoning": 1,
+        "recruit_turned": 1,
+        "refusal": 3,
+        "twist_ending": 1,
+        "wrong_banishment": 2
+      },
+      "twist": true,
+      "headline": "Knox is banished by 6 of 10 votes, and was one of the Faithful. Iris led the accusation."
+    },
+    {
+      "id": "seed-41",
+      "file": "seed-41.json",
+      "castle": "Greywater Castle",
+      "seed": 41,
+      "winner": "traitor",
+      "days": 5,
+      "ticks": 103,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 22,
+      "kinds": {
+        "exit_reveal": 8,
+        "gaslit": 1,
+        "manipulation_backfire": 3,
+        "manipulation_success": 1,
+        "poisoning": 1,
+        "recruit_refused_killed": 2,
+        "recruit_turned": 1,
+        "refusal": 1,
+        "shield_save": 1,
+        "wrong_banishment": 3
+      },
+      "twist": false,
+      "headline": "Mara poisons Iris at dinner; residue is left in the glass, unfound."
+    },
+    {
+      "id": "seed-145",
+      "file": "seed-145.json",
+      "castle": "Greywater Castle",
+      "seed": 145,
+      "winner": "traitor",
+      "days": 5,
+      "ticks": 103,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 21,
+      "kinds": {
+        "exit_reveal": 7,
+        "forgery_worked": 1,
+        "manipulation_backfire": 3,
+        "manipulation_success": 1,
+        "poisoning": 1,
+        "recruit_turned": 1,
+        "refusal": 3,
+        "shield_save": 1,
+        "wrong_banishment": 3
+      },
+      "twist": false,
+      "headline": "Nell is banished by 8 of 10 votes, and was one of the Faithful. June led the accusation."
+    },
+    {
+      "id": "seed-36",
+      "file": "seed-36.json",
+      "castle": "Greywater Castle",
+      "seed": 36,
+      "winner": "traitor",
+      "days": 4,
+      "ticks": 81,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 18,
+      "kinds": {
+        "exit_reveal": 7,
+        "forgery_worked": 1,
+        "gaslit": 1,
+        "manipulation_backfire": 1,
+        "manipulation_success": 1,
+        "poisoning": 2,
+        "wrong_banishment": 5
+      },
+      "twist": false,
+      "headline": "Iris is banished by 9 of 10 votes, and was one of the Faithful. Ash led the accusation."
+    },
+    {
+      "id": "seed-169",
+      "file": "seed-169.json",
+      "castle": "Greywater Castle",
+      "seed": 169,
+      "winner": "faithful",
+      "days": 4,
+      "ticks": 81,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 25,
+      "kinds": {
+        "exit_reveal": 8,
+        "forgery_worked": 1,
+        "gaslit": 1,
+        "manipulation_backfire": 6,
+        "manipulation_success": 2,
+        "poisoning": 1,
+        "recruit_refused_killed": 1,
+        "refusal": 3,
+        "wrong_banishment": 2
+      },
+      "twist": false,
+      "headline": "June is banished by 9 of 10 votes, and was one of the Faithful. Iris led the accusation."
+    },
+    {
+      "id": "seed-30",
+      "file": "seed-30.json",
+      "castle": "Greywater Castle",
+      "seed": 30,
+      "winner": "faithful",
+      "days": 4,
+      "ticks": 81,
+      "seats": 10,
+      "reference_bots": true,
+      "played_by": [
+        "bot"
+      ],
+      "moments": 19,
+      "kinds": {
+        "exit_reveal": 8,
+        "manipulation_backfire": 4,
+        "poisoning": 1,
+        "recruit_refused_killed": 1,
+        "refusal": 2,
+        "shield_save": 1,
+        "wrong_banishment": 2
+      },
+      "twist": false,
+      "headline": "Mara is banished by 9 of 10 votes, and was one of the Faithful. Knox led the accusation."
+    }
+  ]
+}
