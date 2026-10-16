@@ -8,5 +8,7 @@
   technique and usage rates;
 * ``steer`` — the steer/resist fit of manipulation success, with bootstrap
   intervals;
-* ``dryrun`` — playing a schedule with reference bot profiles.
+* ``dryrun`` — playing a schedule with reference bot profiles;
+* ``cli`` — ``castle-bench``, which writes the leaderboard, the matrix and a
+  verify bundle per game.
 """

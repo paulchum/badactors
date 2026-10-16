@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+castle-bench = "badactors.bench.cli:main"
 castle-game = "badactors.castle.cli:main"
 castle-live = "badactors.castle.live:main"
 castle-power = "badactors.castle.power:main"

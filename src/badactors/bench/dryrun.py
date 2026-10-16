@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 from badactors.bench.leaderboard import Finished
 from badactors.castle.bots import HeuristicBot
@@ -25,6 +26,7 @@ from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rng import draw
 from badactors.castle.schedule import Scenario, Seating
+from badactors.castle.verify import make_bundle, save_bundle
 
 LOW, HIGH = 0.1, 0.8
 """The span of the profiles' susceptibilities, as the heuristic bot draws its
@@ -73,8 +75,10 @@ def play_seating(
     susceptibility: Mapping[str, float],
     *,
     check_leaks: bool = False,
+    replays: Path | None = None,
 ) -> Finished:
-    """Play one scheduled game with each seat's reference bot."""
+    """Play one scheduled game with each seat's reference bot, and write its
+    verify bundle into ``replays`` if given."""
     game = start_game(
         scenario.castle,
         scenario.cast,
@@ -92,12 +96,10 @@ def play_seating(
         check_leaks=check_leaks,
         models=sorted(set(scenario.cast.models().values())),
     )
-    return Finished(
-        id=seating.id,
-        record=record(scenario.castle, scenario.cast, played),
-        game=played.game,
-        arm=seating.arm,
-    )
+    stored = record(scenario.castle, scenario.cast, played)
+    if replays is not None:
+        save_bundle(make_bundle(stored), replays / f"{seating.id}.json.gz")
+    return Finished(id=seating.id, record=stored, game=played.game, arm=seating.arm)
 
 
 def play_schedule(
@@ -107,6 +109,7 @@ def play_schedule(
     *,
     check_leaks: bool = False,
     pool: bool = True,
+    replays: Path | None = None,
 ) -> list[Finished]:
     """Play every game, in a process pool unless told not to."""
     play = partial(
@@ -114,6 +117,7 @@ def play_schedule(
         scenario=scenario,
         susceptibility=dict(susceptibility),
         check_leaks=check_leaks,
+        replays=replays,
     )
     listed: Sequence[Seating] = list(games)
     if not pool:
