@@ -13,21 +13,32 @@ The report reads the finished ledgers, as the audience can:
 * **usage** — how often each tool was used, per game;
 * **traces** — for every roll a tool draws, how often it came up: a forgery that
   betrays its writer, residue left in a glass, a flag left on an edited log;
+  beside each, the chance the game was configured with;
 * **discovery** — how often someone found the trace: a comparison that named a
   forger, a register check that caught a decree, residue found in a glass;
 * **manipulation** — for every attempt that declared an intent, how often it
   worked, was reported by its target, or backfired on the attacker;
-* **wins** — by side, with two traitors and with three.
+* **wins** — by side, with two traitors and with three;
+* **balance** — the targets of SPEC §9 that a bot sweep can check, each beside
+  the numbers it reads: the side split per traitor count, the share of traitor
+  wins that involved a manipulation that worked, and how often a failed attempt
+  exposed its attacker, against the quiet baseline. The two it cannot check
+  (evidence-based banishments need the claims of §5; cost needs models) say so.
+
+``--json`` prints the same report as JSON.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from math import sqrt
 from pathlib import Path
+from typing import Any
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import Cast, load_cast_file
@@ -109,6 +120,18 @@ class Rate:
             return "   —"
         return f"{100 * self.hits / self.of:3.0f}% ({self.hits}/{self.of})"
 
+    @property
+    def share(self) -> float | None:
+        return self.hits / self.of if self.of else None
+
+    def as_json(self) -> dict[str, Any]:
+        share = self.share
+        return {
+            "hits": self.hits,
+            "of": self.of,
+            "rate": None if share is None else round(share, 4),
+        }
+
 
 def usage(games: Sequence[GameState]) -> Counter[str]:
     """Uses of each tool, counted by the one entry each use writes."""
@@ -130,16 +153,52 @@ def rolls(games: Sequence[GameState]) -> dict[str, Rate]:
     for game in games:
         for entry in game.world.ledger:
             for roll in entry.rolls:
-                head = roll.purpose.split(":")
-                if head[0] == "disguise":
-                    key = "disguise:fooled"
-                elif head[0] in SPECS and len(head) > 1:
-                    key = f"{head[0]}:{head[1]}"
-                else:
+                key = _roll_key(roll.purpose)
+                if key is None:
                     continue
                 seen[key] += 1
                 hits[key] += 1 if roll.success else 0
     return {key: Rate(hits[key], seen[key]) for key in sorted(seen)}
+
+
+def _roll_key(purpose: str) -> str | None:
+    head = purpose.split(":")
+    if head[0] == "disguise":
+        return "disguise:fooled"
+    if head[0] in SPECS and len(head) > 1:
+        return f"{head[0]}:{head[1]}"
+    return None
+
+
+def configured(games: Sequence[GameState]) -> dict[str, tuple[float, float]]:
+    """The chance each kind of roll was configured with, from each game's own
+    config, as (lowest, highest) across the games."""
+    out: dict[str, tuple[float, float]] = {}
+    for game in games:
+        tools = game.config.tools
+        for entry in game.world.ledger:
+            for roll in entry.rolls:
+                key = _roll_key(roll.purpose)
+                if key is None:
+                    continue
+                tool, what = key.split(":")
+                number = (
+                    tools.disguise.success
+                    if tool == "disguise"
+                    else float(getattr(tools.of(tool), what))  # type: ignore[arg-type]
+                )
+                low, high = out.get(key, (number, number))
+                out[key] = (min(low, number), max(high, number))
+    return dict(sorted(out.items()))
+
+
+def on_chance(rate: Rate, chance: tuple[float, float]) -> bool | None:
+    """Whether a roll came up at its configured chance, within four standard
+    errors; ``None`` with too few draws, or a chance that varied."""
+    low, high = chance
+    if rate.of < 30 or low != high:
+        return None
+    return abs(rate.hits / rate.of - low) <= 4 * sqrt(low * (1 - low) / rate.of)
 
 
 def discovery(games: Sequence[GameState]) -> dict[str, Rate]:
@@ -301,17 +360,144 @@ def wins(games: Sequence[GameState]) -> dict[int, Counter[str]]:
     return dict(sorted(out.items()))
 
 
+SIDE_LIMIT = 0.6
+"""Neither side should win more than this share (SPEC §9)."""
+
+
+def traitor_wins_manipulated(games: Sequence[GameState]) -> Rate:
+    """Of the games the traitors won, those in which a manipulation worked."""
+    won = [game for game in games if game.winner == "traitor"]
+    return Rate(sum(any(o.success for o in outcomes(game)) for game in won), len(won))
+
+
+def failed_exposure(games: Sequence[GameState]) -> Rate:
+    """Of the attempts that did not work, those that exposed the attacker:
+    accused, reported or banished by the end of the next round table."""
+    failed = [o for game in games for o in outcomes(game) if not o.success]
+    return Rate(sum(o.backfired for o in failed), len(failed))
+
+
+@dataclass(frozen=True)
+class Check:
+    """One balance target of SPEC §9, beside what the sweep saw."""
+
+    target: str
+    observed: str
+    passed: bool | None
+    """``None`` when a bot sweep cannot check it."""
+
+    @property
+    def mark(self) -> str:
+        return {True: "PASS", False: "FAIL", None: "n/a"}[self.passed]
+
+    def as_json(self) -> dict[str, Any]:
+        return {"target": self.target, "observed": self.observed, "passed": self.passed}
+
+
+def checks(games: Sequence[GameState]) -> list[Check]:
+    out = []
+    for traitors, counts in wins(games).items():
+        total = sum(counts.values())
+        top = max(counts["faithful"], counts["traitor"])
+        out.append(
+            Check(
+                f"neither side wins more than {SIDE_LIMIT:.0%} ({traitors} traitors)",
+                f"Faithful {Rate(counts['faithful'], total)}, "
+                f"traitors {Rate(counts['traitor'], total)}",
+                top <= SIDE_LIMIT * total if total else None,
+            )
+        )
+    manipulated = traitor_wins_manipulated(games)
+    out.append(
+        Check(
+            "fewer than half of traitor wins involve a manipulation that worked",
+            str(manipulated),
+            None if not manipulated.of else 2 * manipulated.hits < manipulated.of,
+        )
+    )
+    exposed, quiet = failed_exposure(games), quiet_heat(games)
+    out.append(
+        Check(
+            "a failed attempt exposes its attacker more often than not",
+            f"{exposed}; quiet baseline {quiet}",
+            None if not exposed.of else 2 * exposed.hits > exposed.of,
+        )
+    )
+    out.append(
+        Check(
+            "at least 30% of correct traitor banishments come from evidence-based "
+            "votes",
+            "needs the claims of SPEC §5",
+            None,
+        )
+    )
+    out.append(
+        Check(
+            "median cost per game stays under the configured budget",
+            "a bot sweep costs nothing",
+            None,
+        )
+    )
+    return out
+
+
+def report_json(games: Sequence[GameState]) -> dict[str, Any]:
+    """The sweep's report, as data."""
+    n = len(games)
+    used = usage(games)
+    chances = configured(games)
+    return {
+        "games": n,
+        "wins": {
+            str(traitors): {
+                "faithful": counts["faithful"],
+                "traitor": counts["traitor"],
+                "games": sum(counts.values()),
+            }
+            for traitors, counts in wins(games).items()
+        },
+        "usage": {
+            label: {
+                name: {"uses": used[name], "per_game": round(used[name] / max(n, 1), 4)}
+                for name in kit
+            }
+            for label, kit in (
+                ("household", FAITHFUL_TOOLS),
+                ("traitor", TRAITOR_TOOLS),
+            )
+        },
+        "rolls": {
+            key: {
+                **rate.as_json(),
+                "configured": list(chances.get(key, ())),
+                "on_chance": on_chance(rate, chances[key]) if key in chances else None,
+            }
+            for key, rate in rolls(games).items()
+        },
+        "discovery": {tool: rate.as_json() for tool, rate in discovery(games).items()},
+        "manipulation": {
+            tool: {name: rate.as_json() for name, rate in rates.items()}
+            for tool, rates in manipulation(games).items()
+        },
+        "quiet_baseline": quiet_heat(games).as_json(),
+        "traitor_wins_manipulated": traitor_wins_manipulated(games).as_json(),
+        "failed_exposure": failed_exposure(games).as_json(),
+        "checks": [check.as_json() for check in checks(games)],
+    }
+
+
 def report(games: Sequence[GameState]) -> str:
     """The sweep, as numbers a person can read."""
     n = len(games)
     lines = [f"{n} games."]
     lines.append("")
-    lines.append("WINS")
-    for traitors, counts in wins(games).items():
+    balance = checks(games)
+    lines.append(f"WINS (§9: neither side over {SIDE_LIMIT:.0%})")
+    for (traitors, counts), check in zip(wins(games).items(), balance, strict=False):
         total = sum(counts.values())
         lines.append(
             f"  {traitors} traitors: Faithful {Rate(counts['faithful'], total)}, "
-            f"traitors {Rate(counts['traitor'], total)}"
+            f"traitors {Rate(counts['traitor'], total)}  {check.mark}"
         )
     used = usage(games)
     lines.append("")
@@ -321,9 +507,13 @@ def report(games: Sequence[GameState]) -> str:
         for name in kit:
             lines.append(f"    {name:15} {used[name]:6}  {used[name] / max(n, 1):6.2f}")
     lines.append("")
-    lines.append("ROLLS (came up / drawn)")
+    lines.append("ROLLS (came up / drawn, beside the configured chance)")
+    chances = configured(games)
     for key, rate in rolls(games).items():
-        lines.append(f"  {key:22} {rate}")
+        low, high = chances.get(key, (0.0, 0.0))
+        chance = f"{low:.0%}" if low == high else f"{low:.0%}-{high:.0%}"
+        flag = {True: "", False: "  OFF", None: ""}[on_chance(rate, (low, high))]
+        lines.append(f"  {key:22} {rate!s:>15}  configured {chance:>7}{flag}")
     lines.append("")
     lines.append("DISCOVERY (trace found by someone else / uses)")
     for found, rate in discovery(games).items():
@@ -340,6 +530,10 @@ def report(games: Sequence[GameState]) -> str:
         f"  baseline: a traitor who tried nothing that day was accused or banished "
         f"by the end of its round table {quiet_heat(games)}"
     )
+    lines.append("")
+    lines.append("BALANCE (SPEC §9)")
+    for check in balance:
+        lines.append(f"  {check.mark:4}  {check.target}: {check.observed}")
     return "\n".join(lines)
 
 
@@ -354,9 +548,14 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Skip the leak checker on every observation (faster).",
     )
+    parser.add_argument("--json", action="store_true", help="Print the report as JSON.")
     args = parser.parse_args(argv)
     swept = sweep(range(args.seeds), check_leaks=not args.no_leak_check)
-    print(report([one.game for one in swept]))
+    games = [one.game for one in swept]
+    if args.json:
+        print(json.dumps(report_json(games), indent=1))
+    else:
+        print(report(games))
 
 
 if __name__ == "__main__":
@@ -364,17 +563,25 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "SIDE_LIMIT",
+    "Check",
     "Rate",
     "Swept",
+    "checks",
     "config_for",
+    "configured",
     "discovery",
+    "failed_exposure",
     "main",
     "manipulation",
+    "on_chance",
     "play_seed",
     "quiet_heat",
     "report",
+    "report_json",
     "rolls",
     "sweep",
+    "traitor_wins_manipulated",
     "usage",
     "wins",
 ]
