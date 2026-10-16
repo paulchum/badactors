@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections import Counter
 
 from badactors.castle.balance import ToolName
-from badactors.castle.contracts import RECORD_LIMIT, WorldState
+from badactors.castle.contracts import QUOTE_LIMIT, WorldState
 from badactors.castle.decisions import (
     Accuse,
     Alibi,
@@ -623,7 +623,7 @@ def _report(
     )
     if author:
         payload["target"] = author
-    return "report", f"reported, word for word, {source}:", record.quote
+    return "report", f"reported, word for word, {source}:", capped(record.quote)
 
 
 def _cross_examine(
@@ -639,8 +639,7 @@ def _cross_examine(
     read = f"At t{cited.tick} I recorded: {record.text}"
     if record.quote is not None:
         read += f" “{record.quote}”"
-    room = RECORD_LIMIT - len(decision.text) - 2
-    quote = f"{read[:room]} {decision.text}"
+    quote = f"{capped(read, QUOTE_LIMIT - len(decision.text) - 1)} {decision.text}"
     payload.update(
         {
             "tool": "cross_examine",
@@ -650,6 +649,14 @@ def _cross_examine(
     )
     target = name(game, decision.target)
     return "cross_examine", f"cross-examined {target}, reading from a record:", quote
+
+
+def capped(words: str, room: int = QUOTE_LIMIT) -> str:
+    """Words cut to fit a message, marked where they were cut. Only a filibuster
+    speaks longer than one message may carry."""
+    if len(words) <= room:
+        return words
+    return words[: room - 1].rstrip() + "…"
 
 
 def _alibi(
@@ -673,7 +680,7 @@ def _alibi(
     if decision.companion is not None:
         claim += f", with {name(game, decision.companion)}"
     claim += f", during {_phase(phase)} on day {day}."
-    quote = f"{claim} {decision.text}".strip()
+    quote = capped(f"{claim} {decision.text}".strip())
     payload.update(
         {
             "target": asker,
@@ -722,7 +729,7 @@ def _vouch(
         }
     )
     verb = "vouched for" if decision.confirm else "refused to vouch for"
-    return "vouch", f"{verb} {whom}:", f"{said} {decision.text}".strip()
+    return "vouch", f"{verb} {whom}:", capped(f"{said} {decision.text}".strip())
 
 
 # --------------------------------------------------------------------- the vote
@@ -867,4 +874,4 @@ def _end_by_roles(game: GameState, reason: str) -> None:
     finish(game, "traitor" if living_traitors(game) else "faithful", reason=reason)
 
 
-__all__ = ["open_table", "table_act", "table_advance", "table_turn"]
+__all__ = ["capped", "open_table", "table_act", "table_advance", "table_turn"]

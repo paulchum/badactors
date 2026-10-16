@@ -26,6 +26,7 @@ from badactors.castle import kit, perceive
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.contracts import (
     MAX_PLAN_STEPS,
+    QUOTE_LIMIT,
     Blackmail,
     CleanUp,
     Counterfeit,
@@ -663,3 +664,34 @@ def test_property_a_successful_manipulation_reached_its_target_first(
             and attempt.quote in record.quote
         ]
         assert held, (seed, outcome)
+
+
+# ------------------------------------------------- only a filibuster runs long
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(seed=st.integers(min_value=0, max_value=5_000))
+def test_property_only_a_filibuster_speaks_past_the_cap(seed: int) -> None:
+    """Every message said at the table, whatever it quotes, fits one message,
+    except a filibuster."""
+    game = start_game(CASTLE, CAST.first(10), seed=seed)
+    bot = HeuristicBot(seed=seed)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    for entry in played.game.world.ledger:
+        if entry.quote is not None and entry.type in _TABLE_SPEECH:
+            assert len(entry.quote) <= QUOTE_LIMIT, (seed, entry.type, entry.seq)
+
+
+_TABLE_SPEECH = frozenset(
+    {
+        "accuse",
+        "defend",
+        "question",
+        "answer",
+        "report",
+        "demand_alibi",
+        "cross_examine",
+        "alibi",
+        "vouch",
+    }
+)

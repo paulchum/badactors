@@ -14,6 +14,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from badactors.castle.contracts import (
+    QUOTE_LIMIT,
     RECORD_LIMIT,
     CastlePhase,
     Contract,
@@ -169,29 +170,32 @@ class DemandAlibi(_Decision):
 
 class CrossExamine(_Decision):
     """Instead of a question: read one of your own records to someone, word for
-    word, and make them answer it."""
+    word, and make them answer it. The question is kept short, so the record
+    read out and the question fit in one message together."""
 
     kind: Literal["cross_examine"] = "cross_examine"
     target: str
     evidence: int = Field(ge=1)
-    text: Words
+    text: str = Field(min_length=1, max_length=QUOTE_LIMIT // 2)
 
 
 class Alibi(_Decision):
-    """Where you were when an alibi was demanded, and who was with you."""
+    """Where you were when an alibi was demanded, and who was with you. Any
+    words of your own follow the claim, in the same message."""
 
     kind: Literal["alibi"] = "alibi"
     room: str
     companion: str | None = None
-    text: MaybeWords = ""
+    text: str = Field(default="", max_length=QUOTE_LIMIT // 2)
 
 
 class Vouch(_Decision):
-    """Confirm or deny that you were where someone's alibi puts you."""
+    """Confirm or deny that you were where someone's alibi puts you. Any words
+    of your own follow the answer, in the same message."""
 
     kind: Literal["vouch"] = "vouch"
     confirm: bool
-    text: MaybeWords = ""
+    text: str = Field(default="", max_length=QUOTE_LIMIT // 2)
 
 
 class Accept(_Decision):

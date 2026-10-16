@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from badactors.castle.contracts import (
+    QUOTE_LIMIT,
     Blackmail,
     CastlePhase,
     CheckRegister,
@@ -29,6 +30,7 @@ from badactors.castle.contracts import (
     Inspect,
     InspectSeal,
     Intent,
+    LedgerEntry,
     Move,
     Offstage,
     Plant,
@@ -1120,6 +1122,58 @@ def test_a_table_tool_not_offered_is_refused_privately_and_asked_again(
     silent = [e for e in of_type(game, "stay_silent") if e.actor_id == player]
     assert silent and silent[0].private["reason"] == "thinking better of it"
     assert not [e for e in of_type(game, offered) if e.actor_id == player]
+
+
+def _read_the_camera_log() -> tuple[GameState, str, LedgerEntry]:
+    """Late on day one, one of the Faithful reads the day's camera log, a
+    record longer than one message may carry, and the table opens."""
+    game = run_until(referee(seed=6), 1, "free_time")
+    reader = living_faithful(game)[0]
+    put(game.world, reader, "study")
+    game.world = act(game.world, reader, ReadLog(thing_id="camera_log"))
+    reading = last(game.world, "read_log")
+    assert reading.quote is not None and len(reading.quote) > QUOTE_LIMIT
+    return _table_from(game), reader, reading
+
+
+def test_a_cross_examination_of_a_long_record_fits_one_message() -> None:
+    game, reader, reading = _read_the_camera_log()
+    target = next(pid for pid in living(game) if pid != reader)
+
+    def answer(pid: str, request: object) -> Decision:
+        assert isinstance(request, Request)
+        if pid == reader and "cross_examine" in request.tools:
+            return CrossExamine(
+                target=target, evidence=reading.seq, text="Explain that."
+            )
+        if request.kind == "vote":
+            return Vote(target=request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (cross,) = of_type(game, "cross_examine")
+    assert cross.quote is not None and len(cross.quote) <= QUOTE_LIMIT
+    assert cross.quote.startswith(f"At t{reading.tick} I recorded:")
+    assert cross.quote.endswith("… Explain that.")
+
+
+def test_a_report_of_a_long_record_fits_one_message() -> None:
+    game, reader, reading = _read_the_camera_log()
+
+    def answer(pid: str, request: object) -> Decision:
+        assert isinstance(request, Request)
+        if pid == reader and "report" in request.tools:
+            return Report(evidence=reading.seq)
+        if request.kind == "vote":
+            return Vote(target=request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (report,) = of_type(game, "report")
+    assert report.quote is not None and len(report.quote) <= QUOTE_LIMIT
+    assert reading.quote is not None
+    assert report.quote.endswith("…")
+    assert reading.quote.startswith(report.quote[:-1])
 
 
 def test_report_quotes_the_attempt_and_accuses_its_author() -> None:
