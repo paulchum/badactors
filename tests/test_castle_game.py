@@ -611,6 +611,50 @@ def test_the_endgame_ends_when_every_vote_is_to_end() -> None:
     )
 
 
+def _endgame_failing(failing: int) -> GameState:
+    """A final table where the first ``failing`` endgame voters in seat order
+    fail to answer, and everyone else votes to end."""
+    voters: list[str] = []
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        kind = observation.request.kind
+        if kind == "endgame":
+            voters.append(observation.viewer_id)
+            if len(voters) <= failing:
+                raise TurnFailure("the provider returned nothing")
+            return EndgameVote(choice="end")
+        if kind == "vote":
+            faithful = [
+                p for p in observation.request.options if game.roles[p] == "faithful"
+            ]
+            return Vote(target=(faithful or observation.request.options)[0])
+        return None
+
+    ref = referee(seed=9, endgame_at=10, script=script)
+    ref.run()
+    return ref.game
+
+
+def test_an_endgame_with_no_ballots_says_so_and_ends() -> None:
+    game = _endgame_failing(failing=99)
+    over = of_type(game, "game_over")[0].quote or ""
+    assert of_type(game, "turn_failed")
+    assert "Every vote" not in over
+    assert "No vote to end the game or to banish again was cast" in over
+    assert game.status == "over"
+
+
+def test_an_endgame_with_a_missing_ballot_names_who_cast_none() -> None:
+    game = _endgame_failing(failing=1)
+    failed = [
+        e for e in of_type(game, "turn_failed") if e.payload["request"] == "endgame"
+    ]
+    assert len(failed) == 1
+    silent = game.world.players[failed[0].actor_id or ""].name
+    over = of_type(game, "game_over")[0].quote or ""
+    assert f"Every vote cast was to end the game; {silent} cast none." in over
+
+
 def test_a_vote_to_banish_again_banishes_again() -> None:
     game = _final_table("banish")
     rounds = [int(entry.payload["round"]) for entry in of_type(game, "banishment")]

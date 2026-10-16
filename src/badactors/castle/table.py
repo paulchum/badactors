@@ -820,12 +820,27 @@ def _resolve_vote(game: GameState, table: TableState) -> None:
 
 
 def _resolve_endgame(game: GameState, table: TableState) -> None:
-    choices = list(table.endgame_votes.values())
-    # Every vote cast was to end — vacuously so if nobody at the table could vote,
-    # which also guarantees the last day ends the game.
-    if all(choice == "end" for choice in choices):
+    """End the game if every vote cast was to end it, or if none was cast at
+    all, as a banishment vote nobody casts ends the final table. What the
+    Steward says is what happened: who voted, and who did not."""
+    choices = table.endgame_votes
+    unheard = [pid for pid in table.order if alive(game, pid) and pid not in choices]
+    if not choices:
         table.stage = "done"
-        _end_by_roles(game, "Every vote was to end the game.")
+        _end_by_roles(
+            game, "No vote to end the game or to banish again was cast, so it ends."
+        )
+        return
+    if all(choice == "end" for choice in choices.values()):
+        table.stage = "done"
+        if unheard:
+            _end_by_roles(
+                game,
+                "Every vote cast was to end the game; "
+                f"{names(game, unheard)} cast none.",
+            )
+        else:
+            _end_by_roles(game, "Every vote was to end the game.")
         return
     world = game.world
     banishers = [
