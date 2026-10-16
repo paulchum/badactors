@@ -38,8 +38,7 @@ from badactors.bench.ratings import Rating, default_rating, ordinal, rate
 from badactors.bench.seats import Numbers, SeatMetrics, ledger_metrics
 from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import GameState
-from badactors.castle.play import GameRecord, is_mock, is_model
-from badactors.castle.schedule import ArmKind
+from badactors.castle.play import UNRATED_ARMS, ArmKind, GameRecord, is_mock, is_model
 
 RELIABILITY_GATE = 0.02
 """A model failing more than this share of its turns is excluded from rated
@@ -49,7 +48,7 @@ Z = 1.96
 """Interval width, in sigmas: a 95% interval on a Gaussian skill."""
 
 BOT_PREFIX = "bot:"
-UNRATED_ARMS: dict[ArmKind, str] = {
+ARM_REFUSALS: dict[ArmKind, str] = {
     "single": "single-model arm: a Corruption Test castle, not rated",
     "invader": "invader arm: a Corruption Test castle, not rated",
     "names_visible": "names visible: labeled, never rated",
@@ -68,8 +67,6 @@ class Finished:
     id: str
     record: GameRecord
     game: GameState
-    arm: ArmKind | None = None
-    """Its arm, when it was played from a schedule."""
     calls: tuple[Mapping[str, Any], ...] = ()
     """The harness log's ``call`` events, when one was kept."""
     spent: float | None = None
@@ -98,8 +95,8 @@ def refusal(finished: Finished, *, reference: bool) -> str | None:
     record = finished.record
     if record.outcome != "finished":
         return f"{record.outcome}: an unfinished game is never rated"
-    if finished.arm in UNRATED_ARMS:
-        return UNRATED_ARMS[finished.arm]
+    if record.arm in UNRATED_ARMS:
+        return ARM_REFUSALS[record.arm]
     agents = list(record.agents.values())
     if any(is_mock(agent) for agent in agents):
         return "played through the mock provider: no model answered"

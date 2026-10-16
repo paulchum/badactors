@@ -43,11 +43,10 @@ from pydantic import Field, model_validator
 
 from badactors.castle.cast import Cast
 from badactors.castle.contracts import CastleMap, Contract
-from badactors.castle.play import start_game
+from badactors.castle.play import ArmKind, start_game
 from badactors.castle.rng import draw
 from badactors.castle.rules import GameConfig
 
-ArmKind = Literal["single", "mixed", "invader", "names_visible"]
 Rotation = Literal["latin", "compact"]
 Tier = Literal["frontier", "open"]
 
@@ -446,7 +445,6 @@ def load_schedule(path: str | Path) -> Schedule:
 
 __all__ = [
     "ArmCoverage",
-    "ArmKind",
     "Rotation",
     "Scenario",
     "Schedule",

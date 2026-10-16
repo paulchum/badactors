@@ -641,6 +641,13 @@ def run_game(
 
 
 Outcome = Literal["finished", "stopped:budget", "aborted:operator"]
+
+ArmKind = Literal["single", "mixed", "invader", "names_visible"]
+"""The kind of castle a benchmark game is scheduled in (SPEC §7): every seat one
+model, the rated mixed cast, one model invading another's castle, or the mixed
+cast with models shown on the roster."""
+
+UNRATED_ARMS: frozenset[ArmKind] = frozenset({"single", "invader", "names_visible"})
 """How a game ended: played out, stopped when its budget ran out, or aborted
 by an operator error (a bad key, no credit). Only a finished game is whole."""
 
@@ -666,11 +673,16 @@ class GameRecord(Contract):
     winner: Role | None
     outcome: Outcome = "finished"
     rated: bool = False
+    arm: ArmKind | None = None
+    """The arm of the benchmark schedule this game was played from; ``None``
+    for a game played from no schedule, and for records older than the field."""
 
     @model_validator(mode="after")
     def every_seat_says_who_played_it(self) -> Self:
         if self.rated and (self.outcome != "finished" or self.reference_bots):
             raise ValueError("Only a finished game played by models can be rated.")
+        if self.rated and self.arm in UNRATED_ARMS:
+            raise ValueError(f"A game of the {self.arm} arm is never rated.")
         cast = {member.id: member.model for member in self.cast.players}
         if set(self.agents) != set(cast):
             raise ValueError("Every seat in the cast needs its agent, and only those.")
@@ -725,6 +737,7 @@ def record(
     *,
     outcome: Outcome = "finished",
     rated: bool = False,
+    arm: ArmKind | None = None,
 ) -> GameRecord:
     game = played.game
     return GameRecord(
@@ -742,6 +755,7 @@ def record(
         winner=game.winner,
         outcome=outcome,
         rated=rated,
+        arm=arm,
     )
 
 
@@ -835,6 +849,8 @@ def load_record(path: str | Path) -> GameRecord:
 
 __all__ = [
     "UNKNOWN_AGENT",
+    "UNRATED_ARMS",
+    "ArmKind",
     "BadAnswer",
     "Defused",
     "FailureReason",

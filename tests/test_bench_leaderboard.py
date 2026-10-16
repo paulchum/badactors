@@ -7,9 +7,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import pytest
+from pydantic import ValidationError
 
 from badactors.bench.dryrun import ReferenceBot, play_schedule, play_seating, profiles
 from badactors.bench.leaderboard import (
+    ARM_REFUSALS,
     RELIABILITY_GATE,
     Finished,
     MixedBoards,
@@ -23,7 +25,14 @@ from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.game import GameState, was_traitor_at
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
-from badactors.castle.play import TurnFailure, record, run_game, start_game
+from badactors.castle.play import (
+    UNRATED_ARMS,
+    GameRecord,
+    TurnFailure,
+    record,
+    run_game,
+    start_game,
+)
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import Scenario, Seating, mixed_schedule
 from castle_scenes import CAST, CASTLE
@@ -71,9 +80,8 @@ def model_game(
     )
     return Finished(
         id=seating.id,
-        record=record(CASTLE, cast, played, rated=rated),
+        record=record(CASTLE, cast, played, rated=rated, arm=seating.arm),
         game=played.game,
-        arm=seating.arm,
     )
 
 
@@ -155,7 +163,7 @@ def test_a_game_with_bots_in_some_seats_is_on_neither_board(
     }
     players.update({seat: ReferenceBot("p0", 0, 0.5) for seat in seats[4:]})
     played = run_game(game, players, check_leaks=False)  # type: ignore[arg-type]
-    partly = Finished("partly", record(CASTLE, cast, played), played.game, "mixed")
+    partly = Finished("partly", record(CASTLE, cast, played, arm="mixed"), played.game)
     assert board([partly]).refused[0].reason.startswith("some seats")
     assert board([partly], reference=True).refused[0].reason.startswith("not every")
 
@@ -164,22 +172,27 @@ def test_unrated_arms_and_unrated_records_are_refused(
     model_games: list[Finished],
 ) -> None:
     game = model_games[0]
+    assert game.record.arm == "mixed" and game.record.rated
+    assert set(ARM_REFUSALS) == UNRATED_ARMS
     for arm, why in (
         ("names_visible", "names visible"),
         ("single", "single-model arm"),
         ("invader", "invader arm"),
     ):
-        moved = Finished(game.id, game.record, game.game, arm)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError, match="never rated"):
+            GameRecord.model_validate({**game.record.model_dump(), "arm": arm})
+        moved = Finished(
+            game.id, game.record.model_copy(update={"arm": arm}), game.game
+        )
         assert board([moved]).refused[0].reason.startswith(why)
     unrated = Finished(
-        game.id, game.record.model_copy(update={"rated": False}), game.game, "mixed"
+        game.id, game.record.model_copy(update={"rated": False}), game.game
     )
     assert board([unrated]).refused[0].reason == "the record is not marked rated"
     stopped = Finished(
         game.id,
         game.record.model_copy(update={"rated": False, "outcome": "stopped:budget"}),
         game.game,
-        "mixed",
     )
     assert "never rated" in board([stopped]).refused[0].reason
 
@@ -262,7 +275,7 @@ def test_cost_per_game_comes_from_the_harness_calls(
     calls = tuple(
         {"event": "call", "ref": {"seat": seat}, "dollars": 0.01} for seat in seats
     )
-    priced = Finished(game.id, game.record, game.game, game.arm, calls=calls)
+    priced = Finished(game.id, game.record, game.game, calls=calls)
     rated = board([priced, *model_games[1:]])
     assert rated.game_dollars == {game.id: pytest.approx(0.08)}
     shown = rated.as_json()

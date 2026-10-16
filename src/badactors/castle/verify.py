@@ -223,8 +223,11 @@ class Bundle(Contract):
 
 def parts(record: GameRecord, calls: Sequence[Exchange]) -> list[tuple[PartKind, Any]]:
     """Everything the chain covers, in order: the game's header (all but its
-    decisions and ledger), each decision, each ledger entry, each exchange."""
-    header = record.model_dump(mode="json", exclude={"decisions", "ledger"})
+    decisions and ledger), each decision, each ledger entry, each exchange. A
+    game played from no schedule has no arm, and its header leaves the field
+    out, so it hashes as records from before the field did."""
+    left_out = {"decisions", "ledger"} | ({"arm"} if record.arm is None else set())
+    header = record.model_dump(mode="json", exclude=left_out)
     return [
         ("game", header),
         *(("decision", d.model_dump(mode="json")) for d in record.decisions),

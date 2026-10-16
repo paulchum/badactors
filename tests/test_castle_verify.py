@@ -16,7 +16,15 @@ from badactors.castle.harness import play_live
 from badactors.castle.kit import SPECS
 from badactors.castle.ledger import CUSTODY_TYPES
 from badactors.castle.mock_provider import BotProvider, mock_models
-from badactors.castle.play import GameRecord, record, run_game, save_record, start_game
+from badactors.castle.play import (
+    GameRecord,
+    load_record,
+    record,
+    replay,
+    run_game,
+    save_record,
+    start_game,
+)
 from badactors.castle.prompt import SYSTEM, Message, Part
 from badactors.castle.provider import (
     CallRef,
@@ -33,6 +41,7 @@ from badactors.castle.verify import (
     load_bundle,
     main,
     make_bundle,
+    parts,
     save_bundle,
     verify,
 )
@@ -77,6 +86,29 @@ def test_an_honest_game_verifies(seed: int, players: int, traitors: int) -> None
     assert len(bundle.links) == 1 + len(bundle.record.decisions) + len(
         bundle.record.ledger
     )
+
+
+def test_a_record_from_before_the_arm_field_replays_and_hashes_as_it_did(
+    tmp_path: Path, stored: GameRecord
+) -> None:
+    dumped = json.loads(stored.model_dump_json())
+    del dumped["arm"]
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(dumped))
+    loaded = load_record(old)
+    assert loaded.arm is None and loaded == stored
+    assert replay(loaded).world.ledger == stored.ledger
+    (kind, header), *_ = parts(loaded, [])
+    assert kind == "game" and header == {
+        key: value
+        for key, value in dumped.items()
+        if key not in ("decisions", "ledger")
+    }
+    assert verify(make_bundle(loaded)) == []
+
+    scheduled = stored.model_copy(update={"arm": "single"})
+    assert parts(scheduled, [])[0][1]["arm"] == "single"
+    assert make_bundle(scheduled).head != make_bundle(stored).head
 
 
 def test_a_tampered_decision_fails(stored: GameRecord) -> None:

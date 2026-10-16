@@ -15,7 +15,7 @@ from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, save_record, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.schedule import Scenario, mixed_schedule, save_schedule
+from badactors.castle.schedule import Scenario, mixed_schedule
 from badactors.castle.verify import load_bundle, verify
 from castle_scenes import CAST, CASTLE
 
@@ -84,7 +84,6 @@ def test_saved_records_are_replayed_rated_and_bundled(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     schedule = mixed_schedule(SCENARIO, MODELS, seeds=[0], rotation="compact")
-    save_schedule(schedule, tmp_path / "schedule.json")
     games = tmp_path / "games"
     for seating in schedule.games:
         cast = seating.cast(SCENARIO.cast)
@@ -104,7 +103,7 @@ def test_saved_records_are_replayed_rated_and_bundled(
             check_leaks=False,
         )
         path = games / f"{seating.id}.json"
-        save_record(record(CASTLE, cast, played, rated=True), path)
+        save_record(record(CASTLE, cast, played, rated=True, arm=seating.arm), path)
         calls = [
             {"event": "call", "ref": {"seat": seat}, "dollars": 0.02}
             for seat in seating.seats
@@ -118,6 +117,24 @@ def test_saved_records_are_replayed_rated_and_bundled(
     bot = HeuristicBot(seed=9)
     played = run_game(bot_game, dict.fromkeys(bot_game.world.seats, bot))
     save_record(record(CASTLE, cast, played), games / "bot-game.json")
+    seating = schedule.games[0]
+    single = seating.model_copy(update={"id": "single-x-s0-r0", "arm": "single"})
+    alone = start_game(
+        CASTLE,
+        seating.cast(cast),
+        seed=seating.seed,
+        config=SCENARIO.config,
+        world_id=single.world_id,
+    )
+    played_alone = run_game(
+        alone,
+        {seat: Posing(model, seating.seed) for seat, model in seating.seats.items()},
+        check_leaks=False,
+    )
+    save_record(
+        record(CASTLE, seating.cast(cast), played_alone, arm="single"),
+        games / "single.json",
+    )
     forged = record(CASTLE, cast, played)
     ledger = list(forged.ledger)
     ledger[5] = ledger[5].model_copy(update={"tick": ledger[5].tick + 3})
@@ -128,8 +145,6 @@ def test_saved_records_are_replayed_rated_and_bundled(
         [
             "--records",
             str(games),
-            "--schedule",
-            str(tmp_path / "schedule.json"),
             "--resamples",
             "5",
             "--out",
@@ -142,11 +157,14 @@ def test_saved_records_are_replayed_rated_and_bundled(
     assert {row["entrant"] for row in models["rows"]} == set(MODELS)
     refused = {item["game"]: item["reason"] for item in models["refused"]}
     assert refused["bot-game"] == "played by reference bots"
+    assert refused[single.world_id].startswith("single-model arm")
     assert refused["forged"] == "its ledger is not the one its replay writes"
     assert models["cost_per_game"]["median"] == pytest.approx(0.16)
     assert all(row["cost"]["per_game"] for row in models["rows"])
     assert board["reference_bots"]["games"] == 1
-    assert len(list((out / "replays" / "models").iterdir())) == len(schedule.games)
+    assert {p.name for p in (out / "replays" / "models").iterdir()} == {
+        f"{game.world_id}.json.gz" for game in [*schedule.games, single]
+    }
     assert [p.name for p in (out / "replays" / "bots").iterdir()] == [
         "bot-game.json.gz"
     ]

@@ -43,9 +43,9 @@ from badactors.bench.matrix import ALL, matrix
 from badactors.bench.ratings import BETA
 from badactors.castle.cast import load_cast_file
 from badactors.castle.mapfile import load_map
+from badactors.castle.play import ArmKind
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import (
-    ArmKind,
     Rotation,
     Scenario,
     Schedule,
