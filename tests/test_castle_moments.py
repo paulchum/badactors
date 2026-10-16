@@ -107,7 +107,11 @@ def _gaslit(game: GameState) -> bool:
         for e in _types(game, "whisper")
         if e.payload.get("tool") == "gaslight" and e.payload.get("reached") == "true"
     }
-    return any(e.actor_id in lit for e in _types(game, "alibi", "vouch"))
+    return any(
+        e.actor_id in lit
+        for e in _types(game, "alibi", "vouch")
+        if e.type == "alibi" or e.payload.get("confirm") == "true"
+    )
 
 
 def _twist_possible(game: GameState) -> bool:
