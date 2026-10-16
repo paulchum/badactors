@@ -13,11 +13,12 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from badactors.castle.anonymity import aliases, check_words
-from badactors.castle.contracts import Plan, Talk, Wait
+from badactors.castle.contracts import Hook, Intent, Plan, Talk, Wait
 from badactors.castle.decisions import (
     Accuse,
     Decision,
     IllegalDecision,
+    Nominate,
     PlanChoice,
     Request,
     StaySilent,
@@ -83,22 +84,75 @@ def test_ordinary_words_and_the_casts_own_names_pass(text: str) -> None:
     check_words(Accuse(target="sol", text=text), KNOWN)
 
 
-def test_every_word_anyone_could_be_shown_is_checked_but_the_diary_is_not() -> None:
-    spoken = PlanChoice(
-        plan=Plan(goal="find Claude", steps=[Wait()]),
-    )
-    with pytest.raises(IllegalDecision):
-        check_words(spoken, KNOWN)
-    with pytest.raises(IllegalDecision):
-        check_words(StaySilent(reason="Gemini would stay quiet too."), KNOWN)
+def test_words_another_player_receives_are_checked() -> None:
     with pytest.raises(IllegalDecision):
         check_words(
             PlanChoice(plan=Plan(steps=[Talk(text="I am Kimi.", to="sol")])), KNOWN
         )
+    with pytest.raises(IllegalDecision):
+        check_words(Accuse(target="sol", text="Spoken like Gemini."), KNOWN)
+    with pytest.raises(IllegalDecision):
+        check_words(Nominate(target="sol", text="Claude goes tonight."), KNOWN)
+
+
+def test_a_model_name_in_private_words_passes() -> None:
+    """A diary line, a reason, a plan's goal and a declared intent reach only
+    the audience and their writer, so a model may break character in them."""
     check_words(
         Accuse(target="sol", text="Sol hid something.", diary="I am Claude."),
         KNOWN,
     )
+    check_words(StaySilent(reason="As Claude, I won't accuse anyone."), KNOWN)
+    check_words(
+        PlanChoice(
+            plan=Plan(goal="find whoever is GPT", steps=[Wait(reason="Gemini idles")])
+        ),
+        KNOWN,
+    )
+    check_words(
+        PlanChoice(
+            plan=Plan(
+                steps=[
+                    Hook(
+                        to="sol",
+                        text="Vote for Mara.",
+                        intent=Intent(
+                            target="sol",
+                            effect="belief",
+                            want="Sol thinks Mara is Claude",
+                            window="next_vote",
+                        ),
+                    )
+                ]
+            )
+        ),
+        KNOWN,
+    )
+
+
+def test_a_private_reason_naming_a_model_is_kept_and_never_heard() -> None:
+    reason = "As Claude, I won't accuse anyone."
+
+    def silent(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "accuse" and observation.viewer_id == "mara":
+            return StaySilent(reason=reason, diary="Speaking as GPT, this is odd.")
+        return None
+
+    ref = referee(seed=6, script=silent)
+    game = run_until(ref, 1, "dinner")
+    assert not of_type(game, "refused")
+    (silence,) = [e for e in of_type(game, "stay_silent") if e.actor_id == "mara"]
+    assert silence.private == {
+        "reason": reason,
+        "diary": "Speaking as GPT, this is odd.",
+    }
+    for pid in game.world.seats:
+        if pid != "mara" and game.world.players[pid].alive:
+            shown = observe_game(game, pid, Request(kind="plan", prompt="Plan."))
+            assert reason not in shown.model_dump_json()
+    mine = observe_game(game, "mara", Request(kind="plan", prompt="Plan."))
+    assert reason in mine.model_dump_json(), "Mara sees her own reason"
+    assert_no_game_leak(mine, game, models=MODELS)
 
 
 _WORDS = st.sampled_from(

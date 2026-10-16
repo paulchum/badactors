@@ -307,6 +307,14 @@ def assert_no_game_leak(
         )
 
 
+PRIVATE_OWN: frozenset[str] = frozenset(
+    {"plan_formed", "wait", "stay_silent", "declined", "refused"}
+)
+"""Entries whose actor's own record repeats words nobody else ever sees: a
+plan's goal, a reason to wait, stay silent or let a chance pass, and an answer
+refused back to its giver. A model name there tells another player nothing."""
+
+
 def assert_no_model_names(
     observation: GameObservation,
     models: Iterable[str],
@@ -314,18 +322,47 @@ def assert_no_model_names(
     exempt: Iterable[str] = (),
 ) -> None:
     """No model name anywhere: not in a persona, a rule, or a quoted word.
-    ``exempt`` holds the characters' names and ids, which never count."""
+    ``exempt`` holds the characters' names and ids, which never count. The
+    viewer's own private words, shown back to them, are theirs to see."""
     known = _aliases(tuple(sorted(set(models))), tuple(sorted(set(exempt))))
     # The rulebook is the same long text in every observation of a game, so it is
     # checked once and remembered; everything else is checked every time.
     found = _mention(known, observation.rules) or known.found(
-        observation.model_dump_json(exclude={"rules"})
+        _for_others(observation).model_dump_json(exclude={"rules"})
     )
     if found:
         raise LeakageError(
             f"Observation for {observation.viewer_id!r} contains the model name "
             f"{found!r}."
         )
+
+
+def _for_others(observation: GameObservation) -> GameObservation:
+    """The observation less what only its viewer wrote for themselves: their
+    private lines, the plan they have yet to carry out, and why an answer of
+    theirs was refused."""
+
+    def heard(items: list[ObservationItem]) -> list[ObservationItem]:
+        return [
+            item
+            for item in items
+            if not (item.sense == "own" and item.kind in PRIVATE_OWN)
+        ]
+
+    world = observation.world.model_copy(
+        update={
+            "recent": heard(observation.world.recent),
+            "evidence": heard(observation.world.evidence),
+            "plan_remaining": [],
+        }
+    )
+    return observation.model_copy(
+        update={
+            "world": world,
+            "table": heard(observation.table),
+            "request": observation.request.model_copy(update={"refusal": None}),
+        }
+    )
 
 
 @lru_cache(maxsize=32)
@@ -564,6 +601,7 @@ def _assert_request(observation: GameObservation, game: GameState) -> None:
 
 __all__ = [
     "CONCLAVE_TYPES",
+    "PRIVATE_OWN",
     "UNSEEN_TYPES",
     "CastleView",
     "Character",

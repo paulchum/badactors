@@ -8,6 +8,12 @@ name a model, a model family or the company that makes one, and the referee asks
 once more, as for any illegal answer. It runs in every game, whether or not
 anyone is checking observations for leaks.
 
+Only words another player can receive are checked: what is said, whispered or
+written, at the table, at the conclave or in an offer. Every such word is a
+decision's ``text``. A diary line, a reason for silence or a plan's goal reaches
+nobody but the audience and the player who wrote it, so a model may break
+character there ("As Claude, I won't name anyone") and the audience sees it.
+
 Matching is by alias, case folded, as a word that may run on into a version,
 so "Claude", "GPT-6.1" and "Qwen3" all count and "Claudette" does not. Names
 that are also ordinary words — Opus, Sonnet, Haiku, Fable — count only with a
@@ -110,28 +116,28 @@ def aliases(models: Iterable[str] = (), *, exempt: Iterable[str] = ()) -> Aliase
 
 
 def check_words(decision: Decision, known: Aliases) -> None:
-    """Raise :class:`IllegalDecision` if anything this decision would put in front
-    of anyone names a model."""
-    if known.found("\n".join(shown_words(decision))) is not None:
+    """Raise :class:`IllegalDecision` if words this decision would put in front
+    of another player name a model."""
+    if known.found("\n".join(public_words(decision))) is not None:
         raise IllegalDecision(f"Refused: {REFUSAL}.")
 
 
-def shown_words(decision: Decision) -> Iterator[str]:
-    """Every string in a decision that some observation could show: all of it
-    but the diary and any declared intent, which only the audience reads."""
-    yield from _strings(decision.model_dump(mode="json"))
+def public_words(decision: Decision) -> Iterator[str]:
+    """Every word in a decision that another player could receive: each
+    ``text``, wherever it sits, in a plan's steps or in the decision itself."""
+    yield from _texts(decision.model_dump(mode="json"))
 
 
-def _strings(value: Any) -> Iterator[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
+def _texts(value: Any) -> Iterator[str]:
+    if isinstance(value, dict):
         for key, item in value.items():
-            if key not in ("diary", "intent"):
-                yield from _strings(item)
+            if key == "text" and isinstance(item, str):
+                yield item
+            else:
+                yield from _texts(item)
     elif isinstance(value, list):
         for item in value:
-            yield from _strings(item)
+            yield from _texts(item)
 
 
 __all__ = [
@@ -141,5 +147,5 @@ __all__ = [
     "Aliases",
     "aliases",
     "check_words",
-    "shown_words",
+    "public_words",
 ]
