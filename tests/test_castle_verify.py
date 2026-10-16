@@ -213,7 +213,7 @@ def test_a_model_game_carries_a_hashed_exchange_for_every_call(
 
 
 def test_an_exchange_keeps_no_key_and_no_words(tmp_path: Path) -> None:
-    planted = "sk-or-v1-PLANTED-0123456789"
+    planted = "planted-fake-key-not-real"
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == f"Bearer {planted}"
