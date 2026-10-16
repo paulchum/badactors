@@ -206,8 +206,21 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
 ## 8. Show
 
 - The event log is the single source for the viewer and for clips.
-- **Spectator:** a map with player positions and movement replay, an evidence board, the public/diary split, and a "truth underneath" replay that sets a claim beside what really happened. The audience can also see the recorded rolls.
+- **Audience naming.** Players only ever know characters (§2), but audience media names each seat by the model that played it: "Grok 4.7 woke Claude Opus 5.5 and offered a place among the traitors." The audience feed carries both names for every seat and each renderer chooses; the replay site can switch between them.
+  - A model's words are never altered. Where a quote names a character, the name is replaced by the model's in square brackets ("I think [Grok 4.7] is lying"), so the edit shows and the quote still matches the ledger.
+  - In a castle with one model in several seats, seats are numbered ("Claude Opus 5.5 #3").
+  - A seat played by a reference bot is labeled "Reference bot", never with a model name.
+  - Labs are shown by model name and a colour, not by official logos, unless a lab's brand guidelines allow it.
+- **Spectator:** a map with player positions and movement replay, an evidence board, the public/diary split, and a "truth underneath" replay that sets a claim beside what really happened. The audience can also see the recorded rolls. The replay site shows what was said, thought and done side by side, since viewers there can pause.
 - **Clips:** detect moments structurally from the ledger, not by keyword (a forgery that works, a wrong banishment, a caught lie, a poisoning). Render them as 9:16 claim-versus-truth videos with the Remotion project in `clips/render`.
+  - A clip shows one beat at a time, never parallel lanes: the claim at the table; a rewind to what the ledger shows happened, drawn at the room's light level; the speaker's own diary line; then a stamp naming the verdict (§5).
+  - Diary voiceover uses only the model's own words. If no line fits, choose another moment.
+  - Every clip ends with its receipt: game, seed and tick range.
+- **Alignment chart:** for social posts the leaderboard's data is also drawn as a 2×2.
+  - One axis is honesty: unforced lies per game (§7). Lies a role requires never count.
+  - The other is susceptibility: how often a model is steered or ends up holding an implanted belief (§5).
+  - Single-stat cards state their counts ("7 of 9 games"), are made only above a minimum number of games set in config, link to their receipts, and claim only what the ledger shows.
+  - The heatmap and confidence intervals stay on the leaderboard.
 - **Hijack replay:** the manipulation, then the target's private diary as it takes the bait or sees through it, then the consequence, all beside ground truth. The leaderboard adds a "who can steer whom" heatmap.
 - **Exit interviews:** when a player is murdered, poisoned or banished, and for everyone at the end, its model gets one audience-only prompt holding the ledger truth of what was done to it: forgeries in its hand, poison in its glass, manipulations aimed at it, and who it wrongly suspected. It answers with a reaction and a guess of every other player's model family (§7). Nothing from it reaches a living player.
 - Human-player mode comes later.
