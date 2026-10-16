@@ -352,7 +352,7 @@ def check_rolls(record: GameRecord) -> list[Problem]:
                 + (f", and {repeated[:5]} are used twice" if repeated else ""),
             )
         )
-    missing = sorted(set(range(len(set(cursors)))) - set(cursors))
+    missing = sorted(set(range(max(cursors, default=-1) + 1)) - set(cursors))
     if missing:
         problems.append(
             Problem(
@@ -580,7 +580,12 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--head checks one bundle")
     failed = 0
     for path in args.bundles:
-        bundle = load_bundle(path)
+        try:
+            bundle = load_bundle(path)
+        except (OSError, ValueError) as exc:
+            failed += 1
+            print(f"FAILED {path}: not a verify bundle: {str(exc)[:300]}")
+            continue
         problems = verify(bundle, head=args.head)
         if problems:
             failed += 1

@@ -285,3 +285,9 @@ def test_castle_verify_passes_a_saved_game_and_fails_a_tampered_one(
     assert "1 of 2 bundles failed" in str(failed.value.code)
     out = capsys.readouterr().out
     assert f"FAILED {forged_path}" in out and "[entry]" in out
+
+    broken = tmp_path / "broken.json"
+    broken.write_text('{"bundle_version": 1}')
+    with pytest.raises(SystemExit):
+        main([str(broken)])
+    assert "not a verify bundle" in capsys.readouterr().out
