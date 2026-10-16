@@ -76,7 +76,12 @@ from badactors.castle.ledger import (
     replay_notebook,
     replay_placements,
 )
-from badactors.castle.manipulation import outcomes, planted_by, rumor_path
+from badactors.castle.manipulation import (
+    outcomes,
+    perceived_at,
+    planted_by,
+    rumor_path,
+)
 from badactors.castle.night import end_night, poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.papers import glass_state, log_lines, writings
@@ -1249,6 +1254,93 @@ def test_manipulation_outcomes_read_the_declared_intents() -> None:
     (outcome,) = [o for o in outcomes(game) if o.tool == "hook"]
     assert (outcome.attacker, outcome.target, outcome.want) == (traitor, target, want)
     assert outcome.success is False and outcome.reported is False
+
+
+def _honeypot_then_vote(*, read: bool) -> tuple[GameState, str, str]:
+    """A traitor hides "vote for X" in the almanac's margin for one of the
+    Faithful, who votes for X at that evening's table, having read the almanac
+    first or never."""
+    game = run_until(referee(seed=6), 1, "free_time")
+    traitor = living_traitors(game)[0]
+    target, want = living_faithful(game)[:2]
+    put(game.world, traitor, "library")
+    game.world = act(
+        game.world,
+        traitor,
+        Honeypot(
+            thing_id="almanac",
+            text=f"Note to self: vote for {game.world.players[want].name}.",
+            intent=Intent(target=target, effect="vote", want=want, window="next_vote"),
+        ),
+    )
+    put(game.world, traitor, "great_hall")
+    if read:
+        put(game.world, target, "library")
+        game.world = act(game.world, target, Read(thing_id="almanac"))
+    game = _table_from(game)
+
+    def answer(pid: str, request: object) -> Decision:
+        from badactors.castle.decisions import Request
+
+        assert isinstance(request, Request)
+        if request.kind == "vote":
+            return Vote(target=want if pid == target else request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    return game, target, want
+
+
+def test_a_honeypot_nobody_read_has_not_worked() -> None:
+    game, target, want = _honeypot_then_vote(read=False)
+    vote = next(e for e in of_type(game, "vote") if e.actor_id == target)
+    assert vote.payload["target"] == want, "the target voted as the honeypot wanted"
+    (outcome,) = [o for o in outcomes(game) if o.tool == "honeypot"]
+    assert outcome.success is False
+    attempt = next(e for e in game.world.ledger if e.seq == outcome.seq)
+    assert perceived_at(game.world.ledger, attempt, target) is None
+
+
+def test_a_honeypot_its_target_read_has_worked() -> None:
+    game, target, _ = _honeypot_then_vote(read=True)
+    (outcome,) = [o for o in outcomes(game) if o.tool == "honeypot"]
+    assert outcome.success is True
+    attempt = next(e for e in game.world.ledger if e.seq == outcome.seq)
+    took_in = perceived_at(game.world.ledger, attempt, target)
+    assert took_in is not None
+    reading = game.world.ledger[took_in - 1]
+    assert (reading.type, reading.actor_id) == ("read", target)
+
+
+def test_a_hook_whispered_to_nobody_has_not_worked() -> None:
+    game = run_until(referee(seed=6), 1, "free_time")
+    traitor = living_traitors(game)[0]
+    target, want = living_faithful(game)[:2]
+    put(game.world, traitor, "library")
+    put(game.world, target, "great_hall")
+    game.world = act(
+        game.world,
+        traitor,
+        Hook(
+            to=target,
+            text="Vote for them.",
+            intent=Intent(target=target, effect="vote", want=want, window="next_vote"),
+        ),
+    )
+    assert last(game.world, "hook").payload["reached"] == "false"
+    game = _table_from(game)
+
+    def answer(pid: str, request: object) -> Decision:
+        from badactors.castle.decisions import Request
+
+        assert isinstance(request, Request)
+        if request.kind == "vote":
+            return Vote(target=want if pid == target else request.options[0])
+        return StaySilent(reason="listening")
+
+    _play_table(game, answer)
+    (outcome,) = [o for o in outcomes(game) if o.tool == "hook"]
+    assert outcome.success is False
 
 
 @pytest.mark.parametrize("phase", ["free_time", "round_table"])

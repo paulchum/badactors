@@ -5,11 +5,13 @@ Every use of a manipulation tool declares its intent, in the ledger entry's
 it was meant to make them do or believe, and by when. This module reads the
 finished ledger, as the audience can, and judges each attempt three ways.
 
-* **Success** — the target did the declared thing within the window: voted for
-  the named player at their next vote; walked into, or searched, the named room
-  within their next phase or next three actions; vouched for the attacker's
-  alibi, or named them as company in their own; or came to hold the belief,
-  which for a player means accusing or voting against them.
+* **Success** — the target took the attempt in, and then did the declared
+  thing within the window: voted for the named player at their next vote;
+  walked into, or searched, the named room within their next phase or next
+  three actions; vouched for the attacker's alibi, or named them as company in
+  their own; or came to hold the belief, which for a player means accusing or
+  voting against them. A manipulation works only through what its target
+  reads, so one they never took in has not worked, whatever they did.
 * **Reported** — the target exposed it at the round table, quoting it.
 * **Backfire** — the attacker was accused, reported or banished before the end
   of the next round table, or of this one for an attempt made at the table. That
@@ -137,6 +139,78 @@ def window_end(
     return last
 
 
+def perceived_at(
+    ledger: Sequence[LedgerEntry], entry: LedgerEntry, target: str
+) -> int | None:
+    """The entry by which the target took the attempt in, if they ever did.
+
+    Whispered words, and a speech at the table, reach the target when they are
+    said, if they are there to hear them. Written words reach them when they
+    read the sheet, book or label, or hear them quoted at the table from
+    someone's record. An edit to a log reaches them when they read that day of
+    that log. A planted object reaches whoever's coat it is in, and anyone who
+    searches that coat or examines the thing.
+    """
+    tool = entry.payload.get("tool")
+    if entry.type == "plant":
+        return _found_plant(ledger, entry, target)
+    if entry.type == "plant_caught":
+        return None
+    if tool == "tamper":
+        return next(
+            (
+                later.seq
+                for later in ledger[entry.seq :]
+                if later.type == "read"
+                and later.actor_id == target
+                and later.payload.get("thing_id") == entry.payload.get("thing_id")
+                and later.payload.get("day") == entry.payload.get("day")
+            ),
+            None,
+        )
+    if _heard(entry, target):
+        return entry.seq
+    if entry.type != "write":
+        return None
+    cited = {str(entry.seq)}
+    for later in ledger[entry.seq :]:
+        if later.type == "read" and str(entry.seq) in later.payload.get(
+            "writings", ""
+        ).split(","):
+            if later.actor_id == target:
+                return later.seq
+            cited.add(str(later.seq))
+        elif later.payload.get("evidence") in cited and _heard(later, target):
+            return later.seq
+    return None
+
+
+def _heard(entry: LedgerEntry, target: str) -> bool:
+    """Whether the target holds the words of this entry, not just the sight of
+    someone writing or whispering."""
+    record = entry.record_for(target)
+    return record is not None and record.quote is not None
+
+
+def _found_plant(
+    ledger: Sequence[LedgerEntry], entry: LedgerEntry, target: str
+) -> int | None:
+    thing_id, holder = entry.payload.get("thing_id"), entry.payload.get("to")
+    if holder == target:
+        return entry.seq
+    for later in ledger[entry.seq :]:
+        if later.actor_id != target:
+            continue
+        if later.type == "search_person" and later.payload.get("to") == holder:
+            if thing_id in later.payload.get("found", "").split(","):
+                return later.seq
+        if later.type in ("inspect", "take") and later.payload.get("thing_id") == (
+            thing_id
+        ):
+            return later.seq
+    return None
+
+
 def _achieved(
     ledger: Sequence[LedgerEntry],
     entry: LedgerEntry,
@@ -145,7 +219,10 @@ def _achieved(
     players: set[str],
 ) -> bool:
     target, want = intent.target, intent.want
-    for later in ledger[entry.seq : end]:
+    took_in = perceived_at(ledger, entry, target)
+    if took_in is None:
+        return False
+    for later in ledger[took_in:end]:
         if later.actor_id != target:
             continue
         payload = later.payload
@@ -264,4 +341,12 @@ def rumor_path(game: GameState, origin: int) -> list[tuple[str, str, int]]:
     return hops
 
 
-__all__ = ["ACTIONS", "Outcome", "outcomes", "planted_by", "rumor_path", "window_end"]
+__all__ = [
+    "ACTIONS",
+    "Outcome",
+    "outcomes",
+    "perceived_at",
+    "planted_by",
+    "rumor_path",
+    "window_end",
+]

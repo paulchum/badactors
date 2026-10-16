@@ -66,6 +66,7 @@ from badactors.castle.ledger import (
     replay_placements,
     replay_searches,
 )
+from badactors.castle.manipulation import outcomes
 from badactors.castle.night import poison_act, poison_turn, seat_dinner
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import run_game, start_game
@@ -633,3 +634,32 @@ def test_property_an_inspection_never_learns_what_happened_after_it(
     assert view.custody is not None
     assert all(link.ledger_seq < looked for link in view.custody)
     assert replay_inspections(world.ledger) == world.inspected
+
+
+# -------------------------------------------- a manipulation works only if taken in
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(seed=st.integers(min_value=0, max_value=5_000))
+def test_property_a_successful_manipulation_reached_its_target_first(
+    seed: int,
+) -> None:
+    """Every attempt judged a success put its words in front of its target
+    before the target did what it wanted: the target holds a record carrying
+    those words, written no later than the act that counted."""
+    game = start_game(CASTLE, CAST.first(10), seed=seed)
+    bot = HeuristicBot(seed=seed)
+    played = run_game(game, {pid: bot for pid in game.world.seats}, models=MODELS)
+    ledger = played.game.world.ledger
+    for outcome in outcomes(played.game):
+        attempt = ledger[outcome.seq - 1]
+        if not outcome.success or attempt.quote is None:
+            continue
+        held = [
+            entry.seq
+            for entry in ledger
+            if (record := entry.record_for(outcome.target)) is not None
+            and record.quote is not None
+            and attempt.quote in record.quote
+        ]
+        assert held, (seed, outcome)
