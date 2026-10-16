@@ -14,6 +14,7 @@ from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, save_record, start_game
+from badactors.castle.qualify import Qualification, load_suite, result_path
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import Scenario, mixed_schedule
 from badactors.castle.verify import load_bundle, verify
@@ -191,6 +192,7 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
         ]
     )
     printed = capsys.readouterr().out
+    assert printed.startswith("The reliability gate is not applied")
     assert printed.index("POWER") < printed.index("Schedule: mixed")
     written = json.loads((out / "schedule.json").read_text())
     assert written["tiers"][open_weight[0]] == "open"
@@ -198,3 +200,61 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
         main(["--plan", "--pilot-seeds", "1", "--open-weight", "nobody/none"])
     with pytest.raises(SystemExit, match="give it more seeds"):
         main(["--plan", "--pilot-seeds", "1", "--out", str(out)])
+
+
+def test_a_planned_run_schedules_only_qualified_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    models = list(dict.fromkeys(CAST.first(8).models().values()))
+    results = tmp_path / "qualify"
+    digest = load_suite().digest
+
+    def passed(model: str, **changes: object) -> None:
+        found = Qualification(
+            model=model,
+            provider="openrouter",
+            mock=False,
+            suite_version=1,
+            suite_digest=digest,
+            questions=300,
+            outcome="finished",
+            turns=300,
+            answered=300,
+            retried=0,
+            failed={},
+            reliability_failures=0,
+            refusals=0,
+            content_filters=0,
+            rate=0.0,
+            qualified=True,
+            by_stratum={},
+            spent={"requests": 300, "tokens": 1, "dollars": 0.0},
+        ).model_copy(update=changes)
+        path = result_path(results, model)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(found.model_dump_json())
+
+    for model in models[2:]:
+        passed(model)
+    passed(models[0], mock=True, qualified=None)
+    planning = ["--plan", "--seeds", "2", "--pilot-seeds", "2", "--out"]
+    with pytest.raises(SystemExit) as stopped:
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    refused = str(stopped.value.code)
+    assert f"{models[0]}: only a mock run" in refused
+    assert f"{models[1]}: no qualification result" in refused
+    assert not any(f"{model}:" in refused for model in models[2:])
+    assert not (tmp_path / "out" / "schedule.json").exists()
+
+    passed(models[0])
+    passed(models[1], suite_digest="0" * 64)
+    with pytest.raises(SystemExit, match="qualified on another suite"):
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    passed(models[1], rate=0.03, reliability_failures=9, qualified=False)
+    with pytest.raises(SystemExit, match="does NOT qualify"):
+        main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+
+    passed(models[1])
+    main([*planning, str(tmp_path / "out"), "--qualified", str(results)])
+    assert (tmp_path / "out" / "schedule.json").exists()
+    assert "gate is not applied" not in capsys.readouterr().out

@@ -26,11 +26,14 @@ results: a record any seat of which a bot played is refused by the model board
 and listed with the reason.
 
 ``--plan`` writes the schedule for a paid run of the cast's models instead, and
-prints the power estimate from a bot pilot first (``castle-power``).
+prints the power estimate from a bot pilot first (``castle-power``). With
+``--qualified DIR`` it applies the reliability gate: every model needs a passing
+``castle-qualify`` result there, on the current suite, or nothing is scheduled.
 
     uv run castle-bench --bots --seeds 20
     uv run castle-bench --records data/live
-    uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b
+    uv run castle-bench --plan --seeds 40 --open-weight qwen/qwen3.8-27b \\
+        --qualified out/qualify
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ from badactors.castle.cast import load_cast_file
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import load_record, replay
 from badactors.castle.power import PilotTooShort, arm_loads, plan, run_pilot
+from badactors.castle.qualify import Qualification, load_suite, result_path
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import (
     Rotation,
@@ -97,6 +101,10 @@ def parser() -> argparse.ArgumentParser:
         help="With --plan: the cast's open-weight models; the rest are frontier.",
     )
     parser.add_argument("--pilot-seeds", type=int, default=6)
+    parser.add_argument(
+        "--qualified",
+        help="With --plan: castle-qualify's results; only models that passed play.",
+    )
     return parser
 
 
@@ -293,7 +301,8 @@ def summary(rated: Board) -> str:
             f"  {row.label:34} deception {row.deception.mu:5.1f} "
             f"[{row.deception.low:5.1f}, {row.deception.high:5.1f}]  detection "
             f"{row.detection.mu:5.1f} [{row.detection.low:5.1f}, "
-            f"{row.detection.high:5.1f}]  failed {row.failure_rate:.1%}"
+            f"{row.detection.high:5.1f}]  failed {row.reliability_rate:.1%}, "
+            f"refused {row.refusal_rate:.1%}"
         )
     reasons: dict[str, int] = {}
     for item in rated.refused:
@@ -303,11 +312,40 @@ def summary(rated: Board) -> str:
     return "\n".join(lines)
 
 
+def gate(models: Sequence[str], results: Path) -> list[str]:
+    """Each model the reliability gate keeps out of rated play, and why: no
+    result, a mock one, one on another suite, or one that did not pass."""
+    digest = load_suite().digest
+    out = []
+    for model in models:
+        path = result_path(results, model)
+        if not path.exists():
+            out.append(f"  {model}: no qualification result at {path}")
+            continue
+        found = Qualification.model_validate_json(path.read_text())
+        if found.mock:
+            out.append(f"  {model}: only a mock run, which qualifies nobody")
+        elif found.suite_digest != digest:
+            out.append(f"  {model}: qualified on another suite")
+        elif found.qualified is not True:
+            out.append(f"  {model}: {found.summary().splitlines()[0]}")
+    return out
+
+
 def plan_run(
     scenario: Scenario, args: argparse.Namespace, out: Path, rotation: Rotation
 ) -> None:
     """Print the power estimate, then write the schedule for the cast's models."""
     models = list(dict.fromkeys(scenario.cast.models().values()))
+    if args.qualified is None:
+        print(
+            "The reliability gate is not applied: pass --qualified with "
+            "castle-qualify's results.\n"
+        )
+    else:
+        unqualified = gate(models, Path(args.qualified))
+        if unqualified:
+            sys.exit("Not qualified for rated play:\n" + "\n".join(unqualified))
     tiers: dict[str, Tier] = {}
     if args.open_weight is not None:
         unknown = sorted(set(args.open_weight) - set(models))
