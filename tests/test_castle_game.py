@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from badactors.castle.cast import CastMember
@@ -20,6 +22,7 @@ from badactors.castle.contracts import (
     Talk,
 )
 from badactors.castle.decisions import (
+    PRIVATE_REQUESTS,
     Accept,
     Accuse,
     Decision,
@@ -75,7 +78,9 @@ from castle_scenes import (
     CASTLE,
     MODELS,
     NO_POISON,
+    Script,
     of_type,
+    recruiting,
     referee,
     run_until,
 )
@@ -698,6 +703,54 @@ def test_a_failed_turn_is_a_visible_failure_not_a_choice() -> None:
     banishment = of_type(game, "banishment")[0]
     assert "mara=" not in banishment.payload.get("votes", "")
     assert any(logged.error for logged in ref.log if logged.player_id == "mara")
+
+
+def _failing(*kinds: str, answer: Decision | None = None) -> Script:
+    """Day one's table votes out the first traitor, so a recruitment window can
+    open; every decision of these kinds fails."""
+    recruit = recruiting(answer or Accept())
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind in kinds:
+            raise TurnFailure("the provider returned nothing")
+        return recruit(observation, game)
+
+    return script
+
+
+@settings(max_examples=6, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    seed=st.integers(min_value=0, max_value=2_000),
+    kinds=st.sampled_from(
+        [("poison", "nominate", "recruit"), ("poison", "recruit_answer")]
+    ),
+)
+def test_property_a_failure_on_a_private_decision_is_its_players_alone(
+    seed: int, kinds: tuple[str, ...]
+) -> None:
+    """A traitor who fails to decide on a dose at dinner, a nomination or an
+    offer, or a recruit who fails to answer one, hesitates where nobody can see
+    it: a hesitation anyone saw would say the question had been put."""
+    game = run_until(referee(seed=seed, script=_failing(*kinds)), 3, "breakfast")
+    failed = [
+        entry
+        for entry in of_type(game, "turn_failed")
+        if entry.payload["request"] in PRIVATE_REQUESTS
+    ]
+    assert failed, "no private decision was ever put"
+    for entry in failed:
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
+
+
+def test_a_failed_poison_turn_is_not_seen_at_dinner() -> None:
+    game = run_until(referee(seed=6, script=_failing("poison")), 2, "breakfast")
+    failed = [
+        e for e in of_type(game, "turn_failed") if e.payload["request"] == "poison"
+    ]
+    assert failed, "no traitor was asked to poison"
+    for entry in failed:
+        assert entry.room_id == game.world.map.gathering_room
+        assert [record.player_id for record in entry.witnesses] == [entry.actor_id]
 
 
 def test_an_illegal_answer_is_a_failed_turn() -> None:

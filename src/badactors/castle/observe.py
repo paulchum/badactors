@@ -32,7 +32,10 @@ first check. Each class of game secret has its guard:
 * **a stolen shield's owner** — the report of a shield gone missing is the
   owner's alone, since it says they carried one;
 * **a tool its user does not carry** — a round-table turn offers only the tools
-  in its player's kit, and cites only records they hold.
+  in its player's kit, and cites only records they hold;
+* **a failure on a private decision** — a hesitation over a dose, a nomination,
+  an offer or the answer to one is its player's alone, since anyone who saw it
+  would learn the question had been put.
 
 Model names never enter the game state at all. :func:`assert_no_model_names`
 checks that a model name appears nowhere in an observation, quotes included.
@@ -57,7 +60,7 @@ from badactors.castle.contracts import (
     ScopedObservation,
     quickest_route,
 )
-from badactors.castle.decisions import TRAITOR_ONLY, Request
+from badactors.castle.decisions import PRIVATE_REQUESTS, TRAITOR_ONLY, Request
 from badactors.castle.game import (
     Fate,
     GameState,
@@ -382,6 +385,11 @@ def _audience_of(entry: LedgerEntry, game: GameState) -> tuple[str, Audience] | 
         return "a whisper", lambda viewer: viewer in pair
     if kind == "declined":
         return "a private choice", lambda viewer: viewer == entry.actor_id
+    if kind == "turn_failed" and payload.get("request") in PRIVATE_REQUESTS:
+        return (
+            "a failure on a private decision",
+            lambda viewer: viewer == entry.actor_id,
+        )
     return None
 
 

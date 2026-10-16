@@ -54,6 +54,7 @@ from badactors.castle.observe import (
     observe_game,
 )
 from badactors.castle.perceive import Perception, awake_in
+from badactors.castle.play import TurnFailure
 from badactors.castle.scope import LeakageError
 from badactors.castle.world import phase_complete, tick
 from castle_scenes import (
@@ -65,6 +66,7 @@ from castle_scenes import (
     recruiting,
     referee,
     rewrite_record,
+    run_until,
 )
 
 PLAN = Request(kind="plan", prompt="Plan.")
@@ -88,6 +90,39 @@ def _leaked(game: GameState, viewer: str, entry: LedgerEntry) -> GameObservation
 
 def _alive(world: WorldState) -> list[str]:
     return [pid for pid in world.seats if world.players[pid].alive]
+
+
+# ---------------------------------------------- a failure on a private decision
+
+
+def test_planted_leak_a_failed_poison_turn_seen_at_dinner() -> None:
+    def flaky(observation: GameObservation, game: GameState) -> Decision | None:
+        if observation.request.kind == "poison":
+            raise TurnFailure("the provider returned nothing")
+        return None
+
+    ref = referee(seed=6, script=flaky)
+    game = run_until(ref, 1, "night")
+    failed = next(
+        entry
+        for entry in of_type(game, "turn_failed")
+        if entry.payload["request"] == "poison"
+    )
+    faithful = next(
+        pid
+        for pid in game.seating
+        if game.roles[pid] == "faithful" and pid in _alive(game.world)
+    )
+    planted = plant_record(
+        game,
+        failed,
+        faithful,
+        sense="saw",
+        text="Someone hesitated and did nothing.",
+        recorded_actor=None,
+    )
+    with pytest.raises(LeakageError, match="a failure on a private decision"):
+        _check(_leaked(game, faithful, planted), game)
 
 
 # ----------------------------------------------------- another player's role

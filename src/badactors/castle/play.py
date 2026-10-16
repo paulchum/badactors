@@ -35,6 +35,7 @@ from badactors.castle.contracts import (
     WorldState,
 )
 from badactors.castle.decisions import (
+    PRIVATE_REQUESTS,
     Decision,
     IllegalDecision,
     PlanChoice,
@@ -273,18 +274,22 @@ def plan_request(game: GameState) -> Request:
 
 def turn_failed(game: GameState, player_id: str, request: Request, error: str) -> int:
     """The character hesitates and does nothing, and everyone present sees a
-    failure, not a choice."""
+    failure, not a choice. A failure on a decision nobody else knows was put —
+    a traitor's dose, nomination or offer, or the answer to an offer — is
+    recorded for its player alone, or the hesitation would give the question
+    away."""
     world = game.world
     player = world.players[player_id]
     room_id = player.room_id
     text = f"{name(game, player_id)} failed to decide ({request.kind}) and did nothing."
     payload = {"request": request.kind, "error": error}
-    if room_id is None:
+    if room_id is None or request.kind in PRIVATE_REQUESTS:
         return append(
             world,
             type="turn_failed",
             text=text,
             actor_id=player_id,
+            room_id=room_id,
             payload=payload,
             witnesses=[
                 WitnessRecord(
@@ -294,6 +299,7 @@ def turn_failed(game: GameState, player_id: str, request: Request, error: str) -
                     channel="direct",
                     text="I failed to decide, and did nothing.",
                     recorded_actor=player_id,
+                    from_room=room_id,
                 )
             ],
         ).seq

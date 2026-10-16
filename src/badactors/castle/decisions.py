@@ -42,6 +42,10 @@ RequestKind = Literal[
 TRAITOR_ONLY: frozenset[str] = frozenset({"poison", "recruit", "nominate"})
 """Requests whose very existence, and whose options, only a traitor may see."""
 
+PRIVATE_REQUESTS: frozenset[str] = TRAITOR_ONLY | {"recruit_answer"}
+"""Requests nobody else knows were put. A failure to answer one is its player's
+alone: anyone who saw them hesitate would learn the question had been asked."""
+
 
 class Request(Contract):
     kind: RequestKind
@@ -275,6 +279,7 @@ def check_decision(request: Request, decision: Decision) -> None:
 
 __all__ = [
     "ANSWERS",
+    "PRIVATE_REQUESTS",
     "TABLE_TOOLS",
     "TRAITOR_ONLY",
     "Accept",
