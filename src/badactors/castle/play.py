@@ -145,6 +145,16 @@ FailureReason = Literal[
 (content_filter), the model declined in words (refusal), or what came back was
 empty, not JSON (unparseable), or not a legal answer (invalid)."""
 
+RELIABILITY_FAILURES: frozenset[FailureReason] = frozenset(
+    {"transport", "empty", "unparseable", "invalid"}
+)
+"""The failures the reliability gate counts. A refusal and a content filter are
+results, not breakage (SPEC §6), and are counted apart."""
+
+RELIABILITY_GATE = 0.02
+"""A model failing more than this share of its qualification turns, counting
+only reliability failures, is excluded from rated play (SPEC §6)."""
+
 
 class TurnFailure(Exception):
     """A player gave no usable answer. Raised by players, never by the rules.
@@ -848,6 +858,8 @@ def load_record(path: str | Path) -> GameRecord:
 
 
 __all__ = [
+    "RELIABILITY_FAILURES",
+    "RELIABILITY_GATE",
     "UNKNOWN_AGENT",
     "UNRATED_ARMS",
     "ArmKind",

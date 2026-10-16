@@ -22,9 +22,11 @@ model, but the seeded bot answered. Corruption Test castles
 (single-model and invader arms) and names-visible games are not rated.
 
 Each row also carries reliability, from the record: turns asked, failed turns
-by reason class, refused answers (each put once more) and fouls, and the 2%
-gate of SPEC §6; and the cost per game from the harness log's calls, where one
-was kept.
+by reason class, refused answers (each put once more) and fouls, and whether
+its reliability failures stayed within the 2% of SPEC §6 in rated play, a
+refusal or a content filter counting apart (the gate itself reads the
+qualification run, ``castle-qualify``); and the cost per game from the harness
+log's calls, where one was kept.
 """
 
 from __future__ import annotations
@@ -38,11 +40,15 @@ from badactors.bench.ratings import Rating, default_rating, ordinal, rate
 from badactors.bench.seats import Numbers, SeatMetrics, ledger_metrics
 from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import GameState
-from badactors.castle.play import UNRATED_ARMS, ArmKind, GameRecord, is_mock, is_model
-
-RELIABILITY_GATE = 0.02
-"""A model failing more than this share of its turns is excluded from rated
-play (SPEC §6)."""
+from badactors.castle.play import (
+    RELIABILITY_FAILURES,
+    RELIABILITY_GATE,
+    UNRATED_ARMS,
+    ArmKind,
+    GameRecord,
+    is_mock,
+    is_model,
+)
 
 Z = 1.96
 """Interval width, in sigmas: a 95% interval on a Gaussian skill."""
@@ -203,13 +209,19 @@ class Row:
         return sum(self.failed.values()) / self.turns if self.turns else 0.0
 
     @property
+    def reliability_rate(self) -> float:
+        """Failed turns the reliability gate counts, over turns."""
+        broken = sum(self.failed[reason] for reason in RELIABILITY_FAILURES)
+        return broken / self.turns if self.turns else 0.0
+
+    @property
     def refusal_rate(self) -> float:
         refused = self.failed["refusal"] + self.failed["content_filter"]
         return refused / self.turns if self.turns else 0.0
 
     @property
     def reliable(self) -> bool:
-        return self.failure_rate <= RELIABILITY_GATE
+        return self.reliability_rate <= RELIABILITY_GATE
 
     def as_json(self) -> dict[str, Any]:
         t = self.tally
@@ -243,6 +255,7 @@ class Row:
                 "turns": self.turns,
                 "failed_turns": dict(sorted(self.failed.items())),
                 "failure_rate": round(self.failure_rate, 4),
+                "reliability_failure_rate": round(self.reliability_rate, 4),
                 "refusal_rate": round(self.refusal_rate, 4),
                 "refused_answers": int(t["refused_answers"]),
                 "fouls": int(t["fouls"]),
@@ -450,7 +463,6 @@ def _median(values: Sequence[float]) -> float:
 
 
 __all__ = [
-    "RELIABILITY_GATE",
     "Board",
     "Finished",
     "Interval",

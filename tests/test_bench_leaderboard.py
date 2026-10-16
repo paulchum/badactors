@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from badactors.bench.dryrun import ReferenceBot, play_schedule, play_seating, profiles
 from badactors.bench.leaderboard import (
     ARM_REFUSALS,
-    RELIABILITY_GATE,
     Finished,
     MixedBoards,
     board,
@@ -26,6 +25,7 @@ from badactors.castle.game import GameState, was_traitor_at
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import (
+    RELIABILITY_GATE,
     UNRATED_ARMS,
     GameRecord,
     TurnFailure,
@@ -67,12 +67,16 @@ class Posing:
 
 
 def model_game(
-    seating: Seating, *, fail: Mapping[str, int] | None = None, rated: bool = True
+    seating: Seating,
+    *,
+    fail: Mapping[str, int] | None = None,
+    reason: str = "refusal",
+    rated: bool = True,
 ) -> Finished:
     cast = seating.cast(SCENARIO.cast)
     game = start_game(CASTLE, cast, seed=seating.seed, config=SCENARIO.config)
     players = {
-        seat: Posing(model, seating.seed, (fail or {}).get(seat, 0))
+        seat: Posing(model, seating.seed, (fail or {}).get(seat, 0), reason)
         for seat, model in seating.seats.items()
     }
     played = run_game(
@@ -263,8 +267,16 @@ def test_failed_turns_fill_the_reliability_columns_and_the_gate(
     assert row.failed == {"refusal": 6}
     shown = row.as_json()["reliability"]
     assert shown["refusal_rate"] == pytest.approx(6 / row.turns, abs=1e-4)
-    assert (shown["gate"] == "pass") == (6 / row.turns <= RELIABILITY_GATE)
+    assert shown["reliability_failure_rate"] == 0
+    assert shown["gate"] == "pass"  # A refusal is a result, not breakage.
     assert rated.rows[MODELS[0]].failed == {}
+
+    broken = model_game(seating, fail={seat: 6}, reason="unparseable")
+    row = board([broken]).rows[MODELS[1]]
+    assert row.failed == {"unparseable": 6} and row.refusal_rate == 0
+    shown = row.as_json()["reliability"]
+    assert shown["reliability_failure_rate"] == pytest.approx(6 / row.turns, abs=1e-4)
+    assert (shown["gate"] == "pass") == (6 / row.turns <= RELIABILITY_GATE)
 
 
 def test_cost_per_game_comes_from_the_harness_calls(
