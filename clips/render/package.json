@@ -1,0 +1,22 @@
+{
+  "name": "badactors-clips",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/Root.tsx",
+    "render": "remotion render src/Root.tsx ClaimVsTruth out/clip.mp4",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.532",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.532"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "typescript": "5.9.3"
+  }
+}

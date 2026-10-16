@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+castle-clips = "badactors.castle.clips:main"
 castle-game = "badactors.castle.cli:main"
 castle-live = "badactors.castle.live:main"
 castle-sweep = "badactors.castle.sweep:main"
