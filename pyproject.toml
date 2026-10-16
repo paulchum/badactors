@@ -18,9 +18,12 @@ dependencies = [
 ]
 
 [project.scripts]
+castle-bench = "badactors.bench.cli:main"
 castle-game = "badactors.castle.cli:main"
 castle-live = "badactors.castle.live:main"
+castle-power = "badactors.castle.power:main"
 castle-sweep = "badactors.castle.sweep:main"
+castle-verify = "badactors.castle.verify:main"
 
 [dependency-groups]
 dev = [

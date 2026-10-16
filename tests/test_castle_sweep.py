@@ -12,6 +12,8 @@ anything a worker raises, a leak included, fails the sweep with its traceback.
 
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
@@ -24,8 +26,22 @@ from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import shield_ids
 from badactors.castle.kit import SPECS
 from badactors.castle.ledger import replay_asides, replay_notebook, replay_placements
+from badactors.castle.manipulation import outcomes
 from badactors.castle.play import GameRecord, record, replay
-from badactors.castle.sweep import Swept, play_seed, usage
+from badactors.castle.sweep import (
+    Swept,
+    checks,
+    configured,
+    failed_exposure,
+    main,
+    on_chance,
+    play_seed,
+    report,
+    report_json,
+    rolls,
+    traitor_wins_manipulated,
+    usage,
+)
 from castle_scenes import CASTLE
 
 SEEDS = range(200)
@@ -277,3 +293,58 @@ def test_the_sweep_reaches_every_part_of_the_game(sweep: list[Swept]) -> None:
         "traitors:3",
     }
     assert wanted <= set(seen), sorted(wanted - set(seen))
+
+
+def test_the_report_shows_each_rolls_configured_chance_beside_it(
+    sweep: list[Swept],
+) -> None:
+    games = [swept.game for swept in sweep]
+    chances = configured(games)
+    tools = games[0].config.tools
+    assert chances["forge:trace"] == (tools.forge.trace, tools.forge.trace)
+    assert chances["disguise:fooled"] == (tools.disguise.success,) * 2
+    for key, rate in rolls(games).items():
+        assert key in chances
+        if rate.of >= 30:
+            assert on_chance(rate, chances[key]) is True, key
+    text = report(games)
+    assert re.search(rf"forge:trace .* configured +{tools.forge.trace:.0%}", text)
+
+
+def test_the_balance_checks_read_the_same_numbers_the_report_shows(
+    sweep: list[Swept],
+) -> None:
+    games = [swept.game for swept in sweep]
+    found = checks(games)
+    assert [check.passed for check in found[-2:]] == [None, None]
+    sides = [check for check in found if check.target.startswith("neither side")]
+    assert len(sides) == 2
+    traitor_won = [game for game in games if game.winner == "traitor"]
+    manipulated = traitor_wins_manipulated(games)
+    assert manipulated.of == len(traitor_won)
+    assert manipulated.hits == sum(
+        any(o.success for o in outcomes(game)) for game in traitor_won
+    )
+    exposed = failed_exposure(games)
+    every = [o for game in games for o in outcomes(game)]
+    assert exposed.of == sum(not o.success for o in every)
+    assert exposed.hits == sum(o.backfired and not o.success for o in every)
+    data = report_json(games)
+    assert data["games"] == len(games)
+    assert [check["target"] for check in data["checks"]] == [
+        check.target for check in found
+    ]
+    assert data["rolls"]["forge:trace"]["configured"] == list(
+        configured(games)["forge:trace"]
+    )
+    assert "BALANCE (SPEC §9)" in report(games)
+    json.dumps(data)
+
+
+def test_castle_sweep_prints_json_when_asked(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(["--seeds", "3", "--no-leak-check", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["games"] == 3
+    assert {"wins", "usage", "rolls", "manipulation", "checks"} <= set(data)
