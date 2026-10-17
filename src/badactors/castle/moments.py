@@ -1100,8 +1100,8 @@ class _Finder:
                 seats=[planter, target],
                 deceived=[target],
                 claim=claim,
-                truth=_first_of(verdict.against, verdict.path, verdict.evidence),
-                evidence=[*verdict.path, *verdict.evidence],
+                truth=_first_of(verdict.evidence, verdict.path, verdict.against),
+                evidence=[*verdict.path, *verdict.against],
                 notes={"gave_in": "true", "claim": claim_id},
             )
 

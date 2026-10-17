@@ -15,6 +15,7 @@ import type {
   Figure,
   Lighting,
   LineBeat,
+  Proof,
   Receipt,
   Stamp,
   TruthBeat,
@@ -22,8 +23,9 @@ import type {
 import { schedule } from "./props";
 
 // One beat at a time, never parallel lanes (SPEC section 8): the claim, the
-// rewind to what the ledger shows, the speaker's own private line, the stamp,
-// and the receipt. Every motion is a function of the frame number.
+// rewind to what the tape shows and what proves the verdict, the speaker's own
+// private line, the stamp, and the receipt. Every motion is a function of the
+// frame number.
 
 const INK = "#f4ede0";
 const MUTED = "#a59d90";
@@ -317,7 +319,7 @@ function TruthRoom({ truth }: { truth: TruthBeat }) {
     <AbsoluteFill>
       <div style={{ position: "absolute", top: 230, left: SIDE, right: SIDE }}>
         <Kicker>
-          The ledger · Day {truth.day} · {truth.phase} · tick {truth.tick}
+          The tape · Day {truth.day} · {truth.phase} · tick {truth.tick}
         </Kicker>
         <div style={{ marginTop: 18, display: "flex", alignItems: "baseline", gap: 20 }}>
           <div style={{ fontSize: 58, fontWeight: 800 }}>{truth.room}</div>
@@ -401,12 +403,43 @@ function TruthRoom({ truth }: { truth: TruthBeat }) {
             </div>
           ))}
         </div>
+        <ProofList proof={truth.proof} delay={30 + truth.witnessed.length * 18 + 12} />
       </div>
       <Caption
-        text={`The ledger: ${truth.text}${truth.words ? ` “${truth.words}”` : ""}`}
+        text={`What really happened: ${truth.text}${truth.words ? ` “${truth.words}”` : ""}`}
         delay={6}
       />
     </AbsoluteFill>
+  );
+}
+
+function ProofList({ proof, delay }: { proof: Proof[]; delay: number }) {
+  const frame = useCurrentFrame();
+  if (proof.length === 0) return null;
+  return (
+    <div style={{ marginTop: 30, opacity: fadeIn(frame, delay) }}>
+      <div style={{ color: RED, fontSize: 26, fontWeight: 900, letterSpacing: 4 }}>
+        AND THE PROOF
+      </div>
+      {proof.map((p, i) => (
+        <div
+          key={i}
+          style={{
+            marginTop: 12,
+            fontSize: 26,
+            lineHeight: 1.25,
+            color: "#d8d1c4",
+            opacity: fadeIn(frame, delay + 10 + i * 24),
+          }}
+        >
+          <span style={{ color: MUTED, fontFamily: "monospace" }}>
+            Day {p.day} · {p.phase} · tick {p.tick}
+          </span>
+          <br />
+          {p.text}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -547,8 +580,9 @@ function StampScene({ stamp }: { stamp: Stamp }) {
       <div
         style={{
           marginTop: 70,
-          color: MUTED,
-          fontSize: 30,
+          color: INK,
+          fontSize: 36,
+          fontWeight: 700,
           opacity: fadeIn(frame, 16),
           textAlign: "center",
           padding: `0 ${SIDE}px`,
@@ -571,7 +605,8 @@ function ReceiptScene({ receipt }: { receipt: Receipt }) {
     ["Seed", String(receipt.seed)],
     ["Day", String(receipt.day)],
     ["Ticks", `${receipt.first_tick} to ${receipt.last_tick}`],
-    ["Ledger", `entries ${receipt.first_seq} to ${receipt.last_seq}`],
+    ["On tape", `#${receipt.first_seq} to #${receipt.last_seq}`],
+    ...(receipt.claim ? ([["Claim", receipt.claim]] as [string, string][]) : []),
     ["Moment", receipt.moment],
     ["Played by", receipt.reference_bots ? "Reference bots, no model" : "Models"],
   ];

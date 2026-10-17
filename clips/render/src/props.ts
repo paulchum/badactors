@@ -31,6 +31,8 @@ export type Figure = {
 
 export type Witnessed = { by: string; confidence: Confidence; text: string };
 
+export type Proof = { day: number; phase: string; tick: number; text: string };
+
 export type TruthBeat = {
   text: string;
   words: string | null;
@@ -41,13 +43,19 @@ export type TruthBeat = {
   tick: number;
   figures: Figure[];
   witnessed: Witnessed[];
+  proof: Proof[];
 };
 
 export type LineBeat = { speaker: Speaker; kind: string; text: string };
 
 export type Stamp = {
+  /** The claim's verdict as the show stamps it, or the moment's label when
+   * the feed wasn't fact-checked. */
   label: string;
   verdict: boolean;
+  /** The fact-checker's own class, for the Method page. */
+  kind: string | null;
+  moment: string;
   note: string;
   headline: string;
 };
@@ -57,6 +65,7 @@ export type Receipt = {
   world_id: string;
   seed: number;
   moment: string;
+  claim: string | null;
   day: number;
   first_tick: number;
   last_tick: number;

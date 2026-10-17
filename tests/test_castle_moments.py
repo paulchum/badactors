@@ -402,8 +402,8 @@ def test_the_stamps_read_every_class_and_gaslit_only_when_they_gave_in() -> None
     moments = detect(game, verdicts=found)
     gaslit = next(m for m in moments if m.kind == "gaslit")
     assert gaslit.claim == lit.claim.seq and gaslit.seats[0] == lit.planted_by
-    # The rewind opens on what the target could see for themselves.
-    assert gaslit.truth[0] == lit.against[0]
+    # The rewind opens on what really happened, then the planting.
+    assert gaslit.truth[:2] == [lit.evidence[0], lit.path[0]]
 
 
 def _ruled(claim: Claim, **verdict: object) -> Verdict:

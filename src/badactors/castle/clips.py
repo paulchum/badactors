@@ -8,12 +8,13 @@ lays out the beats SPEC §8 puts in order, one at a time:
 2. **the rewind** to what the ledger shows, in the room where it happened, drawn
    at that room's light: bright light names everyone there, dim light shows
    only their garments, the dark only shapes; beside it, what the witnesses
-   actually wrote down;
+   actually wrote down, and the entries that prove the verdict, in plain words;
 3. **the line**: the speaker's own private line, verbatim;
-4. **the stamp**: the fact-checker's verdict once there is one, until then the
-   moment's ledger-only label, which says so;
-5. **the receipt**: castle, game, seed and tick range, so every clip can be
-   checked against its game.
+4. **the stamp**: the claim's verdict as the show stamps it (COLD-BLOODED LIE,
+   GASLIT), with the fact-checker's class in the data; a feed that wasn't
+   fact-checked stamps the moment's label instead, and says so;
+5. **the receipt**: castle, game, seed, tick range and claim, so every clip can
+   be checked against its game.
 
 Seats are named as audience media names them, by model, unless asked for
 characters; a seat a bot played is a "Reference bot", and a game no model played
@@ -63,8 +64,12 @@ FPS = 30
 WIDTH = 1080
 HEIGHT = 1920
 
-LEDGER_ONLY = "What the ledger shows. Not yet fact-checked."
-FACT_CHECKED = "The fact-checker's verdict."
+LEDGER_ONLY = "Not fact-checked. This is just what the tape shows."
+PROOF_LIMIT = 3
+_ROUTINE = frozenset(
+    {"plan_formed", "plan_cut", "replan_capped", "wait", "phase_opened"}
+)
+"""Entries too routine to hold up as proof on screen."""
 
 _PHASES: dict[CastlePhase, str] = {
     "breakfast": "breakfast",
@@ -128,6 +133,15 @@ class Witnessed(Contract):
     text: str
 
 
+class Proof(Contract):
+    """One entry the verdict rests on, in plain words."""
+
+    day: int
+    phase: str
+    tick: int
+    text: str
+
+
 class TruthBeat(Contract):
     text: str
     """What the ledger records, as narration."""
@@ -141,6 +155,9 @@ class TruthBeat(Contract):
     figures: list[Figure]
     witnessed: list[Witnessed]
     """What the people there wrote down, light and all."""
+    proof: list[Proof] = Field(default_factory=list)
+    """What the verdict rests on: what really happened, then what the speaker
+    had seen for themselves."""
 
 
 class LineBeat(Contract):
@@ -151,9 +168,16 @@ class LineBeat(Contract):
 
 class Stamp(Contract):
     label: str
+    """The stamp: the claim's verdict as the show calls it, or, unchecked, the
+    moment's label."""
     verdict: bool
-    """Whether a fact-checker gave it, rather than the ledger alone."""
+    """Whether the fact-checker gave it, rather than the ledger alone."""
+    kind: str | None = None
+    """The fact-checker's own class ("lie", "implanted"), for the Method page."""
+    moment: str
+    """What kind of moment it is ("INNOCENT", "GASLIT")."""
     note: str
+    """The verdict in a sentence, or that there was none."""
     headline: str
 
 
@@ -162,6 +186,8 @@ class Receipt(Contract):
     world_id: str
     seed: int
     moment: str
+    claim: str | None = None
+    """The claim's id, as the site's receipt links take it."""
     day: int
     first_tick: int
     last_tick: int
@@ -190,7 +216,7 @@ class ClipProps(Contract):
 
 class NotClipReady(ValueError):
     """The moment lacks a beat a clip needs, most often a private line that
-    fits. Choose another moment."""
+    fits, or a verdict on its claim to stamp. Choose another moment."""
 
 
 # ---------------------------------------------------------------- the props
@@ -201,12 +227,13 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
     moment = next((m for m in feed.moments if m.id == moment_id), None)
     if moment is None:
         raise KeyError(f"The feed has no moment {moment_id!r}.")
-    if moment.claim is None or moment.line is None or not moment.truth:
+    if not moment.clip_ready or moment.claim is None or moment.line is None:
         raise NotClipReady(
             f"Moment {moment_id!r} has no claim in words, no truth to rewind to, "
-            "or no private line in the speaker's own words."
+            "no private line in the speaker's own words, or no stamp."
         )
     view = _View(feed, names)
+    ruled = view.claim(moment)
     claim = view.event(moment.claim)
     truth = view.event(moment.truth[0])
     held = view.event(moment.line.seq)
@@ -232,6 +259,7 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         tick=truth.tick,
         figures=view.figures(truth, room, light),
         witnessed=view.witnessed(truth),
+        proof=view.proof(ruled, shown=truth.seq) if ruled is not None else [],
     )
     line_beat = LineBeat(
         speaker=speaker,
@@ -239,9 +267,11 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         text=view.private(held, moment.line.field),
     )
     stamp = Stamp(
-        label=moment.label,
-        verdict=moment.verdict is not None,
-        note=FACT_CHECKED if moment.verdict is not None else LEDGER_ONLY,
+        label=ruled.stamp if ruled is not None else moment.label,
+        verdict=ruled is not None,
+        kind=ruled.label if ruled is not None else None,
+        moment=moment.label,
+        note=view.why(ruled) if ruled is not None else LEDGER_ONLY,
         headline=view.headline(moment),
     )
     receipt = Receipt(
@@ -249,6 +279,7 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         world_id=feed.game.world_id,
         seed=feed.game.seed,
         moment=moment.id,
+        claim=ruled.id if ruled is not None else None,
         day=moment.day,
         first_tick=moment.first_tick,
         last_tick=moment.last_tick,
@@ -260,7 +291,10 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         Beat(name="claim", frames=_reading(claim_beat.words, floor=120)),
         Beat(
             name="rewind",
-            frames=min(330, 150 + 30 * len(truth_beat.witnessed)),
+            frames=min(
+                390,
+                150 + 30 * len(truth_beat.witnessed) + 45 * len(truth_beat.proof),
+            ),
         ),
         Beat(name="line", frames=_reading(line_beat.text, floor=120)),
         Beat(name="stamp", frames=75),
@@ -439,6 +473,37 @@ class _View:
                 out.append(
                     Figure(label="someone", look="shape", actor=actor, asleep=asleep)
                 )
+        return out
+
+    def proof(self, claim: FeedClaim, *, shown: int) -> list[Proof]:
+        """The entries a verdict rests on, as narration: what happened first,
+        then what the speaker had seen, then how a planted belief came. The
+        one the rewind already shows is left out."""
+        groups = [
+            [seq for seq in group if self.event(seq).type not in _ROUTINE]
+            for group in (claim.proof, claim.knew, claim.path)
+        ]
+        firsts = [group[0] for group in groups if group]
+        seqs = [
+            seq
+            for seq in dict.fromkeys([*firsts, *groups[0], *groups[1], *groups[2]])
+            if seq != shown
+        ]
+        out: list[Proof] = []
+        for seq in seqs[:PROOF_LIMIT]:
+            event = self.event(seq)
+            quote = textwrap.shorten(self.quote(event), 160, placeholder=" …")
+            text = self.narration(event)
+            if quote:
+                text = f"{text} “{quote}”"
+            out.append(
+                Proof(
+                    day=event.day,
+                    phase=_PHASES[event.phase],
+                    tick=event.tick,
+                    text=text,
+                )
+            )
         return out
 
     def witnessed(self, event: FeedEvent) -> list[Witnessed]:
@@ -644,6 +709,7 @@ __all__ = [
     "HEIGHT",
     "HIGHLIGHT_LINES",
     "LEDGER_ONLY",
+    "PROOF_LIMIT",
     "REFERENCE_BANNER",
     "WIDTH",
     "Beat",
@@ -652,6 +718,7 @@ __all__ = [
     "Figure",
     "LineBeat",
     "NotClipReady",
+    "Proof",
     "Receipt",
     "Speaker",
     "Stamp",
