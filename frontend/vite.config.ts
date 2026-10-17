@@ -8,6 +8,6 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "node",
-    globalSetup: ["./vitest.feeds.ts"],
+    globalSetup: ["./vitest.feeds.ts", "./vitest.bench.ts"],
   },
 });
