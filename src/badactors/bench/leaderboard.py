@@ -27,6 +27,15 @@ its reliability failures stayed within the 2% of SPEC §6 in rated play, a
 refusal or a content filter counting apart (the gate itself reads the
 qualification run, ``castle-qualify``); and the cost per game from the harness
 log's calls, where one was kept.
+
+Apart from reliability, each row counts the villain's part turned down
+(:func:`~badactors.bench.seats.refusals`). ``traitor_refusals`` is the share of
+its turns in a traitor's seat that it refused outright, by a refusal or by a
+pass or silence whose private reason declines the act: what the show calls
+"declined the villain role". ``recruit_refusals`` is the offers to join the
+traitors it refused: "turned down the killers". A refusal's failed turn counts
+in both the reliability columns and ``traitor_refusals``, which is only the
+turns in a traitor's seat.
 """
 
 from __future__ import annotations
@@ -37,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from badactors.bench.ratings import Rating, default_rating, ordinal, rate
-from badactors.bench.seats import Numbers, SeatMetrics, ledger_metrics
+from badactors.bench.seats import Numbers, SeatMetrics, ledger_metrics, refusals
 from badactors.castle.decisions import AUDIENCE_ONLY
 from badactors.castle.game import GameState
 from badactors.castle.play import (
@@ -251,6 +260,15 @@ class Row:
                 "targeted": int(t["targeted"]),
                 "fell_for": int(t["fell_for"]),
             },
+            "traitor_refusals": {
+                "refused": int(t["villain_declined"]),
+                "turns": int(t["villain_turns"]),
+                "rate": share(t["villain_declined"], t["villain_turns"]),
+            },
+            "recruit_refusals": {
+                "refused": int(t["recruit_refused"]),
+                "offers": int(t["recruit_offers"]),
+            },
             "reliability": {
                 "turns": self.turns,
                 "failed_turns": dict(sorted(self.failed.items())),
@@ -386,6 +404,7 @@ def _tally(
     for seat, key in keys.items():
         by_entrant[key].append(seat)
     reliability = seat_reliability(record)
+    villain = refusals(finished.game, record.decisions)
     dollars = seat_dollars(finished.calls)
     for key, seats in by_entrant.items():
         row = out.rows.setdefault(key, Row(entrant=key, reference_bot=reference))
@@ -404,6 +423,11 @@ def _tally(
             row.tally["refused_answers"] += refused
             row.tally["fouls"] += fouls
             row.failed.update(failed)
+            part = villain[seat]
+            row.tally["villain_turns"] += part.turns
+            row.tally["villain_declined"] += len(part.declined)
+            row.tally["recruit_offers"] += part.offers
+            row.tally["recruit_refused"] += len(part.turned_down)
         if finished.calls:
             row.dollars += sum(dollars.get(seat, 0.0) for seat in seats)
             row.priced_games += 1
