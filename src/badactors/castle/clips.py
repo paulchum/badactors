@@ -673,7 +673,7 @@ def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
     game = feed.game
     event = view.event(claim.seq)
     quote = view.quote(event) or claim.said
-    lines = textwrap.wrap(f"“{quote}”", width=46, max_lines=4, placeholder=" …”")
+    lines = textwrap.wrap(f"“{quote}”", width=46, max_lines=3, placeholder=" …”")
     why = textwrap.wrap(view.why(claim), width=70, max_lines=2, placeholder=" …")
     colour = _TONES[claim.stamp]
     size = 60 if len(claim.stamp) <= 10 else 44
@@ -704,19 +704,19 @@ def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
             f'font-family="Georgia, Times New Roman, serif">{escape(line)}</text>'
         )
     out.append(
-        f'<g transform="translate(360 440) rotate(-5)"><rect x="-300" y="-52" '
-        f'width="600" height="104" rx="14" fill="none" stroke="{colour}" '
+        f'<g transform="translate(360 430) rotate(-4)"><rect x="-300" y="-48" '
+        f'width="600" height="96" rx="14" fill="none" stroke="{colour}" '
         f'stroke-width="10"/><text x="0" y="{size // 3}" text-anchor="middle" '
         f'fill="{colour}" font-size="{size}" font-weight="900" letter-spacing="4">'
         f"{escape(claim.stamp)}</text></g>"
     )
     for index, line in enumerate(why):
         out.append(
-            f'<text x="60" y="{532 + index * 34}" fill="#d8d1c4" font-size="27" '
+            f'<text x="60" y="{548 + index * 32}" fill="#d8d1c4" font-size="27" '
             f'font-weight="700">{escape(line)}</text>'
         )
     out.append(
-        f'<text x="60" y="608" fill="#a59d90" font-size="20" '
+        f'<text x="60" y="614" fill="#a59d90" font-size="20" '
         f'font-family="Menlo, monospace">{escape(receipt)}</text>'
     )
     out.extend(["</g>", "</svg>"])
