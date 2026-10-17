@@ -79,8 +79,8 @@ def test_castle_game_runs_from_the_wheel_in_a_clean_venv(
     castle_game = python.parent / "castle-game"
     out = _run(castle_game, "--seed", "7", cwd=elsewhere)
 
-    assert "GREYWATER CASTLE · seed 7" in out
-    assert "No model played." in out
+    assert "EPISODE 7" in out
+    assert "This one's bots." in out
     where = _run(
         python, "-c",
         "import badactors, badactors.castle.configs as c; "

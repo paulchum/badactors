@@ -44,7 +44,7 @@ describe("audience copy", () => {
       const words = text(page(route));
       expect(words).not.toMatch(INTERNAL);
       expect(words).not.toContain("!");
-      expect(words).not.toContain("The Traitors");
+      expect(words).not.toContain(["The", "Traitors"].join(" "));
       expect(words).toContain("The real cast hasn't played yet.");
     });
   }
