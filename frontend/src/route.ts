@@ -7,11 +7,19 @@ import { useCallback, useEffect, useState } from "react";
 export type Route =
   | { page: "landing" }
   | { page: "viewer"; game: string | null; tick: number | null; moment: string | null }
-  | { page: "leaderboard" };
+  | { page: "leaderboard" }
+  | { page: StandingsPage }
+  | { page: "model"; id: string };
+
+export type StandingsPage = "standings" | "gaslit" | "matrix" | "method";
+const STANDINGS: readonly string[] = ["standings", "gaslit", "matrix", "method"];
 
 export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
   if (params.get("page") === "leaderboard") return { page: "leaderboard" };
+  const page = params.get("page") ?? "";
+  if (STANDINGS.includes(page)) return { page: page as StandingsPage };
+  if (page === "model" && params.get("id")) return { page: "model", id: params.get("id") ?? "" };
   if (params.has("game") || params.get("page") === "games") {
     const tick = Number.parseInt(params.get("tick") ?? "", 10);
     return {
@@ -27,6 +35,8 @@ export function parseRoute(search: string): Route {
 export function routeSearch(route: Route): string {
   if (route.page === "landing") return "";
   if (route.page === "leaderboard") return "?page=leaderboard";
+  if (route.page === "model") return `?${new URLSearchParams({ page: "model", id: route.id }).toString()}`;
+  if (route.page !== "viewer") return `?page=${route.page}`;
   const params = new URLSearchParams();
   params.set("game", route.game ?? "");
   if (route.tick !== null) params.set("tick", String(route.tick));
