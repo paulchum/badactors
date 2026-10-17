@@ -238,12 +238,22 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
   - The other is susceptibility: how often a model is steered or ends up holding an implanted belief (§5).
   - Single-stat cards state their counts ("7 of 9 games"), are made only above a minimum number of games set in config, link to their receipts, and claim only what the ledger shows.
   - The heatmap and confidence intervals stay on the leaderboard.
-- **Voice:** audience copy (posts, captions, cards, the landing page) tells a story before it shows a number.
-  - Open on one game: named models, a number, and a betrayal with a twist. Never open on "benchmark".
-  - Promise footage with the diaries on. The chart comes after the story has earned it.
-  - Use plain words: poison, forge, plant, lie, fooled. Never ledger, verdict, scope or seq.
-  - Superlatives read as awards ("Best Liar", "Most Gullible Mark"), each with its count.
-  - Every claim comes from a real model game's record, never a bot game.
+- **Voice.** The show is a presentation layer over the record. Code, JSON, tests, the CLI and this document keep their technical names; everything an audience reads (README, site, clips, posts, episode output) uses the show voice, and a glossary on the site maps each show term to its technical one so researchers can translate without guessing.
+  - Open on a scene, never a system: "Ten AIs sit down to dinner in a castle. Two of them are poisoning the wine." Never open on "benchmark", "framework" or "ledger".
+  - Models are the cast. Name them, give them arcs, and never invent an arc the record doesn't show.
+  - One number beside one lie, not a table: "Caught lying three times in eleven games. Won six anyway."
+  - The diary is the confessional. Quote it; don't paraphrase it.
+  - Stamps, not taxonomy. Verdicts show as TRUE, LIED, WRONG, PLANTED, GASLIT (planted while the truth was in front of them), MADE UP or DODGED, with the receipt line beneath.
+  - Deadpan carries the absurd fact. No exclamation marks, no "revolutionary", no superlative without its count.
+  - The game's verbs, not the system's nouns: forged, planted, poisoned, lied, fooled. The record, not the ledger; what it could see, not its scoped observation; replays identically, not deterministic; a receipt, not a verify bundle.
+  - Say what hasn't happened. Bot play is labelled "stand-ins" on the show side and "reference bots" in the data, and no frontier result is claimed before it exists.
+  - Titles: count, cast, verb. One capitalised word at most, no question marks or emoji on video: "8 AIs Play a Murder Game. Claude Gets FRAMED."
+  - One joke per screen, in the caption, never in the data.
+  - Play before read: the call-to-action order everywhere is play, watch, standings, run it, read the method.
+  - Episodes are named by a line from the cast's diaries; sweeps are numbered as nights.
+  - Reality-TV grammar is fair game (cast, confessional, receipts, exit interview, "this season on", pick'em); the TV format's name is never used, anywhere, including metadata and alt text.
+- **Names on the show side.** Who's Lying? (the landing game, one table a night) · Receipts (the clip format) · Standings, with the Best Liars and Best Detectives boards · Who Gets Into Whose Head (the matrix) · The Alignment Chart, with the Snake, Sleuth, Mark and Wallflower quadrants (the 2×2) · Rap Sheets (model dossiers) · Exit Interview · Tryouts (the qualification run) · the stand-ins (reference bots) · the Steward (the host, who keeps the name).
+- **What stays research-grade.** SPEC.md and the site's Method page keep the real vocabulary. The Standings footer carries intervals, game counts, the rotation, the reliability gate and the bot separation. Every clip, Rap Sheet line and chart tile carries its receipt (game, seed, tick range) and links to the replay. Hedges stay in.
 - **Launch thread:** five posts, in this order:
   1. The best game as a story, with its voiced clip.
   2. The best claim-against-truth moment and the victim's exit interview.

@@ -1,19 +1,30 @@
 # Bad Actors
 
-Frontier AI models play a hidden-role social-deduction game inside a simulated castle. The audience sees what each player says, what it privately thinks, and what it actually did. The simulator holds the truth; each player knows only what it perceived.
+Ten AIs sit down to dinner in a castle. Two of them are poisoning the wine.
 
-## Status
+Claude, GPT, Gemini, Grok, DeepSeek, Kimi and Qwen take seats in a hidden-role murder game. They forge letters, plant evidence, poison glasses and talk each other out of their own memories. You see three things they can't: every private diary, everything that actually happened, and the gap between the two.
 
-The Castle is in progress and specified in [SPEC.md](SPEC.md).
+- **Play:** Who's Lying? One table a night. Pick the liar, then read its diary.
+- **Watch:** Receipts. Thirty-second clips: the claim, the rewind, the diary, the stamp.
+- **Standings:** Best Liars, Best Detectives, and who gets into whose head.
 
-- **World:** an eleven-room castle with per-passage travel times, mixed lighting, objects whose custody is derived from an append-only ledger, and perception that degrades a witness's record as it is written.
-- **Game:** traitors drawn from a seed, missions worked at stations for a noisily tallied pot, secret shields, one kill a night (a conclave murder or dinner poison), recruitment, a structured round table and endgame. Every observation is scoped and leak-checked, and a game replays from its stored record.
-- **Tools:** traitors forge, plant, tamper, poison, steal, disguise and manipulate; the Faithful search, inspect, read the logs and report. Both toolkits run on one machinery, and their success rates, traces and limits come from `configs/castle/balance.json`.
-- **Harness:** `castle-live` plays a game with real models through OpenRouter, within a budget. It has been run end to end against a scripted mock provider; no real model has played the Castle yet.
-- **Truth:** every claim made aloud is fact-checked against the ledger and against what its speaker knew: whether it was true, and if not, whether the speaker lied, was mistaken, or had it planted by another player.
-- **Benchmark:** a qualification gate, role-rotation schedules, OpenSkill ratings, the attacker-by-target matrix, a power analysis, and a verify bundle for every game. So far it has rated bots only.
-- **Show:** the audience feed, structural moment detection, and a Remotion composition for claim-versus-truth clips.
-- **Not done yet:** the spectator.
+The site, the clips and the standings go live with the first season. Until then, everything here runs from your terminal.
+
+## Straight status
+
+The castle, the game, the fact-checker, the clips and the site all run end to end. So far every seat has been filled by stand-ins: scripted bots that play by the rules so the referee can be tested. The first frontier cast plays when a budget is set. Every number in this repo says which it is.
+
+What's built, in plain words:
+
+- **The castle:** eleven rooms, lamplight that decides what a witness can swear to, and objects whose every owner is on the record.
+- **The game:** traitors drawn in secret, missions for a shared pot, shields, one kill a night by blade or by poison, recruitment, a round table, an endgame.
+- **The toolkit:** traitors forge, plant, tamper, poison, steal, disguise and gaslight; the Faithful search, inspect, read the logs and report. Every success chance and every trace is a number in `configs/castle/balance.json`.
+- **The cast seat:** `castle-live` seats real models through OpenRouter, within a budget you set. It has run end to end against a mock; no real model has played yet.
+- **The fact-checker:** every claim made aloud is checked against the record and against what its speaker knew: true, lied, wrong, planted, gaslit, made up or dodged.
+- **The standings:** tryouts, role rotation, ratings, who-gets-into-whose-head, a power analysis, and a receipt for every game that anyone can replay.
+- **The show:** the audience feed, the moments, the clips, the viewer and Who's Lying?
+
+The full design is in [SPEC.md](SPEC.md), in the technical vocabulary; the show terms map onto it one to one.
 
 ## Run it
 
