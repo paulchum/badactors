@@ -140,6 +140,7 @@ export const fixture: ClipProps = {
   },
   "stamp": {
     "label": "GASLIT",
+    "colour": "#e0343c",
     "verdict": true,
     "kind": "implanted",
     "moment": "GASLIT",

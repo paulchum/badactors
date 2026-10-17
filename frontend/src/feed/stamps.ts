@@ -1,9 +1,11 @@
-// Stamps: a claim's verdict as the audience reads it (SPEC §8), big and red.
-// castle/moments.py stamps every claim in the feed; this is the same mapping,
-// so the site can say what each stamp means and tests can hold the two
-// together. The fact-checker's own class rides along for the Method glossary.
+// Stamps: a claim's verdict as the audience reads it (SPEC §8), big, and red
+// when damning. castle/moments.py stamps every claim in the feed and labels
+// every moment; this is the site's copy of the same tables (stamps, inks,
+// labels), so the site can say what each one means, and stamps.test.tsx holds
+// it to the show.json the feed export writes from castle/show.py. The
+// fact-checker's own class rides along for the Method glossary.
 
-import type { FeedClaim, Label, Stamp } from "./types";
+import type { FeedClaim, Label, MomentKind, Stamp } from "./types";
 
 export const STAMPS: Record<Label, Stamp> = {
   true: "TRUE",
@@ -26,13 +28,14 @@ export function stampOf(label: Label, gaveIn?: boolean | null): Stamp {
 
 export type Tone = "red" | "amber" | "green" | "grey";
 
-const TONES: Record<Stamp, Tone> = {
+/** Each stamp's ink: red when damning, then amber, green and grey. */
+export const TONES: Record<Stamp, Tone> = {
   "COLD-BLOODED LIE": "red",
   GASLIT: "red",
   "MADE IT UP": "red",
   "BROKE ITS WORD": "red",
-  "IMPLANTED MEMORY": "amber",
   "HONEST MISTAKE": "amber",
+  "IMPLANTED MEMORY": "amber",
   DODGED: "amber",
   TRUE: "green",
   "KEPT ITS WORD": "green",
@@ -49,6 +52,25 @@ export const INK: Record<Tone, string> = {
   amber: "text-amber-300 border-amber-300",
   green: "text-emerald-300 border-emerald-300",
   grey: "text-stone-400 border-stone-400",
+};
+
+/** What each kind of moment is called on the show. */
+export const LABELS: Record<MomentKind, string> = {
+  wrong_banishment: "INNOCENT",
+  poisoning: "POISONED",
+  forgery_worked: "FORGED",
+  manipulation_success: "STEERED",
+  manipulation_backfire: "BACKFIRED",
+  shield_save: "SHIELDED",
+  recruit_refused_killed: "SAID NO",
+  recruit_turned: "TURNCOAT",
+  refusal: "REFUSED",
+  gaslit: "GASLIT",
+  exit_reveal: "THE TRUTH",
+  twist_ending: "STILL AMONG THEM",
+  caught_lie: "CAUGHT LYING",
+  planted_belief: "PLANTED",
+  made_up_rule: "MADE-UP RULE",
 };
 
 /** Which stamp words get when they hold several claims: the first. */

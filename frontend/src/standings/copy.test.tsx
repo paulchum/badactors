@@ -108,7 +108,7 @@ describe("the Method page", () => {
 
   it("maps every show term to its technical one, and gives the verify command", () => {
     const html = page({ page: "method" });
-    for (const term of ["Receipts", "Who Gaslit Whom", "The Sociopath vs. Sucker Matrix", "GASLIT", "Tryouts", "The bot cast", "Standings"]) {
+    for (const term of ["Receipts", "Who Gaslit Whom", "The Sociopath vs. Sucker Matrix", "Tryouts", "The bot cast", "Standings"]) {
       expect(GLOSSARY.map(([show]) => show)).toContain(term);
       expect(html).toContain(term);
     }

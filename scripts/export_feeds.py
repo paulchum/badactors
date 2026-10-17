@@ -5,7 +5,9 @@ map, cast and numbers, with the seeded heuristic bot in every seat, and is
 fact-checked with the mock extractor. No model is asked anything. The feeds land
 in ``frontend/public/games/`` beside an ``index.json`` the site reads first,
 and every one is labelled a bot game. Beside them, ``cards/<game>/<claim>.svg``
-is a share card for every claim made out loud.
+is a share card for every claim made out loud, and ``show.json`` holds the
+show's stamps, their inks and the moments' labels (``show.vocabulary``), which
+the site's own copies are tested against.
 They are built, not committed: ``npm run build``, ``npm run dev`` and the
 frontend tests run this first (``npm run feeds``), and git ignores the folder.
 
@@ -28,7 +30,14 @@ from badactors.castle.configs import CAST, MAP
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import Feed, NameStyle, audience_feed, checked, save_feed
+from badactors.castle.show import (
+    Feed,
+    NameStyle,
+    audience_feed,
+    checked,
+    save_feed,
+    vocabulary,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "frontend" / "public" / "games"
@@ -113,12 +122,13 @@ def export(seeds: list[int], out: Path) -> list[dict[str, object]]:
             f"{game_id}: {len(feed.events)} events, {len(feed.moments)} moments, "
             f"{made} share cards"
         )
-    keep = {str(game["file"]) for game in games} | {"index.json"}
+    keep = {str(game["file"]) for game in games} | {"index.json", "show.json"}
     for stale in out.glob("*.json"):
         if stale.name not in keep:
             stale.unlink()
     index = {"version": INDEX_VERSION, "games": games}
     (out / "index.json").write_text(json.dumps(index, indent=2) + "\n")
+    (out / "show.json").write_text(json.dumps(vocabulary(), indent=2) + "\n")
     return games
 
 

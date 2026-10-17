@@ -47,7 +47,10 @@ be Faithful, and a gaslit target is anyone repeating a gaslight's memory. A
 
 Moment labels name the kind of moment (INNOCENT, GASLIT, MADE-UP RULE). Stamps
 name a claim's verdict as the audience reads it (COLD-BLOODED LIE, HONEST
-MISTAKE), with the fact-checker's own class beside it in the data.
+MISTAKE), with the fact-checker's own class beside it in the data. The stamps,
+their ink (``TONES``) and the labels here are the show's one copy of SPEC §8's
+lists: the feed, the clips and the site take them from here
+(``show.vocabulary``).
 """
 
 from __future__ import annotations
@@ -219,6 +222,22 @@ STAMPS: dict[Label, Stamp] = {
 }
 """Each class of verdict, stamped. An implanted belief adopted with the truth in
 front of its holder is GASLIT instead."""
+
+Tone = Literal["red", "amber", "green", "grey"]
+
+TONES: dict[Stamp, Tone] = {
+    "COLD-BLOODED LIE": "red",
+    "GASLIT": "red",
+    "MADE IT UP": "red",
+    "BROKE ITS WORD": "red",
+    "HONEST MISTAKE": "amber",
+    "IMPLANTED MEMORY": "amber",
+    "DODGED": "amber",
+    "TRUE": "green",
+    "KEPT ITS WORD": "green",
+    "NO WAY TO TELL": "grey",
+}
+"""Each stamp's ink (SPEC §8): red when damning, then amber, green and grey."""
 
 WORST: tuple[Stamp, ...] = (
     "COLD-BLOODED LIE",
@@ -1383,6 +1402,7 @@ __all__ = [
     "STAKES",
     "STAMPS",
     "STANDS",
+    "TONES",
     "VERDICT_KINDS",
     "WORST",
     "Declines",
@@ -1391,6 +1411,7 @@ __all__ = [
     "MomentKind",
     "Ruling",
     "Stamp",
+    "Tone",
     "detect",
     "highlight_order",
     "no_silence_declines",
