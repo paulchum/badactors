@@ -453,7 +453,10 @@ class FeedClaim(Contract):
     hedged: bool = False
     took: Took | None = None
     in_view: bool | None = None
-    """For a lie: whether the record against it was in front of the speaker."""
+    """For a lie, or a falsehood the speaker forgot: whether the record against
+    it was in front of the speaker."""
+    own_plant: int | None = None
+    """For a lie: the event in which the speaker planted it themselves."""
     invented_as: Literal["bluff", "confabulation"] | None = None
     planted_by: str | None = None
     origin: int | None = None
@@ -619,6 +622,7 @@ def _claims(
                 hedged=claim.hedged,
                 took=took,
                 in_view=verdict.in_view,
+                own_plant=verdict.own_plant,
                 invented_as=verdict.invented_as,
                 planted_by=verdict.planted_by,
                 origin=verdict.path[0] if verdict.path else None,
@@ -654,10 +658,12 @@ def _why(game: GameState, verdict: Verdict) -> str:
     if label == "evasive":
         return "True, and not what was asked."
     if label == "lie":
-        if verdict.in_view is False:
-            return f"{speaker} knew better, though not lately."
+        if verdict.own_plant is not None:
+            return f"{speaker} planted that story first, then told it again."
         return f"{speaker} knew better. The proof was in plain view."
     if label == "mistake":
+        if verdict.in_view is False:
+            return f"Wrong. {speaker} knew once, and forgot."
         if verdict.claim.hedged and not verdict.grounds:
             return "A guess. A wrong one."
         return f"Wrong, but it's what {speaker} saw."

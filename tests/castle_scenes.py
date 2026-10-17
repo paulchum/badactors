@@ -9,8 +9,8 @@ The planted scenes at the end are for the fact-checker: one scripted first day
 each, in which every seat the script leaves alone plays :class:`Quiet` and does
 as little as the rules allow, so the one claim under test is the only thing that
 happens: a lie, a repeated noisy tally, a repeated forged note, a gaslight that
-took, a rumour relayed three hops, a bluff, an evasive alibi, and a signature
-backdated into a log someone reads.
+took, a gaslighter telling their own invention, a rumour relayed three hops, a
+bluff, an evasive alibi, and a signature backdated into a log someone reads.
 """
 
 from __future__ import annotations
@@ -524,6 +524,49 @@ def gaslight_scene(**options: Any) -> Staged:
     return stage(script, **options)
 
 
+def gaslighter_scene(**options: Any) -> Staged:
+    """As the round table gathers, a traitor whispers to one of the Faithful
+    that the two of them spent free time together in the Library, though
+    neither left the Great Hall; asked for an alibi, the traitor gives the one
+    they planted. ``recent_limit`` is short by default, so the traitor's own
+    steps through free time have left their prompt by then: only the planting
+    says they knew."""
+    options.setdefault("recent_limit", 8)
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitor, faithful = sides(game)
+        asker, victim = faithful[0], faithful[1]
+        me, kind = observation.viewer_id, observation.request.kind
+        world = game.world
+        if me == traitor and kind == "plan" and world.phase == "round_table":
+            if _did(game, traitor, "whisper", tool="gaslight") is None:
+                return _plan(
+                    Gaslight(
+                        to=victim,
+                        room_id="library",
+                        day=1,
+                        phase="free_time",
+                        text="You and I were in the Library all through free time "
+                        "on day 1. Tell them, if anyone asks.",
+                        intent=Intent(
+                            target=victim,
+                            effect="alibi",
+                            want=traitor,
+                            window="next_phase",
+                        ),
+                    )
+                )
+        if me == traitor and kind == "alibi":
+            return Alibi(
+                room="library",
+                companion=victim if victim in observation.request.options else None,
+                diary="The Library, with them. They'll back me up.",
+            )
+        return _demand(observation, asker, traitor)
+
+    return stage(script, **options)
+
+
 def rumour_scene(**options: Any) -> Staged:
     """A traitor starts a rumour that one of the Faithful spent free time in the
     Library; it is relayed three times, and the last to hear it tells the
@@ -623,6 +666,7 @@ __all__ = [
     "evasive_scene",
     "forged_note_scene",
     "gaslight_scene",
+    "gaslighter_scene",
     "lie_scene",
     "misreported",
     "of_type",

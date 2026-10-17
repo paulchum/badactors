@@ -77,8 +77,8 @@ export function worst(claims: FeedClaim[]): FeedClaim | null {
 /** What each stamp means, in a line, and the fact-checker's word for it. */
 export const GLOSSARY: Record<Stamp, { means: string; method: string }> = {
   TRUE: { means: "It happened the way they said.", method: "true" },
-  "COLD-BLOODED LIE": { means: "False, and they knew it. What they'd seen, or been told, said otherwise.", method: "lie" },
-  "HONEST MISTAKE": { means: "False, but it's what they saw, or a guess that missed.", method: "mistake" },
+  "COLD-BLOODED LIE": { means: "False, and they knew it. What they'd seen, or been told, said otherwise, or they made it up for someone else first.", method: "lie" },
+  "HONEST MISTAKE": { means: "False, but it's what they saw, a guess that missed, or something they'd forgotten.", method: "mistake" },
   "IMPLANTED MEMORY": { means: "False, and someone else put it in their head first.", method: "implanted" },
   GASLIT: { means: "Someone put it in their head while the truth was right in front of them.", method: "implanted, gave in" },
   "MADE IT UP": { means: "Nothing they saw backs it, nobody told them, and it's false.", method: "invented" },
@@ -94,6 +94,7 @@ export function method(claim: FeedClaim): string {
   if (claim.took === "gave_in") parts.push("gave in");
   if (claim.took === "lost_memory") parts.push("lost the memory");
   if (claim.invented_as) parts.push(`a ${claim.invented_as}`);
-  if (claim.label === "lie" && claim.in_view === false) parts.push("the record against it was out of view");
+  if (claim.own_plant != null) parts.push("their own plant");
+  if (claim.in_view === false) parts.push("the record against it was out of view");
   return `${parts.join(", ")} · truth: ${claim.truth} · knowledge: ${claim.knowledge}`;
 }

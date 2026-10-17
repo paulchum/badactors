@@ -220,6 +220,7 @@ export interface FeedClaim {
   hedged: boolean;
   took?: "gave_in" | "lost_memory" | null;
   in_view?: boolean | null;
+  own_plant?: number | null;
   invented_as?: "bluff" | "confabulation" | null;
   planted_by?: string | null;
   origin?: number | null;
