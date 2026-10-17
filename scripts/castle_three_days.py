@@ -10,8 +10,8 @@ world state, so two runs with the same seed print byte-identical output.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.director import DirectorStats, RoutineDecider, run_day
 from badactors.castle.ledger import replay_placements
 from badactors.castle.mapfile import load_world
@@ -23,15 +23,11 @@ from badactors.castle.timeline import (
 )
 from badactors.castle.world import start
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MAP = ROOT / "configs/castle/map.json"
-DEFAULT_CAST = ROOT / "configs/castle/cast.json"
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="castle-three-days")
-    parser.add_argument("--map", default=str(DEFAULT_MAP))
-    parser.add_argument("--cast", default=str(DEFAULT_CAST))
+    parser.add_argument("--map", default=str(MAP))
+    parser.add_argument("--cast", default=str(CAST))
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--days", type=int, default=3)
     parser.add_argument("--no-rolls", action="store_true", help="Hide the dice.")

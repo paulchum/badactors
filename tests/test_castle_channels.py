@@ -9,11 +9,10 @@ meant, which no player is ever shown.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
+from badactors.castle import configs
 from badactors.castle.contracts import (
     QUOTE_LIMIT,
     Move,
@@ -28,9 +27,8 @@ from badactors.castle.mapfile import load_world
 from badactors.castle.scope import assert_no_leak, build_observation
 from badactors.castle.world import advance_phase, start, submit_plan, tick
 
-ROOT = Path(__file__).resolve().parent.parent
-MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.json"
+MAP_PATH = configs.MAP
+CAST_PATH = configs.CAST
 
 _CHANNEL_OF = {"talk": "speech", "summoned": "steward"}
 

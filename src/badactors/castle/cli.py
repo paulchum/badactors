@@ -16,12 +16,13 @@ the leak checker first, model names included.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
+from badactors.castle.balance import load_balance
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
 from badactors.castle.claims import MockExtractor, extract
 from badactors.castle.clips import highlights
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.episode import episode
 from badactors.castle.factcheck import printout, verdicts
 from badactors.castle.mapfile import load_map
@@ -32,8 +33,6 @@ from badactors.castle.rules import GameConfig
 from badactors.castle.show import NameStyle, audience_feed, save_feed
 from badactors.castle.timeline import timeline
 
-_CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
-
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
@@ -41,8 +40,11 @@ def main(argv: list[str] | None = None) -> None:
         description="Play a mock Castle game with seeded bots and print the episode.",
     )
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
-    parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
+    parser.add_argument("--cast", default=str(CAST))
+    parser.add_argument("--map", default=str(MAP))
+    parser.add_argument(
+        "--balance", help="Play under this balance file instead of the shipped one."
+    )
     parser.add_argument(
         "--players", type=int, help="Seat the first N of the cast (8 to 10)."
     )
@@ -80,7 +82,9 @@ def main(argv: list[str] | None = None) -> None:
     cast = load_cast_file(args.cast)
     if args.players is not None:
         cast = cast.first(args.players)
-    overrides: dict[str, int] = {}
+    overrides: dict[str, object] = {}
+    if args.balance is not None:
+        overrides.update(load_balance(args.balance).model_dump())
     if args.traitors is not None:
         overrides["traitors"] = args.traitors
     if args.max_days is not None:

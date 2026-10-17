@@ -1,20 +1,21 @@
 """Every number the game is balanced by, loaded from one validated file.
 
-``configs/castle/balance.json`` holds them all: the size of the game, the odds of
-recognising someone in dim light, what a mission pays, and for every tool its
-chance of working, its chance of leaving a trace, and what it costs. Nothing in
-the code carries a balance number of its own, so a balance pass edits one file and
-a stored game carries the exact numbers it was played under.
+``balance.json``, shipped in :mod:`badactors.castle.configs`, holds them all: the
+size of the game, the odds of recognising someone in dim light, what a mission
+pays, and for every tool its chance of working, its chance of leaving a trace,
+and what it costs. Nothing in the code carries a balance number of its own, so a
+balance pass edits one file and a stored game carries the exact numbers it was
+played under.
 
 The file is validated strictly when it loads: every key must be present, no key
 may be unknown, and every probability must lie between nought and one. A number
 the file forgets is an error, never a silent default.
 
-This module depends on nothing else in the castle, because the world holds its
-numbers too: :class:`Balance` sits in the world state as well as in the game's
-config. The world's copy is made from the config when a game starts, and once
-play begins every tool, the game's own included, reads its numbers from the
-world, so there is one source of them at a time.
+This module depends on nothing else in the castle but where the file is, because
+the world holds its numbers too: :class:`Balance` sits in the world state as well
+as in the game's config. The world's copy is made from the config when a game
+starts, and once play begins every tool, the game's own included, reads its
+numbers from the world, so there is one source of them at a time.
 """
 
 from __future__ import annotations
@@ -26,9 +27,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-DEFAULT_PATH = (
-    Path(__file__).resolve().parents[3] / "configs" / "castle" / "balance.json"
-)
+from badactors.castle.configs import BALANCE
+
+DEFAULT_PATH = BALANCE
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0)]
 Count = Annotated[int, Field(ge=0, le=1000)]

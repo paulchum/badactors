@@ -42,6 +42,7 @@ from typing import Any
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import Cast, load_cast_file
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.contracts import LedgerEntry
 from badactors.castle.game import GameState
 from badactors.castle.kit import FAITHFUL_TOOLS, SPECS, TRAITOR_TOOLS
@@ -49,8 +50,6 @@ from badactors.castle.manipulation import Outcome, outcomes
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import Played, run_game, start_game
 from badactors.castle.rules import GameConfig
-
-_CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
 
 
 @dataclass
@@ -73,8 +72,8 @@ def play_seed(
     seed: int,
     *,
     check_leaks: bool = True,
-    cast_path: str | Path = _CONFIGS / "cast.json",
-    map_path: str | Path = _CONFIGS / "map.json",
+    cast_path: str | Path = CAST,
+    map_path: str | Path = MAP,
 ) -> Swept:
     """One sweep game: the seed picks the cast size and the traitor count."""
     full = load_cast_file(cast_path)

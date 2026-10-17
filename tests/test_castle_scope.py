@@ -8,10 +8,9 @@ real rather than when a string happens to look suspicious.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
+from badactors.castle import configs
 from badactors.castle import scope as scope_module
 from badactors.castle.contracts import (
     AtRoom,
@@ -47,9 +46,8 @@ from badactors.castle.scope import (
 from badactors.castle.world import start, submit_plan, tick
 from castle_tools import act, last, put, scene
 
-ROOT = Path(__file__).resolve().parent.parent
-MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.json"
+MAP_PATH = configs.MAP
+CAST_PATH = configs.CAST
 
 
 def _world(seed: int = 13) -> WorldState:

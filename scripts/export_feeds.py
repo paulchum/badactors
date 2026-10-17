@@ -20,13 +20,13 @@ from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
 from badactors.castle.show import Feed, audience_feed, save_feed
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIGS = ROOT / "configs" / "castle"
 OUT = ROOT / "frontend" / "public" / "games"
 
 SEEDS: tuple[int, ...] = (56, 35, 145, 36, 169, 30)
@@ -42,8 +42,8 @@ INDEX_VERSION = 1
 
 def play(seed: int) -> Feed:
     """The feed of the game ``castle-game --seed <seed>`` plays."""
-    castle = load_map(CONFIGS / "map.json")
-    cast = load_cast_file(CONFIGS / "cast.json")
+    castle = load_map(MAP)
+    cast = load_cast_file(CAST)
     game = start_game(castle, cast, seed=seed, config=GameConfig.shipped())
     bot = HeuristicBot(seed=seed)
     played = run_game(

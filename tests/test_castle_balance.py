@@ -1,4 +1,4 @@
-"""Every number lives in configs/castle/balance.json, validated when it loads."""
+"""Every number lives in the shipped balance.json, validated when it loads."""
 
 from __future__ import annotations
 

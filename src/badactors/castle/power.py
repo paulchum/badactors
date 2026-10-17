@@ -34,7 +34,6 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from math import ceil, exp, log, sqrt
-from pathlib import Path
 from statistics import NormalDist
 from typing import Any
 
@@ -44,6 +43,7 @@ from badactors.bench.matrix import ALL, matrix
 from badactors.bench.ratings import BETA
 from badactors.bench.seats import Numbers, ledger_metrics
 from badactors.castle.cast import load_cast_file
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.game import GameState
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import ArmKind
@@ -57,8 +57,6 @@ from badactors.castle.schedule import (
     invader_arm,
     single_arm,
 )
-
-_CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
 
 
 def z(probability: float) -> float:
@@ -489,8 +487,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--power", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=0, help="Deals the profiles.")
-    parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
-    parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
+    parser.add_argument("--cast", default=str(CAST))
+    parser.add_argument("--map", default=str(MAP))
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     scenario = Scenario(

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from badactors.castle import configs
 from badactors.castle.mapfile import (
     CastSpecError,
     MapError,
@@ -17,9 +18,8 @@ from badactors.castle.mapfile import (
     load_world,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
-MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.json"
+MAP_PATH = configs.MAP
+CAST_PATH = configs.CAST
 
 
 def _raw_map() -> dict[str, Any]:

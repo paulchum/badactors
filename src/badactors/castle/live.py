@@ -45,9 +45,11 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
+from badactors.castle.balance import load_balance
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.budget import Limits, preflight
 from badactors.castle.cast import Cast, load_cast_file
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mapfile import load_map
 from badactors.castle.mock_provider import BotProvider, mock_models
@@ -70,8 +72,6 @@ from badactors.castle.schedule import (
 )
 from badactors.castle.verify import Bundle, HashingProvider, make_bundle, save_bundle
 
-_ROOT = Path(__file__).resolve().parents[3]
-_CONFIGS = _ROOT / "configs" / "castle"
 _CACHE = Path.home() / ".cache" / "badactors" / "openrouter-models.json"
 
 
@@ -81,8 +81,11 @@ def parser() -> argparse.ArgumentParser:
         description="Play one Castle game with real models, within a budget.",
     )
     parser.add_argument("--seed", type=int, help="The game's seed (default 7).")
-    parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
-    parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
+    parser.add_argument("--cast", default=str(CAST))
+    parser.add_argument("--map", default=str(MAP))
+    parser.add_argument(
+        "--balance", help="Play under this balance file instead of the shipped one."
+    )
     parser.add_argument("--players", type=int, help="Seat the first N of the cast.")
     parser.add_argument("--traitors", type=int, choices=(2, 3))
     parser.add_argument("--max-days", type=int)
@@ -146,7 +149,9 @@ def main(argv: list[str] | None = None) -> None:
     cast = load_cast_file(args.cast)
     seed = 7 if args.seed is None else args.seed
     seating: Seating | None = None
-    overrides: dict[str, int] = {}
+    overrides: dict[str, object] = {}
+    if args.balance is not None:
+        overrides.update(load_balance(args.balance).model_dump())
     if args.max_days is not None:
         overrides["max_days"] = args.max_days
     if args.schedule or args.game:
@@ -273,7 +278,7 @@ def _models(cast: Cast, args: argparse.Namespace) -> dict[str, ModelInfo]:
 
 def _default_save(name: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return _ROOT / "data" / "live" / f"{name}-{stamp}.json"
+    return Path("data") / "live" / f"{name}-{stamp}.json"
 
 
 def bundle_path(save: Path) -> Path:

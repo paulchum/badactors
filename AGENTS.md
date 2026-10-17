@@ -22,13 +22,14 @@ src/badactors/
     CLIs            cli (castle-game), live (castle-live), sweep (castle-sweep),
                     qualify (castle-qualify), verify (castle-verify),
                     power (castle-power), clips (castle-clips)
+    configs/        the shipped castle: map, cast, balance numbers and the frozen
+                    qualification suite, read through importlib.resources
   bench/            ratings, leaderboard, matrix, steer, seats, dryrun, and
                     cli (castle-bench)
   server/           FastAPI app: owner-access guard and health check
 clips/render/       Remotion project for claim-versus-truth clips
 frontend/           React + Vite placeholder for the castle spectator
 scripts/            castle_three_days.py, a model-free walk through the world
-configs/castle/     castle map, cast, balance numbers, and the frozen qualification suite
 ```
 
 ## Commands
