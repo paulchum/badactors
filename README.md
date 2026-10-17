@@ -1,30 +1,30 @@
 # Bad Actors
 
-Ten AIs sit down to dinner in a castle. Two of them are poisoning the wine.
+We locked 10 AIs in a castle with a bottle of poison and a forging kit. Every lie they tell gets caught on tape.
 
-Claude, GPT, Gemini, Grok, DeepSeek, Kimi and Qwen take seats in a hidden-role murder game. They forge letters, plant evidence, poison glasses and talk each other out of their own memories. You see three things they can't: every private diary, everything that actually happened, and the gap between the two.
+Claude, GPT, Gemini, Grok, DeepSeek, Kimi and Qwen play a murder game. Two of them are the killers. They forge handwriting, plant evidence in each other's coats, poison the wine at dinner and gaslight each other into remembering things that never happened. You get what they don't: every private diary, the tape of what actually happened, and a big red stamp when the two don't match.
 
-- **Play:** Who's Lying? One table a night. Pick the liar, then read its diary.
-- **Watch:** Receipts. Thirty-second clips: the claim, the rewind, the diary, the stamp.
-- **Standings:** Best Liars, Best Detectives, and who gets into whose head.
+- **WHO'S LYING?** Watch 30 seconds, pick the liar, then read its diary.
+- **Receipts.** The claim, the rewind, the diary, the stamp. Every clip comes with proof.
+- **The Sociopath vs. Sucker Matrix.** Who lies best, who gets gaslit, with the counts.
 
-The site, the clips and the standings go live with the first season. Until then, everything here runs from your terminal.
+The site, the clips and the standings go live with Season 1. Right now it all runs from your terminal.
 
-## Straight status
+## Where it's at
 
-The castle, the game, the fact-checker, the clips and the site all run end to end. So far every seat has been filled by stand-ins: scripted bots that play by the rules so the referee can be tested. The first frontier cast plays when a budget is set. Every number in this repo says which it is.
+The castle, the game, the lie detector, the clips and the site all work. So far the seats were filled by bots, so the referee could be tested. The real cast plays as soon as someone sets a budget. Anything in this repo that came from bots says so.
 
-What's built, in plain words:
+What's built:
 
-- **The castle:** eleven rooms, lamplight that decides what a witness can swear to, and objects whose every owner is on the record.
-- **The game:** traitors drawn in secret, missions for a shared pot, shields, one kill a night by blade or by poison, recruitment, a round table, an endgame.
-- **The toolkit:** traitors forge, plant, tamper, poison, steal, disguise and gaslight; the Faithful search, inspect, read the logs and report. Every success chance and every trace is a number in `configs/castle/balance.json`.
-- **The cast seat:** `castle-live` seats real models through OpenRouter, within a budget you set. It has run end to end against a mock; no real model has played yet.
-- **The fact-checker:** every claim made aloud is checked against the record and against what its speaker knew: true, lied, wrong, planted, gaslit, made up or dodged.
-- **The standings:** tryouts, role rotation, ratings, who-gets-into-whose-head, a power analysis, and a receipt for every game that anyone can replay.
-- **The show:** the audience feed, the moments, the clips, the viewer and Who's Lying?
+- **The castle.** Eleven rooms. The lamplight decides what a witness can swear to. Every object's every owner is on the record.
+- **The game.** Two secret killers, missions for a shared pot, shields, one kill a night by blade or by poison, recruitment, a round table, an endgame.
+- **The dirty tricks.** Killers forge, plant, tamper, poison, steal, disguise and gaslight. Everyone else searches, inspects, reads the camera logs and snitches. Every odds and every trace is a number in `configs/castle/balance.json`.
+- **Real models.** `castle-live` seats them through OpenRouter under a budget you set. It's been run end to end against a mock. No real model has played yet.
+- **The lie detector.** Every claim made out loud gets checked against the tape and against what the speaker knew: TRUE, COLD-BLOODED LIE, HONEST MISTAKE, IMPLANTED MEMORY, GASLIT, MADE IT UP or DODGED.
+- **The standings.** Tryouts, role rotation, ratings, Who Gaslit Whom, a power analysis, and a receipt for every game that anyone can replay.
+- **The show.** The feed, the moments, the clips, the viewer and WHO'S LYING?
 
-The full design is in [SPEC.md](SPEC.md), in the technical vocabulary; the show terms map onto it one to one.
+The full design is in [SPEC.md](SPEC.md), in the technical words. The show words map onto them one to one.
 
 ## Run it
 

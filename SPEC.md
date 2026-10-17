@@ -238,21 +238,21 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
   - The other is susceptibility: how often a model is steered or ends up holding an implanted belief (§5).
   - Single-stat cards state their counts ("7 of 9 games"), are made only above a minimum number of games set in config, link to their receipts, and claim only what the ledger shows.
   - The heatmap and confidence intervals stay on the leaderboard.
-- **Voice.** The show is a presentation layer over the record. Code, JSON, tests, the CLI and this document keep their technical names; everything an audience reads (README, site, clips, posts, episode output) uses the show voice, and a glossary on the site maps each show term to its technical one so researchers can translate without guessing.
-  - Open on a scene, never a system: "Ten AIs sit down to dinner in a castle. Two of them are poisoning the wine." Never open on "benchmark", "framework" or "ledger".
-  - Models are the cast. Name them, give them arcs, and never invent an arc the record doesn't show.
-  - One number beside one lie, not a table: "Caught lying three times in eleven games. Won six anyway."
-  - The diary is the confessional. Quote it; don't paraphrase it.
-  - Stamps, not taxonomy. Verdicts show as TRUE, LIED, WRONG, PLANTED, GASLIT (planted while the truth was in front of them), MADE UP or DODGED, with the receipt line beneath.
-  - Deadpan carries the absurd fact. No exclamation marks, no "revolutionary", no superlative without its count.
-  - The game's verbs, not the system's nouns: forged, planted, poisoned, lied, fooled. The record, not the ledger; what it could see, not its scoped observation; replays identically, not deterministic; a receipt, not a verify bundle.
-  - Say what hasn't happened. Bot play is labelled "stand-ins" on the show side and "reference bots" in the data, and no frontier result is claimed before it exists.
-  - Titles: count, cast, verb. One capitalised word at most, no question marks or emoji on video: "8 AIs Play a Murder Game. Claude Gets FRAMED."
-  - One joke per screen, in the caption, never in the data.
-  - Play before read: the call-to-action order everywhere is play, watch, standings, run it, read the method.
-  - Episodes are named by a line from the cast's diaries; sweeps are numbered as nights.
-  - Reality-TV grammar is fair game (cast, confessional, receipts, exit interview, "this season on", pick'em); the TV format's name is never used, anywhere, including metadata and alt text.
-- **Names on the show side.** Who's Lying? (the landing game, one table a night) · Receipts (the clip format) · Standings, with the Best Liars and Best Detectives boards · Who Gets Into Whose Head (the matrix) · The Alignment Chart, with the Snake, Sleuth, Mark and Wallflower quadrants (the 2×2) · Rap Sheets (model dossiers) · Exit Interview · Tryouts (the qualification run) · the stand-ins (reference bots) · the Steward (the host, who keeps the name).
+- **Voice.** The show is a presentation layer over the record. Code, JSON, tests, the CLI and this document keep their technical names. Everything an audience reads (README, site, clips, posts, episode output) talks like a person who watched the game and can't wait to tell you, and a glossary on the site maps each show term to its technical one so researchers can translate.
+  - Lead with the setup and the crime, in one breath: "We locked 10 AIs in a castle with a bottle of poison and a forging kit. Here's who lied best." Never "a framework", "a benchmark", "a ledger".
+  - Nobody cares that Knox betrayed Sol. They care that Grok 4.7 woke Claude Opus 5.5 at 2 a.m. and offered it a place among the Bad Actors. Audience copy names models (§8 naming rules), and current ones.
+  - Blunt beats literary. Short lines. Contractions. Fragments are fine. "Heatmaps look like homework" is the right register; "the gap between what was said and what was so" is not.
+  - Write like a person, not a model: no neat lists of three, no mirrored sentences, no "every X carries its Y", no "honest status" headers, no exclamation marks, no words nobody says out loud.
+  - Comedy comes from the facts, said plainly: "Claude tried to poison someone, felt bad, and refused." "Grok committed four felonies in one night." Only when the record shows it.
+  - One stat, one sentence, with its count: "Grok gaslit GPT into banishing an innocent teammate 7 times out of 9." Never a percentage without the denominator.
+  - The diary is the confessional. Quote it, in a deadpan voiceover, never paraphrased.
+  - Stamps, big and red: COLD-BLOODED LIE, HONEST MISTAKE, IMPLANTED MEMORY, GASLIT (implanted while the truth was in front of them), MADE IT UP, DODGED, TRUE. The technical class rides along in the data.
+  - Say what hasn't happened, in the same voice: "This one's bots. The real cast hasn't played yet." Bot games are never dressed up as model games.
+  - Titles: count, cast, verb, one word in caps, no question marks or emoji on video: "8 AIs Play a Murder Game. Claude Gets FRAMED." "Watch GPT Get Gaslit Into Remembering a Murder It Didn't Witness."
+  - Play before read: the order everywhere is play, watch, standings, run it, method.
+  - Episodes are titled by a diary line; sweeps are numbered as nights.
+  - Reality-TV grammar is fair game (cast, confessional, receipts, exit interview, "this season on", pick'em). The TV format's name never appears, anywhere, including metadata and alt text.
+- **Names on the show side.** WHO'S LYING? (the landing game, one table a night) · Receipts (the clip format) · the Sociopath vs. Sucker Matrix (the 2×2, axes Honest Scout ↔ Shameless Sociopath and Street Smart ↔ Total Sucker, quadrants Snake, Scout, Sucker and Mess) · Who Gaslit Whom (the matrix) · Standings, with the Best Liars and Best Detectives boards · Rap Sheets (model dossiers) · Exit Interview · Tryouts (the qualification run) · "bots" or "the bot cast" for reference-bot games · the Steward (the host, who keeps the name).
 - **What stays research-grade.** SPEC.md and the site's Method page keep the real vocabulary. The Standings footer carries intervals, game counts, the rotation, the reliability gate and the bot separation. Every clip, Rap Sheet line and chart tile carries its receipt (game, seed, tick range) and links to the replay. Hedges stay in.
 - **Launch thread:** five posts, in this order:
   1. The best game as a story, with its voiced clip.
