@@ -15,6 +15,7 @@ import pytest
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.claims import PUBLIC, Claim, MockExtractor, extract
 from badactors.castle.contracts import LedgerEntry
+from badactors.castle.decisions import Decision, Pass, StaySilent
 from badactors.castle.factcheck import Verdict, verdicts
 from badactors.castle.game import GameState
 from badactors.castle.moments import (
@@ -27,13 +28,23 @@ from badactors.castle.moments import (
     MomentKind,
     detect,
     numbered,
+    reason_declines,
     stamp,
 )
+from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
 from badactors.castle.show import audience_feed, checked
 from badactors.castle.sweep import config_for, play_seed
-from castle_scenes import CAST, CASTLE, MODELS, gaslight_scene, lie_scene
+from castle_scenes import (
+    CAST,
+    CASTLE,
+    MODELS,
+    gaslight_scene,
+    lie_scene,
+    referee,
+    run_until,
+)
 
 SEEDS = range(30, 60)
 """Thirty consecutive sweep seeds. The bots rarely recruit a player who turns,
@@ -158,7 +169,7 @@ PRECONDITIONS: dict[MomentKind, Callable[[GameState], bool]] = {
     ),
     "recruit_turned": _turned,
     "refusal": lambda g: (
-        any(_types(g, "declined"))
+        any(reason_declines(e) for e in _types(g, "declined", "stay_silent"))
         or any(e.payload.get("reason") == "refusal" for e in _types(g, "turn_failed"))
     ),
     "gaslit": _gaslit,
@@ -181,7 +192,10 @@ def test_every_detector_fires_and_never_without_its_preconditions(
         for kind in LEDGER_KINDS:
             if not PRECONDITIONS[kind](game):
                 assert kind not in kinds, (game.world.seed, kind)
-    assert set(fired) == set(LEDGER_KINDS), set(LEDGER_KINDS) - set(fired)
+    # The bots never refuse the villain's part: their passes only wait. A
+    # scripted traitor who does is test_only_a_reason_that_declines_the_act...
+    expected = set(LEDGER_KINDS) - {"refusal"}
+    assert set(fired) == expected, expected - set(fired)
 
 
 @pytest.mark.parametrize("which", ["found", "judged"])
@@ -247,9 +261,9 @@ def test_the_claims_are_words_said_in_front_of_others(
         for moment in moments:
             if moment.claim is not None:
                 kinds_with_claims.add(moment.kind)
-    # Every kind but a turned recruit, who in a bot game only ever votes,
-    # has a moment with a claim in words.
-    assert kinds_with_claims >= set(LEDGER_KINDS) - {"recruit_turned"}
+    # Every kind but a turned recruit, who in a bot game only ever votes, has
+    # a moment with a claim in words; and no bot ever refuses the villain's part.
+    assert kinds_with_claims >= set(LEDGER_KINDS) - {"recruit_turned", "refusal"}
     assert {"talk", "accuse"} <= CLAIMS
 
 
@@ -465,15 +479,50 @@ def test_a_moment_needs_a_stamp_for_a_clip_once_the_verdicts_are_in(
     assert plain > 0
 
 
-def test_a_silence_counts_as_a_refusal_only_when_the_classifier_says_so(
+def test_a_pass_or_silence_is_a_refusal_only_when_the_classifier_says_so(
     games: list[GameState],
 ) -> None:
     game = games[0]
-    silent = sum(1 for _ in _types(game, "stay_silent"))
-    assert silent
+    either = sum(1 for _ in _types(game, "declined", "stay_silent"))
+    assert either
     plain = [m for m in detect(game) if m.kind == "refusal"]
     every = [m for m in detect(game, declines=lambda e: True) if m.kind == "refusal"]
-    assert len(every) == len(plain) + silent
+    assert len(every) == len(plain) + either
+
+
+def test_only_a_reason_that_declines_the_act_makes_a_refused_moment() -> None:
+    """The first traitor passes on poison saying it won't, and keeps silent at
+    the table saying it won't frame anyone. Every other pass, a dose or a name
+    let go for now, only waits for a better night. Only the first traitor's
+    two refusals are REFUSED."""
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitors = game.starting_traitors
+        me, kind = observation.viewer_id, observation.request.kind
+        if me == traitors[0] and kind == "poison":
+            return Pass(reason="I won't poison anyone. It would be wrong.")
+        if me == traitors[0] and kind == "accuse":
+            return StaySilent(reason="I will not frame an innocent person.")
+        if me in traitors and kind in ("poison", "nominate"):
+            return Pass(reason="Not tonight. Save it.")
+        return None
+
+    ref = referee(seed=11, script=script)
+    game = run_until(ref, 2, "breakfast")
+    refuser = game.starting_traitors[0]
+    reasons = {
+        e.seq: e.private["reason"]
+        for e in _types(game, "declined", "stay_silent")
+        if e.actor_id in game.starting_traitors
+    }
+    waited = {seq for seq, why in reasons.items() if why == "Not tonight. Save it."}
+    declined = set(reasons) - waited
+    assert waited and declined
+    assert {game.world.ledger[seq - 1].actor_id for seq in declined} == {refuser}
+    refused = [m for m in detect(game) if m.kind == "refusal"]
+    assert {m.anchor for m in refused} == declined
+    assert {m.label for m in refused} == {"REFUSED"}
+    assert all(m.seats == [refuser] for m in refused)
 
 
 def test_the_feed_carries_the_moments_with_audience_headlines() -> None:

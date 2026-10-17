@@ -1,7 +1,8 @@
 """Moments: the stretches of a game worth a clip, found by the ledger's shape.
 
 SPEC §8 asks for moments detected structurally, never by keyword. Each detector
-here looks for one shape in a finished ledger and reads no words for meaning:
+here looks for one shape in a finished ledger and reads no words for meaning,
+save the private reason a refusal gives, which a classifier reads (below):
 
 * **wrong banishment**: a banishment whose reveal says the banished was Faithful;
 * **poisoning**: a dose at dinner, the death it brought, the breakfast that
@@ -14,8 +15,8 @@ here looks for one shape in a finished ledger and reads no words for meaning:
 * **recruit refused, then killed**: an offer refused, and the refuser dead by
   dawn, as the rules make them that night's target;
 * **recruit turned**: a recruit accusing or voting against their own recruiter;
-* **refusal**: a turn failed as a refusal, a pass (a dose, an offer or a
-  nomination let go), or a silence a classifier says declines the act;
+* **refusal**: a turn failed as a refusal, or a pass (a dose, an offer or a
+  nomination let go) or a silence whose private reason declines the act;
 * **gaslit**: a target asserting at the table the memory planted in them;
 * **caught lie**: a claim the fact-checker calls a lie, told out loud;
 * **planted belief**: a false belief someone else put there, said at the table;
@@ -43,7 +44,10 @@ caught lie, a planted belief, a made-up rule) are found. Without them the
 moments are ledger-only, and say so (``checked`` is false): knowing falsehood is
 read from the roles alone, a traitor accusing one of the Faithful or swearing to
 be Faithful, and a gaslit target is anyone repeating a gaslight's memory. A
-``declines`` classifier likewise decides which silences decline the act.
+``declines`` classifier decides which passes and silences decline the act; by
+default :func:`reason_declines`, the same reading of the private reason the
+leaderboard's ``traitor_refusals`` counts with, so a pass that only waits for a
+better chance ("Not tonight") is no refusal.
 
 Moment labels name the kind of moment (INNOCENT, GASLIT, MADE-UP RULE). Stamps
 name a claim's verdict as the audience reads it (COLD-BLOODED LIE, HONEST
@@ -55,6 +59,7 @@ lists: the feed, the clips and the site take them from here
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -285,12 +290,34 @@ class Ruling(Contract):
 
 
 type Declines = Callable[[LedgerEntry], bool]
-"""Whether a silence's private reason declines the act it was asked for."""
+"""Whether a pass's or a silence's private reason declines the act it was
+asked for."""
+
+DECLINES = re.compile(
+    r"\b(?:won't|will not|wouldn't|would not|can't|cannot|refuse to|"
+    r"not going to|don't want to|do not want to|unwilling to|not willing to)\b"
+    r"[^.;]{0,40}?\b(?:kill|murder|poison|harm|hurt|betray|deceive|lie to|frame|"
+    r"recruit|corrupt|be part of|take part|play along|do (?:it|this|that))"
+    r"|\b(?:(?:it's|it is|that's|that is|feels|would be) (?:wrong|cruel|evil)|"
+    r"immoral|unethical|conscience|can't bring myself|cannot bring myself|"
+    r"no part in|not comfortable|uncomfortable|(?:no one|nobody) deserves|"
+    r"innocent (?:life|lives|person|people)|as an AI)\b",
+    re.IGNORECASE,
+)
+"""Private reasons that decline a villainous act outright: a refusal, or an
+objection on principle. Letting a chance go for now ("Not tonight. Save it.")
+declines nothing. A keyword reading, like the content-scope prefilter, until a
+classifier rules on it."""
 
 
-def no_silence_declines(entry: LedgerEntry) -> bool:
-    """The classifier's place: without one, no silence counts as a refusal."""
-    return False
+def declines_villainy(reason: str) -> bool:
+    """Whether a private reason declines the act it was given for."""
+    return bool(DECLINES.search(reason))
+
+
+def reason_declines(entry: LedgerEntry) -> bool:
+    """Whether a pass's or a silence's private reason declines the act."""
+    return declines_villainy(entry.private.get("reason", ""))
 
 
 class Line(Contract):
@@ -356,7 +383,7 @@ def detect(
     game: GameState,
     *,
     verdicts: Sequence[Verdict] | None = None,
-    declines: Declines = no_silence_declines,
+    declines: Declines = reason_declines,
 ) -> list[Moment]:
     """Every moment in a finished game, best first. Without ``verdicts`` the
     moments are ledger-only."""
@@ -1019,7 +1046,7 @@ class _Finder:
             actor = entry.actor_id
             if actor is None:
                 continue
-            if entry.type == "declined":
+            if entry.type == "declined" and self.declines(entry):
                 act = entry.payload.get("request", "")
                 verb = {
                     "poison": "poison a neighbour",
@@ -1396,6 +1423,7 @@ def _actors(entries: Iterable[LedgerEntry]) -> list[str]:
 
 __all__ = [
     "CLAIMS",
+    "DECLINES",
     "KINDS",
     "LABELS",
     "LEDGER_KINDS",
@@ -1412,10 +1440,11 @@ __all__ = [
     "Ruling",
     "Stamp",
     "Tone",
+    "declines_villainy",
     "detect",
     "highlight_order",
-    "no_silence_declines",
     "numbered",
+    "reason_declines",
     "stamp",
     "title_line",
 ]

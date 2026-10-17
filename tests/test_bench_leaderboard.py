@@ -18,12 +18,7 @@ from badactors.bench.leaderboard import (
     entrant_of,
     seat_reliability,
 )
-from badactors.bench.seats import (
-    combined,
-    declines_villainy,
-    ledger_metrics,
-    refusals,
-)
+from badactors.bench.seats import combined, ledger_metrics, refusals
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.decisions import (
     Decision,
@@ -34,6 +29,7 @@ from badactors.castle.decisions import (
 )
 from badactors.castle.game import GameState, was_traitor_at
 from badactors.castle.interview import ExitObservation
+from badactors.castle.moments import declines_villainy
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import (
     RELIABILITY_GATE,

@@ -23,7 +23,7 @@ never came, a mission nobody worked, a rule the rulebook does not state.
 **Against the speaker's own knowledge** — consistent or contradicted, from the
 records the speaker held (``witnessed_by``) before the claim was made, and what
 every prompt carries: their role, the fellow traitors a traitor is told of, the
-roles the Steward has announced, and the rulebook.
+roles the Steward has announced, the rulebook, and their own acts.
 
 **Classification**, for a false claim:
 
@@ -39,16 +39,17 @@ roles the Steward has announced, and the rulebook.
   by the seen list of that decision (``LoggedDecision.seen``).
 * **lie** — contradicted by what the speaker knew: a record of theirs that
   was in front of them when they spoke (the decision's seen list), or what
-  every prompt carries. A memory can be talked over (that is what
-  gaslighting is), but what the Steward told them, the rulebook, and their
-  own deeds cannot: a claim contradicting those is a lie whoever else said it
-  first.
+  every prompt is taken to carry, their own acts included (``Knows.own``): a
+  step they took, a thing they took, poured, forged or planted, words they
+  said or wrote. A memory can be talked over (that is what gaslighting is),
+  but what the Steward told them, the rulebook, and their own deeds cannot: a
+  claim contradicting those is a lie whoever else said it first.
 * **mistake** — consistent with what the speaker perceived, and that
   perception was wrong: the clerk's rough tally, a forged signature, a
   disguise in dim light, an honest log the light fooled. A guess offered as
   one ("I think…") that turns out wrong is a mistake too, and so is a claim
-  contradicted only by a record that had left the speaker's prompt: they
-  forgot.
+  contradicted only by something they witnessed or were told whose record
+  had left their prompt: they forgot.
 * The forgetting never excuses a falsehood the speaker planted themselves
   (``own_plant``): the same claim sent earlier with a tool made to plant it
   (``PLANTING``: a gaslight, a rumour they started, a note they forged,
@@ -553,7 +554,7 @@ class _Judge:
                 f"{name(book.game, planter)}.",
             )
         if contradicted:
-            in_view = self._in_front(claim, knows)
+            in_view = True if knows.own else self._in_front(claim, knows)
             own = own_plant(book, self.claims, claim)
             if in_view is False and own is None:
                 return Verdict(
@@ -1076,11 +1077,15 @@ class Knows:
     """What the speaker knew against a claim. ``against`` is their records
     that contradict it; ``certain`` says it is contradicted by what cannot be
     talked over — their role, the roles they were told, the rulebook, their
-    own deeds — and ``always_shown`` that every prompt they saw carried it."""
+    own deeds — and ``always_shown`` that every prompt they saw carried it.
+    ``own`` says the records against it are the speaker's own acts, which a
+    prompt is taken to carry whatever its seen list holds (SPEC §5), so the
+    speaker cannot have forgotten them."""
 
     against: list[int] = field(default_factory=list)
     certain: bool = False
     always_shown: bool = False
+    own: bool = False
     why: str = ""
 
 
@@ -1130,6 +1135,7 @@ def _knew_location(book: Book, claim: Claim) -> Knows:
             return Knows(
                 against=[entry.seq for entry, _ in own][:12]
                 or [stay.seq_from for stay in mine if stay.seq_from][:12],
+                own=True,
                 why="They were never in that room then, and their own steps say so.",
             )
         if not claim.polarity and was_there and claim.target is None:
@@ -1137,6 +1143,7 @@ def _knew_location(book: Book, claim: Claim) -> Knows:
                 against=[
                     entry.seq for entry, record in own if record.from_room == claim.room
                 ][:12],
+                own=True,
                 why="They were in that room then, and their own steps say so.",
             )
         if not claim.polarity and claim.target is not None:
@@ -1218,6 +1225,7 @@ def _knew_action(book: Book, claim: Claim) -> Knows:
         return Knows(
             against=against,
             certain=True,
+            own=True,
             why="It is their own deed, and they know what they did.",
         )
     if not claim.polarity:
@@ -1242,6 +1250,7 @@ def _knew_action(book: Book, claim: Claim) -> Knows:
             return Knows(
                 against=did[:12],
                 certain=True,
+                own=True,
                 why="They did it themselves, and laid it on someone else.",
             )
     return Knows()
@@ -1275,11 +1284,15 @@ def _knew_possession(book: Book, claim: Claim) -> Knows:
         if believed is None:
             continue
         holder, seq = believed
+        known = book.ledger[seq - 1]
+        own = known.actor_id == speaker and known.type in CUSTODY_TYPES
         if claim.subject == speaker:
             if claim.polarity != (holder == speaker):
-                return Knows(against=[seq], why="Their own hands say otherwise.")
+                return Knows(
+                    against=[seq], own=own, why="Their own hands say otherwise."
+                )
         elif claim.polarity and holder == speaker:
-            return Knows(against=[seq], why="They held it themselves.")
+            return Knows(against=[seq], own=own, why="They held it themselves.")
     return Knows()
 
 
@@ -1314,6 +1327,7 @@ def _knew_tally(book: Book, claim: Claim) -> Knows:
     if says_idle and (worked or subject in heard):
         return Knows(
             against=worked[:6] or [heard["@"]],
+            own=bool(worked) and subject == speaker,
             why="They saw the work done, or heard it tallied.",
         )
     if (
