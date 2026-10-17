@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from badactors.castle.show import load_feed
+from badactors.castle.show import load_feed, vocabulary
 
 ROOT = Path(__file__).resolve().parent.parent
 DIGESTS = Path(__file__).resolve().parent / "fixtures" / "feeds" / "digests.json"
@@ -49,7 +49,7 @@ def test_an_export_is_the_same_every_time(
 ) -> None:
     out, _ = exported
     _script().export([56], tmp_path)
-    for name in ("seed-56.json", "index.json"):
+    for name in ("seed-56.json", "index.json", "show.json"):
         assert (tmp_path / name).read_bytes() == (out / name).read_bytes()
 
 
@@ -77,7 +77,9 @@ def test_the_index_lists_each_exported_seed_as_a_bot_game(
         "cards",
         "index.json",
         "seed-56.json",
+        "show.json",
     ]
+    assert json.loads((out / "show.json").read_text()) == vocabulary()
     feed = load_feed(out / "seed-56.json")
     assert sorted(p.name for p in (out / "cards" / "seed-56").iterdir()) == sorted(
         f"{claim.id}.svg" for claim in feed.claims

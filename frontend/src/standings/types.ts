@@ -37,6 +37,10 @@ export type BoardRow = {
     targeted: number;
     fell_for: number;
   };
+  /** Turns in a traitor's seat it refused outright: the villain role declined. */
+  traitor_refusals: { refused: number; turns: number; rate: number | null };
+  /** Offers to join the traitors it turned down. */
+  recruit_refusals: { refused: number; offers: number };
   reliability: Reliability;
   cost: { dollars: number; priced_games: number; per_game: number | null };
 };
@@ -145,14 +149,16 @@ export type SeatRow = {
   gave_in: number;
   votes: number;
   evidence_votes: number;
-  offers: number;
-  offers_refused: number;
+  traitor_turns: number;
+  traitor_refusals: number;
+  recruit_offers: number;
+  recruit_refusals: number;
   attempts: number;
   targeted: number;
   steered: number;
   fell_for: number;
   /** The first and last tick of each kind of thing that happened, when it did. */
-  ticks: Partial<Record<"lies" | "unforced_lies" | "planted" | "implanted" | "evidence_votes" | "refused_offer" | "steered" | "fell_for", Span>>;
+  ticks: Partial<Record<"lies" | "unforced_lies" | "planted" | "implanted" | "evidence_votes" | "declined" | "turned_down" | "steered" | "fell_for", Span>>;
 };
 
 export type GameRow = { id: string; seed: number; winner: string | null; ticks: Span; bundle: string; head: string };

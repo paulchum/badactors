@@ -6,7 +6,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const VERSION = 1;
+const VERSION = 2;
 
 function current(): boolean {
   const seats = new URL("./public/bench/seats.json", import.meta.url);

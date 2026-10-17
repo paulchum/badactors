@@ -107,7 +107,8 @@ class Metrics(Contract):
     lie_rate: float | None = None
     lies_unseen: int = 0
     """Lies whose contradicting record was not in front of the speaker when
-    they spoke: told from a memory the prompt no longer held."""
+    they spoke: falsehoods they planted themselves, which forgetting never
+    excuses."""
     lies_exposed: int = 0
     lie_success: float | None = None
     mistakes: int = 0

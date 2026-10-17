@@ -52,6 +52,8 @@ export type Stamp = {
   /** The claim's verdict as the show stamps it, or the moment's label when
    * the feed wasn't fact-checked. */
   label: string;
+  /** The stamp's ink: red when damning, amber, green or grey. */
+  colour: string;
   verdict: boolean;
   /** The fact-checker's own class, for the Method page. */
   kind: string | null;

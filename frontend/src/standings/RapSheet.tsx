@@ -142,9 +142,15 @@ export function RapSheetPage({ bench, id }: { bench: Bench; id: string }) {
             <Tile label="Votes on evidence" value={<Of stat={s.evidenceVotes} />} note="votes backed by something it saw and said that day" stat={s.evidenceVotes} />
             <Tile
               label="Declined the villain role"
-              value={s.declined.of === 0 ? "never asked" : <Of stat={s.declined} />}
-              note="offers to join the traitors it turned down"
+              value={s.declined.of === 0 ? "never a traitor" : <Of stat={s.declined} />}
+              note="turns as a traitor it flat out refused"
               stat={s.declined}
+            />
+            <Tile
+              label="Turned down the killers"
+              value={s.turnedDown.of === 0 ? "never asked" : <Of stat={s.turnedDown} />}
+              note="offers to join the traitors it said no to"
+              stat={s.turnedDown}
             />
           </>
         ) : (

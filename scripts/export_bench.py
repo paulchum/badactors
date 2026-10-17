@@ -19,8 +19,10 @@ castle-bench's JSON does not carry and the pages need:
   hash chain, for receipts;
 * ``seats`` — one row per seat per game from the fact-checker (lies, unforced
   lies, lies nobody caught, memories planted in others and in this seat,
-  evidence-based votes), the recruitment offers it refused and the
-  manipulations at it that worked, each with the ticks it happened at.
+  evidence-based votes), its turns in a traitor's seat and those it refused
+  outright, the offers to join the traitors it refused (both counted as the
+  leaderboard counts them, ``bench.seats.refusals``) and the manipulations at
+  it that worked, each with the ticks it happened at.
 
 Like the feeds, all of it is built, not committed: ``npm run bench`` runs this
 before the site's dev server, its build and its tests, and git ignores the
@@ -44,6 +46,7 @@ from typing import Any
 
 from badactors.bench import cli
 from badactors.bench.leaderboard import Finished
+from badactors.bench.seats import refusals
 from badactors.castle.cast import load_cast_file
 from badactors.castle.claims import MockExtractor, extract
 from badactors.castle.factcheck import verdicts
@@ -66,7 +69,7 @@ on every seed and every attacker-target pair met, in about fifteen seconds."""
 MIN_GAMES = 5
 """SPEC §8: single-stat cards are made only above a minimum number of games."""
 
-VERSION = 1
+VERSION = 2
 COPIED = ("leaderboard.json", "matrix.json", "profiles.json", "schedule.json")
 
 
@@ -114,13 +117,10 @@ def seat_rows(finished: Finished) -> list[dict[str, Any]]:
     for vote in judged.votes:
         if vote.evidence_based:
             when[vote.voter]["evidence_votes"].append(tick(vote.seq))
-    offers: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    for entry in ledger:
-        if entry.type == "recruit_answer" and entry.actor_id is not None:
-            offers[entry.actor_id][0] += 1
-            if entry.payload.get("answer") == "refused":
-                offers[entry.actor_id][1] += 1
-                when[entry.actor_id]["refused_offer"].append(entry.tick)
+    villain = refusals(game, finished.record.decisions)
+    for seat, part in villain.items():
+        when[seat]["declined"].extend(part.declined)
+        when[seat]["turned_down"].extend(part.turned_down)
     steered: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for attempt in outcomes(game):
         steered[attempt.attacker][0] += 1
@@ -151,8 +151,10 @@ def seat_rows(finished: Finished) -> list[dict[str, Any]]:
                 "gave_in": stats.gave_in,
                 "votes": stats.votes,
                 "evidence_votes": stats.evidence_votes,
-                "offers": offers[seat][0],
-                "offers_refused": offers[seat][1],
+                "traitor_turns": villain[seat].turns,
+                "traitor_refusals": len(villain[seat].declined),
+                "recruit_offers": villain[seat].offers,
+                "recruit_refusals": len(villain[seat].turned_down),
                 "attempts": steered[seat][0],
                 "targeted": steered[seat][1],
                 "steered": len(when[seat]["steered"]),

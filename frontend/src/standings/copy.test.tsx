@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 import { App } from "../App";
 import { parseRoute, routeSearch } from "../route";
 import { shareCard } from "./card";
-import { bundledBench } from "./fixture";
+import { bundledBench, entrant } from "./fixture";
 import { GLOSSARY } from "./Method";
 import { archetype, ARCHETYPES, gaslitCaptions, QUADRANTS } from "./rules";
 import { Page, type StandingsRoute } from "./Site";
+import { declined, turnedDown } from "./Standings";
 import { BotLabel, Shell } from "./ui";
 
 const INTERNAL = /\b(ledger|seq|verdicts?|scoped|entrant|reference_bots?|heuristic)\b/i;
@@ -66,10 +67,48 @@ describe("audience copy", () => {
   });
 });
 
+describe("the two refusals", () => {
+  it("say the villain role declined in turns as a traitor, and the killers turned down in offers", () => {
+    const refuser = entrant("bot:x/a", 6, (i) =>
+      i === 0 ? { traitor: true, traitor_turns: 40, traitor_refusals: 2, recruit_offers: 0, ticks: { declined: [5, 9] } } : { recruit_offers: 1, recruit_refusals: 1, ticks: { turned_down: [30, 30] } },
+    );
+    expect(declined(refuser)).toBe("2 of 40 turns as a traitor");
+    expect(turnedDown(refuser)).toBe("5 of 5 offers");
+    expect(refuser.stats?.declined.receipts.map((r) => r.ticks)).toEqual([[5, 9]]);
+    const quiet = entrant("bot:x/b", 6, (i) => (i === 0 ? { recruit_offers: 1 } : {}));
+    expect(declined(quiet)).toBe("never a traitor");
+    expect(turnedDown(quiet)).toBe("0 of 1 offer");
+    expect(turnedDown(entrant("bot:x/c", 6))).toBe("never asked");
+  });
+
+  it("are on the standings and every rap sheet, apart", () => {
+    const standings = text(page({ page: "standings" }));
+    expect(standings).toContain("Declined the villain role");
+    expect(standings).toContain("Turned down the killers");
+    expect(standings).toContain(declined(bot));
+    for (const entrant of bench.bots.entrants) {
+      const sheet = text(page({ page: "model", id: entrant.id }));
+      expect(sheet).toContain("Declined the villain role");
+      expect(sheet).toContain("Turned down the killers");
+    }
+  });
+});
+
 describe("the Method page", () => {
+  it("defines both refusals and how an episode is numbered and titled", () => {
+    const shows = GLOSSARY.map(([show]) => show);
+    for (const term of ["Declined the villain role", "Turned down the killers", "Episode"]) expect(shows).toContain(term);
+    const words = text(page({ page: "method" }));
+    expect(words).toContain("traitor_refusals.rate");
+    expect(words).toContain("recruit_refusals");
+    expect(words).toContain("Two numbers, never one.");
+    expect(words).toContain("numbered by its seed and titled by the diary line on the moment the show leads with");
+    expect(words).toContain("Nights 0 to 199");
+  });
+
   it("maps every show term to its technical one, and gives the verify command", () => {
     const html = page({ page: "method" });
-    for (const term of ["Receipts", "Who Gaslit Whom", "The Sociopath vs. Sucker Matrix", "GASLIT", "Tryouts", "The bot cast", "Standings"]) {
+    for (const term of ["Receipts", "Who Gaslit Whom", "The Sociopath vs. Sucker Matrix", "Tryouts", "The bot cast", "Standings"]) {
       expect(GLOSSARY.map(([show]) => show)).toContain(term);
       expect(html).toContain(term);
     }

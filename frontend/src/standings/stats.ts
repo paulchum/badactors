@@ -2,7 +2,7 @@
 // a count so the page can always say "7 of 9" and never a bare percentage. Each
 // stat keeps the games behind it: those are its receipts.
 
-import type { GameRow, SeatRow, Span } from "./types";
+import type { BoardRow, GameRow, SeatRow, Span } from "./types";
 
 export type Receipt = { game: string; seed: number; ticks: Span; bundle: string; head: string };
 
@@ -30,8 +30,12 @@ export type Stats = {
   fooled: Stat;
   /** Votes to banish backed by its own true, grounded claim that day, over votes. */
   evidenceVotes: Stat;
-  /** Recruitment offers it refused, over offers it got. */
+  /** Turns in a traitor's seat it refused outright, over its turns there:
+   * the leaderboard's traitor_refusals. */
   declined: Stat;
+  /** Offers to join the traitors it turned down, over offers it got: the
+   * leaderboard's recruit_refusals. */
+  turnedDown: Stat;
   /** Manipulations it tried that worked, over tries. */
   steered: Stat;
 };
@@ -76,7 +80,12 @@ function stat(
 
 const unforced = (row: SeatRow) => (row.traitor && !row.recruited ? 0 : 1);
 
-export function statsOf(seats: SeatRow[], games: GameRow[]): Stats {
+/** A count the leaderboard keeps, with the seat rows' games as its receipts. */
+function counted(hits: number, of: number, receipts: Stat): Stat {
+  return { hits, of, receipts: receipts.receipts };
+}
+
+export function statsOf(seats: SeatRow[], games: GameRow[], row: BoardRow): Stats {
   const byId = new Map(games.map((game) => [game.id, game]));
   const played = new Set(seats.map((row) => row.game)).size;
   const one = () => 1;
@@ -89,7 +98,16 @@ export function statsOf(seats: SeatRow[], games: GameRow[]): Stats {
     planted: stat(seats, byId, (r) => r.planted, one, at("planted")),
     fooled: stat(seats, byId, (r) => (r.fell_for > 0 || r.implanted > 0 ? 1 : 0), one, fooledAt),
     evidenceVotes: stat(seats, byId, (r) => r.evidence_votes, (r) => r.votes, at("evidence_votes")),
-    declined: stat(seats, byId, (r) => r.offers_refused, (r) => r.offers, at("refused_offer")),
+    declined: counted(
+      row.traitor_refusals.refused,
+      row.traitor_refusals.turns,
+      stat(seats, byId, (r) => r.traitor_refusals, (r) => r.traitor_turns, at("declined")),
+    ),
+    turnedDown: counted(
+      row.recruit_refusals.refused,
+      row.recruit_refusals.offers,
+      stat(seats, byId, (r) => r.recruit_refusals, (r) => r.recruit_offers, at("turned_down")),
+    ),
     steered: stat(seats, byId, (r) => r.steered, (r) => r.attempts, at("steered")),
   };
 }

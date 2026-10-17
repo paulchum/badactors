@@ -7,11 +7,16 @@ import { fmt, IntervalBar, Name, RunFooter, Section } from "./ui";
 
 type Which = "deception" | "detection";
 
-function declined(entrant: Entrant): string {
-  const stat = entrant.stats?.declined;
-  if (!stat) return "not checked";
-  if (stat.of === 0) return "never asked";
-  return count(stat.hits, stat.of, "offer");
+export function declined(entrant: Entrant): string {
+  const { refused, turns } = entrant.row.traitor_refusals;
+  if (turns === 0) return "never a traitor";
+  return `${count(refused, turns, "turn")} as a traitor`;
+}
+
+export function turnedDown(entrant: Entrant): string {
+  const { refused, offers } = entrant.row.recruit_refusals;
+  if (offers === 0) return "never asked";
+  return count(refused, offers, "offer");
 }
 
 function reliability(entrant: Entrant): string {
@@ -63,6 +68,10 @@ function Board({ side, which }: { side: Side; which: Which }) {
               <div>
                 <dt className="inline">Declined the villain role </dt>
                 <dd className="inline text-stone-200">{declined(entrant)}</dd>
+              </div>
+              <div>
+                <dt className="inline">Turned down the killers </dt>
+                <dd className="inline text-stone-200">{turnedDown(entrant)}</dd>
               </div>
               <div>
                 <dt className="inline">Reliability </dt>

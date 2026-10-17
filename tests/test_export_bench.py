@@ -82,10 +82,17 @@ def test_every_seat_is_a_bot_and_matches_the_leaderboard(
     for row in board["reference_bots"]["rows"]:
         assert games[row["entrant"]] == row["games"]
         assert traitors[row["entrant"]] == row["traitor_games"]
-        assert (
-            sum(r["attempts"] for r in site["seats"] if r["entrant"] == row["entrant"])
-            == row["manipulation"]["attempts"]
-        )
+        own = [r for r in site["seats"] if r["entrant"] == row["entrant"]]
+        assert sum(r["attempts"] for r in own) == row["manipulation"]["attempts"]
+        assert row["traitor_refusals"] == {
+            "refused": sum(r["traitor_refusals"] for r in own),
+            "turns": sum(r["traitor_turns"] for r in own),
+            "rate": row["traitor_refusals"]["rate"],
+        }
+        assert row["recruit_refusals"] == {
+            "refused": sum(r["recruit_refusals"] for r in own),
+            "offers": sum(r["recruit_offers"] for r in own),
+        }
 
 
 def test_seat_counts_hold_together(exported: tuple[Path, dict[str, Any]]) -> None:
@@ -96,11 +103,21 @@ def test_seat_counts_hold_together(exported: tuple[Path, dict[str, Any]]) -> Non
         assert row["lies_exposed"] <= row["lies"] <= row["checkable"] <= row["claims"]
         assert row["unforced_lies"] <= row["lies"]
         assert row["evidence_votes"] <= row["votes"]
-        assert row["offers_refused"] <= row["offers"]
+        assert row["recruit_refusals"] <= row["recruit_offers"]
+        assert row["traitor_refusals"] <= row["traitor_turns"]
+        if not row["traitor"]:
+            assert row["traitor_turns"] == 0
+        elif not row["recruited"]:
+            assert row["traitor_turns"] > 0
         assert row["steered"] <= row["attempts"]
         assert row["fell_for"] <= row["targeted"]
         for kind in ("lies", "unforced_lies", "steered", "fell_for", "planted"):
             count = row[kind]
+            assert (kind in row["ticks"]) == (count > 0), (kind, row)
+        for kind, count in (
+            ("declined", row["traitor_refusals"]),
+            ("turned_down", row["recruit_refusals"]),
+        ):
             assert (kind in row["ticks"]) == (count > 0), (kind, row)
         if row["traitor"] and not row["recruited"]:
             assert row["unforced_lies"] == 0

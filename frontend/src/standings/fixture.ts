@@ -40,6 +40,8 @@ export function boardRow(entrant: string, over: Partial<BoardRow> = {}): BoardRo
     detection_accuracy: 0.3,
     heat_share: 0.1,
     manipulation: { attempts: 4, succeeded: 1, success_rate: 0.25, attempts_per_traitor_game: 1.3, targeted: 2, fell_for: 0 },
+    traitor_refusals: { refused: 0, turns: 0, rate: null },
+    recruit_refusals: { refused: 0, offers: 0 },
     reliability: {
       turns: 100,
       failed_turns: {},
@@ -78,8 +80,10 @@ export function seat(entrant: string, index: number, over: Partial<SeatRow> = {}
     gave_in: 0,
     votes: 2,
     evidence_votes: 0,
-    offers: 0,
-    offers_refused: 0,
+    traitor_turns: 0,
+    traitor_refusals: 0,
+    recruit_offers: 0,
+    recruit_refusals: 0,
     attempts: 0,
     targeted: 0,
     steered: 0,
@@ -93,13 +97,25 @@ export function seat(entrant: string, index: number, over: Partial<SeatRow> = {}
 export function entrant(id: string, games: number, per: (i: number) => Partial<SeatRow> = () => ({}), row: Partial<BoardRow> = {}): Entrant {
   const seats = Array.from({ length: games }, (_, i) => seat(id, i, per(i)));
   const rows = Array.from({ length: games }, (_, i) => game(i));
+  const sum = (pick: (seat: SeatRow) => number) => seats.reduce((total, s) => total + pick(s), 0);
+  const traitorTurns = sum((s) => s.traitor_turns);
+  const board = boardRow(id, {
+    games,
+    traitor_refusals: {
+      refused: sum((s) => s.traitor_refusals),
+      turns: traitorTurns,
+      rate: traitorTurns > 0 ? sum((s) => s.traitor_refusals) / traitorTurns : null,
+    },
+    recruit_refusals: { refused: sum((s) => s.recruit_refusals), offers: sum((s) => s.recruit_offers) },
+    ...row,
+  });
   return {
     id,
     name: entrantName(id),
     lab: labName(id),
     colour: labColour(id),
     bot: isBot(id),
-    row: boardRow(id, { games, ...row }),
-    stats: statsOf(seats, rows),
+    row: board,
+    stats: statsOf(seats, rows, board),
   };
 }

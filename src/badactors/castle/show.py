@@ -32,6 +32,12 @@ brackets, so the edit shows and the quote still matches the ledger. Seats one
 model shares are numbered, and a seat a reference bot played is a "Reference
 bot", never a model. The feed carries both names, so a renderer can switch.
 
+The show's words for verdicts and moments live in one place: the stamps, the
+ink each is printed in, and the moments' labels, as SPEC §8 lists them.
+:func:`vocabulary` hands them to every renderer that is not Python (the site's
+viewer and standings check their copies against it, and the clips carry each
+stamp's colour in their props).
+
 Nothing here reaches a player. The feed is the audience's, and holds the truth.
 """
 
@@ -42,7 +48,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import Field
 
@@ -64,7 +70,17 @@ from badactors.castle.factcheck import Knowledge, Label, Truth, Verdict, describ
 from badactors.castle.factcheck import verdicts as judge
 from badactors.castle.game import GameState
 from badactors.castle.interview import ExitWhy, why_out
-from badactors.castle.moments import Moment, Stamp, detect, numbered, stamp
+from badactors.castle.moments import (
+    LABELS,
+    STAMPS,
+    TONES,
+    WORST,
+    Moment,
+    Stamp,
+    detect,
+    numbered,
+    stamp,
+)
 from badactors.castle.play import (
     GameRecord,
     Outcome,
@@ -453,7 +469,10 @@ class FeedClaim(Contract):
     hedged: bool = False
     took: Took | None = None
     in_view: bool | None = None
-    """For a lie: whether the record against it was in front of the speaker."""
+    """For a lie, or a falsehood the speaker forgot: whether the record against
+    it was in front of the speaker."""
+    own_plant: int | None = None
+    """For a lie: the event in which the speaker planted it themselves."""
     invented_as: Literal["bluff", "confabulation"] | None = None
     planted_by: str | None = None
     origin: int | None = None
@@ -619,6 +638,7 @@ def _claims(
                 hedged=claim.hedged,
                 took=took,
                 in_view=verdict.in_view,
+                own_plant=verdict.own_plant,
                 invented_as=verdict.invented_as,
                 planted_by=verdict.planted_by,
                 origin=verdict.path[0] if verdict.path else None,
@@ -654,10 +674,12 @@ def _why(game: GameState, verdict: Verdict) -> str:
     if label == "evasive":
         return "True, and not what was asked."
     if label == "lie":
-        if verdict.in_view is False:
-            return f"{speaker} knew better, though not lately."
+        if verdict.own_plant is not None:
+            return f"{speaker} planted that story first, then told it again."
         return f"{speaker} knew better. The proof was in plain view."
     if label == "mistake":
+        if verdict.in_view is False:
+            return f"Wrong. {speaker} knew once, and forgot."
         if verdict.claim.hedged and not verdict.grounds:
             return "A guess. A wrong one."
         return f"Wrong, but it's what {speaker} saw."
@@ -681,6 +703,20 @@ def _why(game: GameState, verdict: Verdict) -> str:
     if label == "broken":
         return f"{speaker} said one thing and did another."
     return "Nothing on the tape either way."
+
+
+def vocabulary() -> dict[str, object]:
+    """The show's words, as every renderer must print them (SPEC §8): each
+    stamp and its ink in the spec's order, the stamp each fact-checker class
+    gets (GASLIT for an implanted belief taken up with the truth in view), the
+    order a moment picks among its claims' stamps, and each moment's label."""
+    return {
+        "stamps": [{"stamp": name, "tone": TONES[name]} for name in get_args(Stamp)],
+        "classes": dict(STAMPS),
+        "gave_in": "GASLIT",
+        "worst": list(WORST),
+        "labels": dict(LABELS),
+    }
 
 
 def played_by(agent: str) -> PlayedBy:
@@ -940,4 +976,5 @@ __all__ = [
     "positions",
     "save_feed",
     "seat_colour",
+    "vocabulary",
 ]

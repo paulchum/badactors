@@ -11,8 +11,9 @@ lays out the beats SPEC §8 puts in order, one at a time:
    actually wrote down, and the entries that prove the verdict, in plain words;
 3. **the line**: the speaker's own private line, verbatim;
 4. **the stamp**: the claim's verdict as the show stamps it (COLD-BLOODED LIE,
-   GASLIT), with the fact-checker's class in the data; a feed that wasn't
-   fact-checked stamps the moment's label instead, and says so;
+   GASLIT), in its ink (red when damning, amber, green, grey), with the
+   fact-checker's class in the data; a feed that wasn't fact-checked stamps the
+   moment's label instead, and says so;
 5. **the receipt**: castle, game, seed, tick range and claim, so every clip can
    be checked against its game.
 
@@ -49,7 +50,7 @@ from badactors.castle.contracts import (
     Lighting,
 )
 from badactors.castle.episode import REFERENCE_BANNER
-from badactors.castle.moments import LineField, title_line
+from badactors.castle.moments import TONES, LineField, Tone, title_line
 from badactors.castle.show import (
     Feed,
     FeedClaim,
@@ -66,6 +67,13 @@ WIDTH = 1080
 HEIGHT = 1920
 
 LEDGER_ONLY = "Not fact-checked. This is just what the tape shows."
+PALETTE: dict[Tone, str] = {
+    "red": "#e0343c",
+    "amber": "#f2b134",
+    "green": "#4cc38a",
+    "grey": "#a59d90",
+}
+"""The ink for each tone of stamp, on the share cards and in the video."""
 PROOF_LIMIT = 3
 _ROUTINE = frozenset(
     {"plan_formed", "plan_cut", "replan_capped", "wait", "phase_opened"}
@@ -171,6 +179,9 @@ class Stamp(Contract):
     label: str
     """The stamp: the claim's verdict as the show calls it, or, unchecked, the
     moment's label."""
+    colour: str = Field(pattern=r"^#[0-9a-f]{6}$")
+    """The stamp's ink (``moments.TONES``, drawn from ``PALETTE``); a moment's
+    label, unchecked, is printed in red."""
     verdict: bool
     """Whether the fact-checker gave it, rather than the ledger alone."""
     kind: str | None = None
@@ -269,6 +280,7 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
     )
     stamp = Stamp(
         label=ruled.stamp if ruled is not None else moment.label,
+        colour=PALETTE[TONES[ruled.stamp] if ruled is not None else "red"],
         verdict=ruled is not None,
         kind=ruled.label if ruled is not None else None,
         moment=moment.label,
@@ -652,18 +664,6 @@ def _wrapped(text: str, indent: str, most: int) -> list[str]:
 
 CARD_WIDTH = 1200
 CARD_HEIGHT = 630
-_TONES = {
-    "COLD-BLOODED LIE": "#e0343c",
-    "GASLIT": "#e0343c",
-    "MADE IT UP": "#e0343c",
-    "BROKE ITS WORD": "#e0343c",
-    "IMPLANTED MEMORY": "#f2b134",
-    "HONEST MISTAKE": "#f2b134",
-    "DODGED": "#f2b134",
-    "TRUE": "#4cc38a",
-    "KEPT ITS WORD": "#4cc38a",
-    "NO WAY TO TELL": "#a59d90",
-}
 
 
 def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
@@ -675,7 +675,7 @@ def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
     quote = view.quote(event) or claim.said
     lines = textwrap.wrap(f"“{quote}”", width=46, max_lines=3, placeholder=" …”")
     why = textwrap.wrap(view.why(claim), width=70, max_lines=2, placeholder=" …")
-    colour = _TONES[claim.stamp]
+    colour = PALETTE[TONES[claim.stamp]]
     size = 60 if len(claim.stamp) <= 10 else 44
     receipt = (
         f"{game.castle} · seed {game.seed} · day {claim.day}, tick {claim.tick} · "
@@ -785,6 +785,7 @@ __all__ = [
     "HEIGHT",
     "HIGHLIGHT_LINES",
     "LEDGER_ONLY",
+    "PALETTE",
     "PROOF_LIMIT",
     "REFERENCE_BANNER",
     "WIDTH",

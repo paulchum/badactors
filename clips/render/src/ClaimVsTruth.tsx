@@ -563,10 +563,10 @@ function StampScene({ stamp }: { stamp: Stamp }) {
         style={{
           transform: `rotate(-9deg) scale(${scale})`,
           opacity: interpolate(frame, [0, 4], [0, 1], { extrapolateRight: "clamp" }),
-          border: `12px solid ${RED}`,
+          border: `12px solid ${stamp.colour}`,
           borderRadius: 18,
           padding: "26px 44px",
-          color: RED,
+          color: stamp.colour,
           fontSize: size,
           fontWeight: 900,
           letterSpacing: 6,
