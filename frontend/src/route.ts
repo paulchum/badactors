@@ -7,7 +7,6 @@ import { useCallback, useEffect, useState } from "react";
 export type Route =
   | { page: "landing" }
   | { page: "viewer"; game: string | null; tick: number | null; moment: string | null; claim?: string | null }
-  | { page: "leaderboard" }
   | { page: StandingsPage }
   | { page: "model"; id: string };
 
@@ -16,7 +15,7 @@ const STANDINGS: readonly string[] = ["standings", "gaslit", "matrix", "method"]
 
 export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
-  if (params.get("page") === "leaderboard") return { page: "leaderboard" };
+  if (params.get("page") === "leaderboard") return { page: "standings" };
   const page = params.get("page") ?? "";
   if (STANDINGS.includes(page)) return { page: page as StandingsPage };
   if (page === "model" && params.get("id")) return { page: "model", id: params.get("id") ?? "" };
@@ -35,7 +34,6 @@ export function parseRoute(search: string): Route {
 
 export function routeSearch(route: Route): string {
   if (route.page === "landing") return "";
-  if (route.page === "leaderboard") return "?page=leaderboard";
   if (route.page === "model") return `?${new URLSearchParams({ page: "model", id: route.id }).toString()}`;
   if (route.page !== "viewer") return `?page=${route.page}`;
   const params = new URLSearchParams();

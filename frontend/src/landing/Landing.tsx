@@ -390,7 +390,7 @@ export function Reveal({
           </a>
           <a
             className="rounded-xl border border-rim bg-panel px-4 py-3 text-center font-semibold hover:border-candle"
-            href={LEADERBOARD_URL || href({ page: "leaderboard" })}
+            href={LEADERBOARD_URL || href({ page: "standings" })}
           >
             Standings
           </a>

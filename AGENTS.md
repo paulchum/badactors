@@ -28,7 +28,9 @@ src/badactors/
                     cli (castle-bench)
   server/           FastAPI app: owner-access guard and health check
 clips/render/       Remotion project for claim-versus-truth clips
-frontend/           React + Vite placeholder for the castle spectator
+frontend/           the static site: WHO'S LYING?, the replay viewer with claim
+                    receipts, and the standings pages, built from feeds and
+                    bench files the engine exports at build time
 scripts/            castle_three_days.py, a model-free walk through the world
 ```
 

@@ -23,7 +23,7 @@ describe("routes", () => {
     expect(route).toEqual({ page: "viewer", game: "seed-56", tick: 41, moment: "twist_ending-1110", claim: null });
     expect(routeSearch(route)).toBe("?game=seed-56&tick=41&moment=twist_ending-1110");
     expect(parseRoute("")).toEqual({ page: "landing" });
-    expect(parseRoute("?page=leaderboard")).toEqual({ page: "leaderboard" });
+    expect(parseRoute("?page=leaderboard")).toEqual({ page: "standings" });
     expect(parseRoute("?game=seed-56&tick=-3")).toMatchObject({ tick: null });
   });
 });

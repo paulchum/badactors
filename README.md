@@ -232,7 +232,7 @@ Rendering takes Node.js and about 20 seconds a clip. A clip of a bot game says s
 cd frontend && npm ci && npm run test && npm run build && npm run preview
 ```
 
-`/` is WHO'S LYING?, `?game=seed-56` opens the replay viewer and `?page=leaderboard` is a placeholder for the standings. Dev, test and build all export the bundled bot games first (`npm run feeds`, which runs `scripts/export_feeds.py` through uv). The build is static and runs from any folder.
+`/` is WHO'S LYING?, `?game=seed-56` opens the replay viewer and `?page=standings` is the standings. Dev, test and build all export the bundled bot games first (`npm run feeds`, which runs `scripts/export_feeds.py` through uv). The build is static and runs from any folder.
 
 ### Checks
 
