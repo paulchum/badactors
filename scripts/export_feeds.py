@@ -1,8 +1,8 @@
 """Write the audience feeds the static spectator bundles, and their index.
 
 Each seed is played exactly as ``castle-game --seed N`` plays it: the shipped
-map, cast and numbers, with the seeded heuristic bot in every seat. No model is
-asked anything. The feeds land in ``frontend/public/games/`` beside an
+map, cast and numbers, with the seeded heuristic bot in every seat, and fact-checked
+with the mock extractor. No model is asked anything. The feeds land in ``frontend/public/games/`` beside an
 ``index.json`` the site reads first, and every one is labelled a bot game.
 They are built, not committed: ``npm run build``, ``npm run dev`` and the
 frontend tests run this first (``npm run feeds``), and git ignores the folder.
@@ -23,7 +23,7 @@ from badactors.castle.cast import load_cast_file
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import Feed, audience_feed, save_feed
+from badactors.castle.show import Feed, audience_feed, checked, save_feed
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIGS = ROOT / "configs" / "castle"
@@ -37,7 +37,7 @@ have a forged note that works; in 35 the household banishes five of its own
 and the traitors win; on day 1 of 30 a traitor's accusation fools every one of
 the Faithful. Each has a round table for the landing game."""
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 def play(seed: int) -> Feed:
@@ -51,13 +51,15 @@ def play(seed: int) -> Feed:
         {pid: bot for pid in game.world.seats},
         models=list(cast.models().values()),
     )
-    return audience_feed(record(castle, cast, played))
+    stored = record(castle, cast, played)
+    return audience_feed(stored, checked(stored))
 
 
 def summary(game_id: str, feed: Feed) -> dict[str, object]:
     """What the site's game list shows before it loads a feed."""
     game = feed.game
     kinds = Counter(moment.kind for moment in feed.moments)
+    stamps = Counter(claim.stamp for claim in feed.claims)
     top = feed.moments[0] if feed.moments else None
     return {
         "id": game_id,
@@ -73,6 +75,9 @@ def summary(game_id: str, feed: Feed) -> dict[str, object]:
         "moments": len(feed.moments),
         "kinds": dict(sorted(kinds.items())),
         "twist": kinds["twist_ending"] > 0,
+        "fact_checked": game.fact_checked,
+        "claims": len(feed.claims),
+        "stamps": dict(sorted(stamps.items())),
         "headline": top.headline if top is not None else None,
     }
 

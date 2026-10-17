@@ -29,7 +29,7 @@ from badactors.castle.metrics import per_game
 from badactors.castle.metrics import printout as measures
 from badactors.castle.play import record, run_game, save_record, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import NameStyle, audience_feed, save_feed
+from badactors.castle.show import NameStyle, audience_feed, checked, save_feed
 from badactors.castle.timeline import timeline
 
 _CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
@@ -97,7 +97,9 @@ def main(argv: list[str] | None = None) -> None:
     finished = played.game
     names: NameStyle = "model" if args.model_names else "character"
     stored = record(castle, cast, played)
-    feed = audience_feed(stored) if args.feed or args.highlights else None
+    feed = (
+        audience_feed(stored, checked(stored)) if args.feed or args.highlights else None
+    )
     if args.highlights and feed is not None:
         print(highlights(feed, names=names))
     else:

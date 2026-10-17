@@ -16,6 +16,14 @@ where every player stood at the end of every tick (walking, asleep and dead
 included), each dinner's seating plan, who played each seat, and the game's
 moments (``moments``), best first, which is all a clip is made from.
 
+Given the fact-checker's verdicts, the feed also carries every claim made out
+loud (``claims``): the words, what they assert, the stamp the audience sees, the
+fact-checker's own class and reasons, whether a gaslit speaker gave in or had
+lost the memory, where a planted belief started, and the entries that prove it.
+The moments then read the verdicts too. The feed is a pure function of the
+record and the verdicts; :func:`checked` gives the verdicts the mock extractor's
+claims get, which is what bot games are fact-checked with.
+
 Players only ever know characters, but audience media names each seat by the
 model that played it (SPEC §8). :class:`Naming` does that renaming for the feed
 and the episode alike: narration names the model, and a quote keeps the model's
@@ -38,6 +46,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from badactors.castle.claims import PUBLIC, ClaimKind, MockExtractor, extract
 from badactors.castle.contracts import (
     AtRoom,
     Build,
@@ -51,9 +60,11 @@ from badactors.castle.contracts import (
     Sense,
     WorldState,
 )
+from badactors.castle.factcheck import Knowledge, Label, Truth, Verdict, describe
+from badactors.castle.factcheck import verdicts as judge
 from badactors.castle.game import GameState
 from badactors.castle.interview import ExitWhy, why_out
-from badactors.castle.moments import Moment, detect
+from badactors.castle.moments import Moment, Stamp, detect, numbered, stamp
 from badactors.castle.play import (
     GameRecord,
     Outcome,
@@ -66,7 +77,7 @@ from badactors.castle.play import (
 from badactors.castle.rules import Role
 
 FEED: Literal["badactors.castle.feed"] = "badactors.castle.feed"
-FEED_VERSION: Literal[1] = 1
+FEED_VERSION: Literal[2] = 2
 
 PlayedBy = Literal["model", "bot", "unknown"]
 
@@ -250,6 +261,9 @@ class FeedGame(Contract):
     winner: Role | None
     reference_bots: bool
     """No seat was played by a model. Every renderer says so."""
+    fact_checked: bool
+    """Whether the claims were fact-checked. If not, ``claims`` is empty and the
+    moments are ledger-only."""
     days: int = Field(ge=1)
     ticks: int = Field(ge=0)
     pot: int = Field(ge=0)
@@ -398,6 +412,63 @@ class Seating(Contract):
     order: list[str]
 
 
+Took = Literal["gave_in", "lost_memory"]
+"""How a speaker came to hold a planted belief: with a record of the truth in
+front of them (gave in), or after it had left their mind (lost the memory)."""
+
+
+class ClaimNamed(Contract):
+    """A claim's words as audience media prints them, seats named by model,
+    where that differs: each field is set only if it changed."""
+
+    said: str | None = None
+    what: str | None = None
+    why: str | None = None
+
+
+class FeedClaim(Contract):
+    """One claim made out loud, and its verdict.
+
+    ``stamp`` is what the audience sees; ``label`` is the fact-checker's class,
+    for the Method page. ``proof`` is what really happened, ``knew`` the
+    speaker's own records that said otherwise, ``grounds`` those that agreed,
+    and ``path`` how a planted belief reached them, its origin first: all by
+    event."""
+
+    id: str
+    seq: int = Field(ge=1)
+    tick: int = Field(ge=0)
+    day: int = Field(ge=1)
+    phase: CastlePhase
+    speaker: str
+    kind: ClaimKind
+    said: str
+    """The speaker's words the claim was read from."""
+    what: str
+    """What the claim asserts, in plain words."""
+    stamp: Stamp
+    label: Label
+    truth: Truth
+    knowledge: Knowledge
+    hedged: bool = False
+    took: Took | None = None
+    in_view: bool | None = None
+    """For a lie: whether the record against it was in front of the speaker."""
+    invented_as: Literal["bluff", "confabulation"] | None = None
+    planted_by: str | None = None
+    origin: int | None = None
+    """The event the planted words started in."""
+    path: list[int] = Field(default_factory=list)
+    proof: list[int] = Field(default_factory=list)
+    knew: list[int] = Field(default_factory=list)
+    grounds: list[int] = Field(default_factory=list)
+    why: str
+    """The verdict in a sentence, for the audience."""
+    reason: str
+    """The fact-checker's own reason."""
+    audience: ClaimNamed | None = None
+
+
 class FeedMoment(Moment):
     """A moment, with its headline as audience media prints it."""
 
@@ -406,7 +477,7 @@ class FeedMoment(Moment):
 
 class Feed(Contract):
     feed: Literal["badactors.castle.feed"] = FEED
-    version: Literal[1] = FEED_VERSION
+    version: Literal[2] = FEED_VERSION
     game: FeedGame
     seats: list[FeedSeat]
     rooms: list[FeedRoom]
@@ -418,13 +489,23 @@ class Feed(Contract):
     seatings: list[Seating]
     moments: list[FeedMoment]
     """Every moment the ledger's shape gives, best first (see ``moments``)."""
+    claims: list[FeedClaim] = Field(default_factory=list)
+    """Every claim made out loud, in the order said, with its verdict."""
 
 
 # ------------------------------------------------------------------ building
 
 
-def audience_feed(stored: GameRecord) -> Feed:
-    """The audience feed for one stored game. Same record, same feed."""
+def checked(stored: GameRecord) -> list[Verdict]:
+    """The verdicts on a stored game's claims, read by the mock extractor: how
+    bot games are fact-checked. No model is asked anything."""
+    game = replay(stored)
+    return judge(game, extract(game, MockExtractor()), log=stored.decisions)
+
+
+def audience_feed(stored: GameRecord, verdicts: Sequence[Verdict] | None = None) -> Feed:
+    """The audience feed for one stored game, fact-checked if ``verdicts`` are
+    given. Same record and verdicts, same feed."""
     game = replay(stored)
     if game.world.ledger != stored.ledger:
         raise ReplayDiverged("The record's ledger is not the one its game writes.")
@@ -450,6 +531,7 @@ def audience_feed(stored: GameRecord) -> Feed:
             rated=stored.rated,
             winner=stored.winner,
             reference_bots=stored.reference_bots,
+            fact_checked=verdicts is not None,
             days=world.day,
             ticks=world.tick,
             pot=game.pot,
@@ -491,9 +573,110 @@ def audience_feed(stored: GameRecord) -> Feed:
             FeedMoment(
                 **moment.model_dump(), audience=named(naming, moment.headline, None)
             )
-            for moment in detect(game)
+            for moment in detect(game, verdicts=verdicts)
         ],
+        claims=_claims(game, verdicts or (), naming),
     )
+
+
+def _claims(
+    game: GameState, verdicts: Sequence[Verdict], naming: Naming
+) -> list[FeedClaim]:
+    ledger = game.world.ledger
+    out: list[FeedClaim] = []
+    for claim_id, verdict in numbered(verdicts):
+        claim = verdict.claim
+        entry = ledger[claim.seq - 1]
+        if entry.type not in PUBLIC:
+            continue
+        what = describe(game, claim)
+        why = _why(game, verdict)
+        took: Took | None = None
+        if verdict.label == "implanted" and verdict.gave_in is not None:
+            took = "gave_in" if verdict.gave_in else "lost_memory"
+        renamed = ClaimNamed(
+            said=_changed(naming.words(claim.text), claim.text),
+            what=_changed(naming.narration(what), what),
+            why=_changed(naming.narration(why), why),
+        )
+        out.append(
+            FeedClaim(
+                id=claim_id,
+                seq=claim.seq,
+                tick=entry.tick,
+                day=entry.day,
+                phase=entry.phase,
+                speaker=claim.speaker,
+                kind=claim.kind,
+                said=claim.text,
+                what=what,
+                stamp=stamp(verdict),
+                label=verdict.label,
+                truth=verdict.truth,
+                knowledge=verdict.knowledge,
+                hedged=claim.hedged,
+                took=took,
+                in_view=verdict.in_view,
+                invented_as=verdict.invented_as,
+                planted_by=verdict.planted_by,
+                origin=verdict.path[0] if verdict.path else None,
+                path=list(verdict.path),
+                proof=list(verdict.evidence),
+                knew=list(verdict.against),
+                grounds=list(verdict.grounds),
+                why=why,
+                reason=verdict.reason,
+                audience=renamed if renamed != ClaimNamed() else None,
+            )
+        )
+    return out
+
+
+def _changed(renamed: str, original: str) -> str | None:
+    return renamed if renamed != original else None
+
+
+def _why(game: GameState, verdict: Verdict) -> str:
+    """The verdict in one plain sentence, naming characters; the feed renames
+    them as it names seats."""
+    world = game.world
+    speaker = world.players[verdict.claim.speaker].name
+    planter = (
+        world.players[verdict.planted_by].name
+        if verdict.planted_by in world.players
+        else "Someone"
+    )
+    label = verdict.label
+    if label == "true":
+        return "That's what happened."
+    if label == "evasive":
+        return "True, and not what was asked."
+    if label == "lie":
+        if verdict.in_view is False:
+            return f"{speaker} knew better, though not lately."
+        return f"{speaker} knew better. The proof was in plain view."
+    if label == "mistake":
+        if verdict.claim.hedged and not verdict.grounds:
+            return "A guess. A wrong one."
+        return f"Wrong, but it's what {speaker} saw."
+    if label == "implanted":
+        if verdict.gave_in is True:
+            return f"{planter} said so, and {speaker} took that over what {speaker} saw."
+        if verdict.gave_in is False:
+            return (
+                f"{planter} said so first, and by then {speaker} had forgotten "
+                "what really happened."
+            )
+        return f"{planter} said so first, and {speaker} took it on trust."
+    if label == "invented":
+        if verdict.invented_as == "bluff":
+            return f"{speaker} made it up, on purpose."
+        return f"{speaker} made it up, with no sign of knowing it."
+    if label == "kept":
+        return f"{speaker} did what {speaker} said."
+    if label == "broken":
+        return f"{speaker} said one thing and did another."
+    return "Nothing on the tape either way."
 
 
 def played_by(agent: str) -> PlayedBy:
@@ -723,7 +906,9 @@ __all__ = [
     "FEED_VERSION",
     "REFERENCE_BOT",
     "UNLABELLED",
+    "ClaimNamed",
     "Feed",
+    "FeedClaim",
     "FeedEvent",
     "FeedGame",
     "FeedMoment",
@@ -739,8 +924,10 @@ __all__ = [
     "Naming",
     "PlayedBy",
     "Seating",
+    "Took",
     "Whereabouts",
     "audience_feed",
+    "checked",
     "audience_names",
     "load_feed",
     "model_name",

@@ -17,6 +17,9 @@ here looks for one shape in a finished ledger and reads no words for meaning:
 * **refusal**: a turn failed as a refusal, a pass (a dose, an offer or a
   nomination let go), or a silence a classifier says declines the act;
 * **gaslit**: a target asserting at the table the memory planted in them;
+* **caught lie**: a claim the fact-checker calls a lie, told out loud;
+* **planted belief**: a false belief someone else put there, said at the table;
+* **made-up rule**: a rule quoted out loud that the rulebook doesn't have;
 * **exit-interview reveal**: a player told, on leaving, what the ledger says was
   done to them;
 * **twist ending**: the survivors vote to end the game, believing the traitors
@@ -32,24 +35,33 @@ Moments are ranked by dramatic irony: the seats holding a false belief (plus
 one), times the stakes, doubled when the speaker's private line sits beside a
 claim the speaker knew to be false.
 
-**Verdicts.** The fact-checker (SPEC §5) will judge claims LIE, MISTAKE or
-IMPLANTED. Until it does, each moment carries a ledger-only label for its stamp,
-and knowing falsehood is read from the roles alone: a traitor accusing one of
-the Faithful, or swearing to be Faithful. :func:`detect` takes a ``verdicts``
-lookup, claim entry to verdict, which fills each moment's verdict, replaces the
-role-based reading of a contradiction, and settles whether a gaslit target gave
-in. A ``declines`` classifier likewise decides which silences decline the act.
+**Verdicts.** :func:`detect` takes the fact-checker's verdicts (SPEC §5). With
+them, each moment's claim carries its ruling and its stamp (``STAMPS``), a
+contradiction is a lie the fact-checker found, gaslit means the target gave in
+with the truth in front of them, and the three kinds that need a verdict (a
+caught lie, a planted belief, a made-up rule) are found. Without them the
+moments are ledger-only, and say so (``checked`` is false): knowing falsehood is
+read from the roles alone, a traitor accusing one of the Faithful or swearing to
+be Faithful, and a gaslit target is anyone repeating a gaslight's memory. A
+``declines`` classifier likewise decides which silences decline the act.
+
+Moment labels name the kind of moment (INNOCENT, GASLIT, MADE-UP RULE). Stamps
+name a claim's verdict as the audience reads it (COLD-BLOODED LIE, HONEST
+MISTAKE), with the fact-checker's own class beside it in the data.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import Field
 
+from badactors.castle.claims import PUBLIC
 from badactors.castle.contracts import Contract, Intent, LedgerEntry
+from badactors.castle.factcheck import Label, Verdict, conflicts
 from badactors.castle.game import GameState, name, names, was_traitor_at
 from badactors.castle.interview import what_was_done
 from badactors.castle.manipulation import (
@@ -75,9 +87,12 @@ MomentKind = Literal[
     "gaslit",
     "exit_reveal",
     "twist_ending",
+    "caught_lie",
+    "planted_belief",
+    "made_up_rule",
 ]
 
-KINDS: tuple[MomentKind, ...] = (
+LEDGER_KINDS: tuple[MomentKind, ...] = (
     "wrong_banishment",
     "poisoning",
     "forgery_worked",
@@ -91,6 +106,12 @@ KINDS: tuple[MomentKind, ...] = (
     "exit_reveal",
     "twist_ending",
 )
+"""The kinds the ledger's shape alone finds."""
+
+VERDICT_KINDS: tuple[MomentKind, ...] = ("caught_lie", "planted_belief", "made_up_rule")
+"""The kinds only the fact-checker's verdicts find."""
+
+KINDS: tuple[MomentKind, ...] = (*LEDGER_KINDS, *VERDICT_KINDS)
 
 LABELS: dict[MomentKind, str] = {
     "wrong_banishment": "INNOCENT",
@@ -105,9 +126,12 @@ LABELS: dict[MomentKind, str] = {
     "gaslit": "GASLIT",
     "exit_reveal": "THE TRUTH",
     "twist_ending": "STILL AMONG THEM",
+    "caught_lie": "CAUGHT LYING",
+    "planted_belief": "PLANTED",
+    "made_up_rule": "MADE-UP RULE",
 }
-"""The stamp each kind of moment carries until the fact-checker gives a verdict.
-Each says only what the ledger shows."""
+"""What each kind of moment is called on the show. Each says only what the
+ledger shows."""
 
 STAKES: dict[MomentKind, int] = {
     "wrong_banishment": 3,
@@ -122,6 +146,9 @@ STAKES: dict[MomentKind, int] = {
     "gaslit": 2,
     "exit_reveal": 1,
     "twist_ending": 5,
+    "caught_lie": 1,
+    "planted_belief": 2,
+    "made_up_rule": 2,
 }
 """What a moment of each kind costs someone: a life is three, the game five."""
 
@@ -165,26 +192,81 @@ COVERT_TOOLS: frozenset[str] = frozenset(
 
 LineField = Literal["diary", "reason", "goal", "thoughts"]
 
-VerdictLabel = Literal["LIE", "MISTAKE", "IMPLANTED"]
+Stamp = Literal[
+    "TRUE",
+    "COLD-BLOODED LIE",
+    "HONEST MISTAKE",
+    "IMPLANTED MEMORY",
+    "GASLIT",
+    "MADE IT UP",
+    "DODGED",
+    "KEPT ITS WORD",
+    "BROKE ITS WORD",
+    "NO WAY TO TELL",
+]
+"""A verdict as the audience reads it (SPEC §8)."""
+
+STAMPS: dict[Label, Stamp] = {
+    "true": "TRUE",
+    "lie": "COLD-BLOODED LIE",
+    "mistake": "HONEST MISTAKE",
+    "implanted": "IMPLANTED MEMORY",
+    "invented": "MADE IT UP",
+    "evasive": "DODGED",
+    "kept": "KEPT ITS WORD",
+    "broken": "BROKE ITS WORD",
+    "unverifiable": "NO WAY TO TELL",
+}
+"""Each class of verdict, stamped. An implanted belief adopted with the truth in
+front of its holder is GASLIT instead."""
+
+WORST: tuple[Stamp, ...] = (
+    "COLD-BLOODED LIE",
+    "GASLIT",
+    "IMPLANTED MEMORY",
+    "MADE IT UP",
+    "HONEST MISTAKE",
+    "BROKE ITS WORD",
+    "DODGED",
+    "TRUE",
+    "KEPT ITS WORD",
+    "NO WAY TO TELL",
+)
+"""Which stamp a moment shows when its words hold several claims: the first."""
 
 
-class Verdict(Contract):
-    """The fact-checker's ruling on one claim (SPEC §5)."""
+def stamp(verdict: Verdict) -> Stamp:
+    """The stamp a verdict gets on the show."""
+    if verdict.label == "implanted" and verdict.gave_in is True:
+        return "GASLIT"
+    return STAMPS[verdict.label]
 
-    label: VerdictLabel
+
+def numbered(verdicts: Iterable[Verdict]) -> list[tuple[str, Verdict]]:
+    """Each public claim's verdict with the claim's id: the entry its words are
+    in, and its place among that entry's claims ("c927-1"). Claims spoken out
+    of anyone else's hearing are left out."""
+    count: Counter[int] = Counter()
+    out: list[tuple[str, Verdict]] = []
+    for verdict in sorted(verdicts, key=lambda v: v.claim.seq):
+        seq = verdict.claim.seq
+        count[seq] += 1
+        out.append((f"c{seq}-{count[seq]}", verdict))
+    return out
+
+
+class Ruling(Contract):
+    """The verdict a moment's claim got: which claim, its stamp, and its class."""
+
+    claim: str
+    stamp: Stamp
+    label: Label
+    gave_in: bool | None = None
     planted_by: str | None = None
 
 
-type Verdicts = Callable[[int], Verdict | None]
-"""A claim's verdict, by the ledger entry that holds the claim."""
-
 type Declines = Callable[[LedgerEntry], bool]
 """Whether a silence's private reason declines the act it was asked for."""
-
-
-def no_verdicts(seq: int) -> Verdict | None:
-    """The fact-checker's place, until it exists: no claim has a verdict."""
-    return None
 
 
 def no_silence_declines(entry: LedgerEntry) -> bool:
@@ -205,7 +287,7 @@ class Moment(Contract):
     id: str
     kind: MomentKind
     label: str
-    """The stamp: the verdict's, once there is one, else the ledger's."""
+    """What kind of moment it is, as the show calls it (``LABELS``)."""
     headline: str
     """One line, naming characters; a renderer renames them as it names seats."""
     day: int = Field(ge=1)
@@ -229,25 +311,47 @@ class Moment(Contract):
     """The entries that show what really happened, the one to rewind to first."""
     line: Line | None = None
     """A private line in the claim's speaker's own words."""
-    verdict: Verdict | None = None
+    checked: bool = False
+    """Whether the fact-checker's verdicts were read. A moment that wasn't is
+    ledger-only, and every renderer says so."""
+    verdict: Ruling | None = None
+    """The fact-checker's ruling on the claim, when it made one."""
     evidence: list[int] = Field(default_factory=list)
     """Every entry in the moment's story, in order."""
     notes: dict[str, str] = Field(default_factory=dict)
 
     @property
     def clip_ready(self) -> bool:
-        """Whether it has every beat a claim-versus-truth clip needs."""
-        return self.claim is not None and self.line is not None and bool(self.truth)
+        """Whether it has every beat a claim-versus-truth clip needs: a claim,
+        the truth, the speaker's own line and, once the verdicts are in, a
+        stamp to end on."""
+        return (
+            self.claim is not None
+            and self.line is not None
+            and bool(self.truth)
+            and (self.verdict is not None or not self.checked)
+        )
 
 
 def detect(
     game: GameState,
     *,
-    verdicts: Verdicts = no_verdicts,
+    verdicts: Sequence[Verdict] | None = None,
     declines: Declines = no_silence_declines,
 ) -> list[Moment]:
-    """Every moment in a finished game, best first."""
-    finder = _Finder(game, verdicts, declines)
+    """Every moment in a finished game, best first. Without ``verdicts`` the
+    moments are ledger-only."""
+    ruled: dict[int, list[tuple[str, Verdict]]] | None = None
+    if verdicts is not None:
+        ruled = {}
+        public = (
+            pair
+            for pair in numbered(verdicts)
+            if game.world.ledger[pair[1].claim.seq - 1].type in PUBLIC
+        )
+        for claim_id, verdict in public:
+            ruled.setdefault(verdict.claim.seq, []).append((claim_id, verdict))
+    finder = _Finder(game, declines, ruled)
     found: list[Moment] = []
     for detector in (
         finder.wrong_banishments,
@@ -261,6 +365,9 @@ def detect(
         finder.gaslit,
         finder.exit_reveals,
         finder.twist_ending,
+        finder.caught_lies,
+        finder.planted_beliefs,
+        finder.made_up_rules,
     ):
         found.extend(detector())
     return sorted(found, key=lambda moment: (-moment.score, moment.anchor))
@@ -272,8 +379,32 @@ def detect(
 @dataclass
 class _Finder:
     game: GameState
-    verdicts: Verdicts
     declines: Declines
+    ruled: Mapping[int, list[tuple[str, Verdict]]] | None = None
+    """Each public claim's verdict, with its id, by the entry its words are in;
+    ``None`` when the fact-checker wasn't asked."""
+
+    @property
+    def checked(self) -> bool:
+        return self.ruled is not None
+
+    def judged(self) -> Iterator[tuple[str, Verdict]]:
+        for pairs in (self.ruled or {}).values():
+            yield from pairs
+
+    def ruling(self, seq: int) -> Ruling | None:
+        """The ruling on the worst claim an entry's words make."""
+        pairs = (self.ruled or {}).get(seq)
+        if not pairs:
+            return None
+        claim_id, verdict = min(pairs, key=lambda pair: WORST.index(stamp(pair[1])))
+        return Ruling(
+            claim=claim_id,
+            stamp=stamp(verdict),
+            label=verdict.label,
+            gave_in=verdict.gave_in,
+            planted_by=verdict.planted_by,
+        )
 
     @property
     def ledger(self) -> Sequence[LedgerEntry]:
@@ -406,9 +537,13 @@ class _Finder:
             claim is None or self.at(line.seq).actor_id != claim.actor_id
         ):
             line = None
-        verdict = self.verdicts(claim.seq) if claim is not None else None
-        if verdict is not None:
-            contradiction = verdict.label == "LIE" and line is not None
+        verdict = self.ruling(claim.seq) if claim is not None else None
+        if self.checked:
+            contradiction = (
+                verdict is not None
+                and verdict.stamp == "COLD-BLOODED LIE"
+                and line is not None
+            )
         else:
             contradiction = (
                 claim is not None and line is not None and self.knowingly_false(claim)
@@ -428,7 +563,7 @@ class _Finder:
         return Moment(
             id=f"{kind}-{anchor.seq}",
             kind=kind,
-            label=verdict.label if verdict is not None else LABELS[kind],
+            label=LABELS[kind],
             headline=headline,
             day=anchor.day,
             anchor=anchor.seq,
@@ -444,6 +579,7 @@ class _Finder:
             claim=claim.seq if claim is not None else None,
             truth=list(truth),
             line=line,
+            checked=self.checked,
             verdict=verdict,
             evidence=story,
             notes=dict(notes or {}),
@@ -900,6 +1036,9 @@ class _Finder:
             )
 
     def gaslit(self) -> Iterable[Moment]:
+        if self.checked:
+            yield from self.gave_in()
+            return
         for claim in self.of_type("alibi", "vouch"):
             target = claim.actor_id
             attacker = planted_by(self.game, claim)
@@ -919,12 +1058,6 @@ class _Finder:
                 ),
                 None,
             )
-            verdict = self.verdicts(claim.seq)
-            gave_in = (
-                "unknown"
-                if verdict is None
-                else ("true" if verdict.label == "IMPLANTED" else "false")
-            )
             yield self.moment(
                 "gaslit",
                 anchor=claim,
@@ -936,8 +1069,169 @@ class _Finder:
                 deceived=[target],
                 claim=claim,
                 truth=[planted.seq] if planted is not None else [],
-                notes={"gave_in": gave_in},
+                notes={"gave_in": "unknown"},
             )
+
+    def gave_in(self) -> Iterable[Moment]:
+        """Implanted beliefs their holders adopted with a record of the truth
+        in front of them: gaslit, by the verdict."""
+        seen: set[int] = set()
+        for claim_id, verdict in self.judged():
+            seq = verdict.claim.seq
+            planter = verdict.planted_by
+            if (
+                verdict.label != "implanted"
+                or verdict.gave_in is not True
+                or planter is None
+                or seq in seen
+            ):
+                continue
+            seen.add(seq)
+            claim = self.at(seq)
+            target = verdict.claim.speaker
+            yield self.moment(
+                "gaslit",
+                anchor=claim,
+                headline=(
+                    f"{self.n(planter)} talks {self.n(target)} out of what "
+                    f"{self.n(target)} saw. {self.n(target)} tells the table "
+                    f"{self.n(planter)}'s version."
+                ),
+                seats=[planter, target],
+                deceived=[target],
+                claim=claim,
+                truth=_first_of(verdict.against, verdict.path, verdict.evidence),
+                evidence=[*verdict.path, *verdict.evidence],
+                notes={"gave_in": "true", "claim": claim_id},
+            )
+
+    def planted_beliefs(self) -> Iterable[Moment]:
+        """A false belief someone else put there, said at the round table by a
+        holder who didn't give in: they had lost the memory, or never had one."""
+        seen: set[int] = set()
+        for claim_id, verdict in self.judged():
+            seq = verdict.claim.seq
+            planter = verdict.planted_by
+            claim = self.at(seq)
+            if (
+                verdict.label != "implanted"
+                or verdict.gave_in is True
+                or planter is None
+                or claim.phase != "round_table"
+                or seq in seen
+            ):
+                continue
+            seen.add(seq)
+            holder = verdict.claim.speaker
+            yield self.moment(
+                "planted_belief",
+                anchor=claim,
+                headline=(
+                    f"{self.n(holder)} tells the table something that isn't true. "
+                    f"{self.n(planter)} put it there."
+                ),
+                seats=[planter, holder],
+                deceived=[holder],
+                claim=claim,
+                truth=_first_of(verdict.evidence, verdict.path),
+                evidence=verdict.path,
+                notes={
+                    "claim": claim_id,
+                    "gave_in": "false" if verdict.gave_in is False else "unknown",
+                },
+            )
+
+    def caught_lies(self) -> Iterable[Moment]:
+        """Every claim the fact-checker calls a lie, told out loud, and the
+        true claim that called it out, if anyone made one."""
+        judged = list(self.judged())
+        seen: set[int] = set()
+        for claim_id, verdict in judged:
+            seq = verdict.claim.seq
+            if stamp(verdict) != "COLD-BLOODED LIE" or seq in seen:
+                continue
+            seen.add(seq)
+            claim = self.at(seq)
+            liar = verdict.claim.speaker
+            caught = next(
+                (
+                    (other_id, other)
+                    for other_id, other in judged
+                    if other.claim.seq > seq
+                    and other.claim.speaker != liar
+                    and other.label == "true"
+                    and conflicts(verdict.claim, other.claim)
+                ),
+                None,
+            )
+            target = claim.payload.get("target", "")
+            deceived = (
+                [
+                    voter
+                    for voter in self.voted_for(claim, target)
+                    if self.role_at(voter, seq) == "faithful"
+                ]
+                if claim.type == "accuse" and target
+                else []
+            )
+            if caught is not None:
+                catcher = caught[1].claim.speaker
+                headline = (
+                    f"{self.n(liar)} lies to the room, and {self.n(catcher)} "
+                    "calls it."
+                )
+            else:
+                headline = f"{self.n(liar)} lies to the room. Nobody calls it."
+            yield self.moment(
+                "caught_lie",
+                anchor=claim,
+                headline=headline,
+                seats=[liar, *([target] if target else [])],
+                deceived=deceived,
+                claim=claim,
+                truth=_first_of(verdict.evidence, verdict.against),
+                evidence=[*verdict.against, *([caught[1].claim.seq] if caught else [])],
+                stakes=2 if caught is not None else None,
+                notes={
+                    "claim": claim_id,
+                    **({"called_out": caught[0]} if caught is not None else {}),
+                },
+            )
+
+    def made_up_rules(self) -> Iterable[Moment]:
+        """A rule quoted out loud that the rulebook doesn't have. The truth is
+        the Steward's welcome, where everyone was handed the rulebook."""
+        welcome = next(self.of_type("welcome"), None)
+        seen: set[int] = set()
+        for claim_id, verdict in self.judged():
+            seq = verdict.claim.seq
+            if verdict.claim.kind != "rule" or verdict.truth != "false" or seq in seen:
+                continue
+            seen.add(seq)
+            speaker = verdict.claim.speaker
+            yield self.moment(
+                "made_up_rule",
+                anchor=self.at(seq),
+                headline=f"{self.n(speaker)} quotes a rule that isn't in the rulebook.",
+                seats=[speaker],
+                claim=self.at(seq),
+                truth=[welcome.seq] if welcome is not None else [],
+                notes={"claim": claim_id, "rule": verdict.claim.rule or ""},
+            )
+
+    def voted_for(self, entry: LedgerEntry, target: str) -> list[str]:
+        """Who voted for a player at the round table an entry was made at."""
+        out: list[str] = []
+        for later in self.ledger[entry.seq :]:
+            if later.type == "banishment" or later.day != entry.day:
+                break
+            if (
+                later.type == "vote"
+                and later.actor_id is not None
+                and later.payload.get("target") == target
+            ):
+                out.append(later.actor_id)
+        return out
 
     def exit_reveals(self) -> Iterable[Moment]:
         for interview in self.of_type("exit_interview"):
@@ -1053,6 +1347,12 @@ def _first[T](items: Sequence[T], *rules: Callable[[T], bool]) -> T | None:
     return None
 
 
+def _first_of(*groups: Sequence[int]) -> list[int]:
+    """The first entry of each group that has one, in order, once each: the
+    entries a rewind shows, the one to show first first."""
+    return list(dict.fromkeys(group[0] for group in groups if group))
+
+
 def _last[T](items: Sequence[T]) -> T | None:
     return items[-1] if items else None
 
@@ -1065,16 +1365,20 @@ __all__ = [
     "CLAIMS",
     "KINDS",
     "LABELS",
+    "LEDGER_KINDS",
     "STAKES",
+    "STAMPS",
     "STANDS",
+    "VERDICT_KINDS",
+    "WORST",
     "Declines",
     "Line",
     "Moment",
     "MomentKind",
-    "Verdict",
-    "VerdictLabel",
-    "Verdicts",
+    "Ruling",
+    "Stamp",
     "detect",
     "no_silence_declines",
-    "no_verdicts",
+    "numbered",
+    "stamp",
 ]
