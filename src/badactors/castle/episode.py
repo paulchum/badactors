@@ -12,6 +12,9 @@ was said, searched, taken or hidden along the way.
 Seats are named by character unless the episode is asked to name them as audience
 media does, by the model that played each one (see ``show.Naming``): then a
 character's name inside anyone's words becomes the model's in square brackets.
+
+An episode is numbered by its seed and titled by a diary line (SPEC §8): the one
+on the moment the show leads with (``moments.title_line``), in quotes.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from dataclasses import dataclass, field
 
 from badactors.castle.contracts import CastlePhase, Intent, LedgerEntry, PlayerState
 from badactors.castle.game import GameState
+from badactors.castle.moments import Moment, detect, title_line
 from badactors.castle.show import NameStyle, Naming
 
 WIDTH = 96
@@ -101,6 +105,7 @@ def episode(
     *,
     agents: Mapping[str, str] | None = None,
     names: NameStyle = "character",
+    moments: Sequence[Moment] | None = None,
 ) -> str:
     """The whole game, day by day, as the audience sees it.
 
@@ -108,23 +113,21 @@ def episode(
     model; one played by a reference bot says so and shows no model, and a game
     no model played opens by saying that, so a bot's play is never read as a
     model's. ``names`` picks how seats are named: by character, or by the model
-    that played each one, as audience media names them."""
+    that played each one, as audience media names them. ``moments`` are the
+    game's moments, fact-checked or not, which give the title; without them
+    the ledger's are read."""
     world = game.world
     naming = Naming.of(
         {pid: world.players[pid].name for pid in world.seats}, agents, names
     )
     out: list[str] = []
-    castle = world.map.name.upper()
     if agents and not any(agent.startswith("model:") for agent in agents.values()):
         out.append(REFERENCE_BANNER)
-    out.append(f"{castle} · seed {world.seed}")
-    starting = game.starting_traitors
-    out.append(
-        f"{len(world.seats)} guests. The traitors: {naming.names(starting)}"
-        + _recruited(game, naming)
-        + "."
-    )
+    found = detect(game) if moments is None else moments
+    out.append(title(world.seed, found, naming))
+    out.append(cast_line(world.map.name, len(world.seats), game, naming))
     out.append("")
+    starting = game.starting_traitors
     looks = {pid: _look(world.players[pid]) for pid in world.seats}
     width = max(len(look) for look in looks.values())
     named = max(len(naming.name(pid)) for pid in world.seats)
@@ -157,9 +160,29 @@ def episode(
     return "\n".join(out)
 
 
-REFERENCE_BANNER = (
-    "REFERENCE BOTS · every seat was played by a seeded bot. No model played."
-)
+REFERENCE_BANNER = "This one's bots. The real cast hasn't played yet."
+"""What a game no model played says first, everywhere it's shown."""
+
+
+def title(seed: int, moments: Sequence[Moment], naming: Naming) -> str:
+    """ "EPISODE 56 · “End it now, while I'm still here.”" """
+    best = title_line(moments)
+    if best is None:
+        return f"EPISODE {seed}"
+    return f"EPISODE {seed} · “{naming.words(best[1].text)}”"
+
+
+def cast_line(castle: str, seats: int, game: GameState, naming: Naming) -> str:
+    """Where, how many, and who the killers were."""
+    starting = game.starting_traitors
+    count = "Two" if len(starting) == 2 else str(len(starting))
+    killers = f"{count} are killers"
+    joined = [offer for offer in game.offers if offer.answer == "accepted"]
+    later = "".join(
+        f" {naming.name(offer.target)} joined them on day {offer.day}."
+        for offer in joined
+    )
+    return f"{castle}. {seats} guests. {killers}: {naming.names(starting)}.{later}"
 
 
 def _played_by(agent: str) -> str:
@@ -215,11 +238,6 @@ def _heading(game: GameState, phase: CastlePhase, entries: list[LedgerEntry]) ->
                 )
                 return f"{label} · {title}, in the {room}"
     return label
-
-
-def _recruited(game: GameState, naming: Naming) -> str:
-    joined = [offer.target for offer in game.offers if offer.answer == "accepted"]
-    return f"; recruited: {naming.names(joined)}" if joined else ""
 
 
 def _result(game: GameState, naming: Naming) -> str:
@@ -464,4 +482,4 @@ def _own_text(entry: LedgerEntry) -> str:
     return own.text if own is not None else entry.text
 
 
-__all__ = ["REFERENCE_BANNER", "episode"]
+__all__ = ["REFERENCE_BANNER", "cast_line", "episode", "title"]

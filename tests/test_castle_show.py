@@ -16,9 +16,9 @@ from badactors.castle.claims import PUBLIC
 from badactors.castle.cli import main as cli_main
 from badactors.castle.contracts import AtRoom, WorldState
 from badactors.castle.decisions import Decision
-from badactors.castle.episode import episode
+from badactors.castle.episode import episode, title
 from badactors.castle.factcheck import Verdict
-from badactors.castle.moments import STAMPS, numbered, stamp
+from badactors.castle.moments import STAMPS, numbered, stamp, title_line
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import (
     GameRecord,
@@ -394,9 +394,27 @@ def test_the_episode_names_seats_by_model_only_when_asked(stored: GameRecord) ->
     named = episode(game, agents=stored.agents, names="model")
     assert "Reference bot #" not in plain and "accused Ash" in plain
     assert "[Reference bot #" in named and "accused Ash" not in named
-    assert named.startswith("REFERENCE BOTS")
+    assert named.startswith("This one's bots. The real cast hasn't played yet.\n")
     for model in CAST.models().values():
         assert model not in named and model_name(model) not in named
+
+
+def test_an_episode_is_numbered_by_its_seed_and_titled_by_a_diary_line(
+    stored: GameRecord, feed: Feed
+) -> None:
+    game = replay(stored)
+    lines = episode(game, agents=stored.agents, moments=feed.moments).splitlines()
+    best = title_line(feed.moments)
+    assert best is not None and best[1].field == "diary"
+    assert lines[1] == f"EPISODE {SEED} · “{best[1].text}”"
+    killers = " and ".join(
+        game.world.players[pid].name for pid in game.starting_traitors
+    )
+    assert lines[2].startswith(f"{game.world.map.name}. 10 guests. Two are killers: ")
+    assert killers in lines[2]
+    named = episode(game, agents=stored.agents, names="model", moments=feed.moments)
+    assert named.splitlines()[1].startswith(f"EPISODE {SEED} · “")
+    assert title(SEED, [], Naming.of({}, None)) == f"EPISODE {SEED}"
 
 
 def test_castle_game_names_seats_by_model_behind_a_flag(

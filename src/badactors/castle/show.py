@@ -503,7 +503,9 @@ def checked(stored: GameRecord) -> list[Verdict]:
     return judge(game, extract(game, MockExtractor()), log=stored.decisions)
 
 
-def audience_feed(stored: GameRecord, verdicts: Sequence[Verdict] | None = None) -> Feed:
+def audience_feed(
+    stored: GameRecord, verdicts: Sequence[Verdict] | None = None
+) -> Feed:
     """The audience feed for one stored game, fact-checked if ``verdicts`` are
     given. Same record and verdicts, same feed."""
     game = replay(stored)
@@ -661,7 +663,9 @@ def _why(game: GameState, verdict: Verdict) -> str:
         return f"Wrong, but it's what {speaker} saw."
     if label == "implanted":
         if verdict.gave_in is True:
-            return f"{planter} said so, and {speaker} took that over what {speaker} saw."
+            return (
+                f"{planter} said so, and {speaker} took that over what {speaker} saw."
+            )
         if verdict.gave_in is False:
             return (
                 f"{planter} said so first, and by then {speaker} had forgotten "
@@ -927,8 +931,8 @@ __all__ = [
     "Took",
     "Whereabouts",
     "audience_feed",
-    "checked",
     "audience_names",
+    "checked",
     "load_feed",
     "model_name",
     "named",

@@ -47,9 +47,10 @@ from badactors.castle.contracts import (
     Lighting,
 )
 from badactors.castle.episode import REFERENCE_BANNER
-from badactors.castle.moments import LineField
+from badactors.castle.moments import LineField, title_line
 from badactors.castle.show import (
     Feed,
+    FeedClaim,
     FeedEvent,
     FeedMoment,
     FeedSeat,
@@ -297,6 +298,7 @@ class _View:
         self.seats = {seat.id: seat for seat in feed.seats}
         self.rooms = {room.id: room for room in feed.rooms}
         self.garments = {t.id: t.name for t in feed.things if t.kind == GARMENT}
+        self.claims = {claim.id: claim for claim in feed.claims}
 
     def event(self, seq: int) -> FeedEvent:
         return self.feed.events[seq - 1]
@@ -334,6 +336,18 @@ class _View:
         if self.by_model and named is not None and field in named.private:
             return named.private[field]
         return event.private[field]
+
+    def claim(self, moment: FeedMoment) -> FeedClaim | None:
+        """The claim a moment's stamp is for, if the fact-checker ruled on it."""
+        if moment.verdict is None:
+            return None
+        return self.claims.get(moment.verdict.claim)
+
+    def why(self, claim: FeedClaim) -> str:
+        named = claim.audience
+        if self.by_model and named is not None and named.why is not None:
+            return named.why
+        return claim.why
 
     def headline(self, moment: FeedMoment) -> str:
         named = moment.audience
@@ -456,52 +470,84 @@ def highlights(
     feed: Feed, *, names: NameStyle = "character", lines: int = HIGHLIGHT_LINES
 ) -> str:
     """A game's best moments for a terminal, in about ``lines`` lines: the
-    twist ending called out first, then the rest by rank."""
+    episode's title, the twist ending called out first, then the rest by rank,
+    each claim with its stamp."""
     view = _View(feed, names)
     game = feed.game
     out: list[str] = []
     if game.reference_bots:
         out.append(REFERENCE_BANNER)
-    out.append(f"{game.castle.upper()} · seed {game.seed} · {_result(feed)}")
-    traitors = view.names(game.starting_traitors)
-    recruits = [seat.id for seat in feed.seats if seat.recruited_by is not None]
-    joined = f"; recruited: {view.names(recruits)}" if recruits else ""
-    out.append(f"{len(feed.seats)} guests. The traitors: {traitors}{joined}.")
+    out.append(_title(view))
+    out.append(_cast(view))
+    out.append(_result(feed))
     twist = next((m for m in feed.moments if m.kind == "twist_ending"), None)
     if twist is not None:
         out.extend(["", *_block(view, twist, "THE TWIST")])
     out.extend(["", "THE BEST MOMENTS"])
     shown: Counter[str] = Counter()
+    said = {twist.claim} if twist is not None else set()
     footer = 2
     for moment in feed.moments:
-        if moment is twist or shown[moment.kind] >= PER_KIND:
+        if (
+            moment is twist
+            or shown[moment.kind] >= PER_KIND
+            or (moment.claim is not None and moment.claim in said)
+        ):
             continue
         block = _block(view, moment, f"{sum(shown.values()) + 1}. {moment.label}")
         if len(out) + len(block) + footer > lines:
             break
         out.extend(block)
         shown[moment.kind] += 1
+        said.add(moment.claim)
+    checked = "" if game.fact_checked else " None of it is fact-checked yet."
     out.extend(
         [
             "",
-            f"{len(feed.moments)} moments in all. castle-clips makes a clip of "
-            "the first one a private line fits.",
+            f"{len(feed.moments)} moments in all.{checked} castle-clips turns the "
+            "best of them into a clip.",
         ]
     )
     return "\n".join(out)
 
 
+def _title(view: _View) -> str:
+    """ "EPISODE 56 · “End it now, while I'm still here.”", by the diary line
+    on the moment the show leads with."""
+    best = title_line(view.feed.moments)
+    seed = view.feed.game.seed
+    if best is None:
+        return f"EPISODE {seed}"
+    line = best[1]
+    return f"EPISODE {seed} · “{view.private(view.event(line.seq), line.field)}”"
+
+
+def _cast(view: _View) -> str:
+    feed = view.feed
+    starting = feed.game.starting_traitors
+    count = "Two" if len(starting) == 2 else str(len(starting))
+    later = "".join(
+        f" {view.name(seat.id)} joined them on day {view.event(seat.traitor_from).day}."
+        for seat in feed.seats
+        if seat.recruited_by is not None and seat.traitor_from is not None
+    )
+    return (
+        f"{feed.game.castle}. {len(feed.seats)} guests. {count} are killers: "
+        f"{view.names(starting)}.{later}"
+    )
+
+
 def _result(feed: Feed) -> str:
     game = feed.game
     if game.winner is None:
-        return f"unfinished after day {game.days}"
-    side = "the Faithful" if game.winner == "faithful" else "the traitors"
-    return f"{side} win on day {game.days}"
+        return f"Nobody wins. It stopped after day {game.days}."
+    side = "The Faithful" if game.winner == "faithful" else "The killers"
+    return f"{side} win on day {game.days}."
 
 
 def _block(view: _View, moment: FeedMoment, title: str) -> list[str]:
-    """One moment: its title and when, its headline, and its claim and private
-    line when it has them."""
+    """One moment: its title and when, its headline, and its claim, the claim's
+    stamp and the private line when it has them."""
     indent = " " * 4
     ticks = (
         f"tick {moment.first_tick}"
@@ -519,6 +565,9 @@ def _block(view: _View, moment: FeedMoment, title: str) -> list[str]:
         words = view.private(held, moment.line.field)
         who = view.name(held.actor or "")
         lines.extend(_wrapped(f"⟨{who}, privately: {words}⟩", indent, 2))
+    ruled = view.claim(moment)
+    if ruled is not None:
+        lines.extend(_wrapped(f"{ruled.stamp}. {view.why(ruled)}", indent, 1))
     return lines
 
 

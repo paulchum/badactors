@@ -32,7 +32,7 @@ from badactors.castle.moments import (
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
 from badactors.castle.show import audience_feed, checked
-from badactors.castle.sweep import Swept, config_for, play_seed
+from badactors.castle.sweep import config_for, play_seed
 from castle_scenes import CAST, CASTLE, MODELS, gaslight_scene, lie_scene
 
 SEEDS = range(30, 60)
@@ -320,9 +320,7 @@ def test_verdicts_stamp_each_claim_with_its_worst_ruling(
     stamped: Counter[str] = Counter()
     for (game, found), moments in zip(played, judged, strict=True):
         ids = {id(verdict): claim_id for claim_id, verdict in numbered(found)}
-        public = [
-            v for v in found if game.world.ledger[v.claim.seq - 1].type in PUBLIC
-        ]
+        public = [v for v in found if game.world.ledger[v.claim.seq - 1].type in PUBLIC]
         for moment in moments:
             on = [v for v in public if v.claim.seq == moment.claim]
             if not on:
@@ -408,7 +406,7 @@ def test_the_stamps_read_every_class_and_gaslit_only_when_they_gave_in() -> None
     assert gaslit.truth[0] == lit.against[0]
 
 
-def _ruled(staged_game: GameState, claim: Claim, **verdict: object) -> Verdict:
+def _ruled(claim: Claim, **verdict: object) -> Verdict:
     return Verdict(
         claim=claim,
         truth="false",
@@ -430,7 +428,7 @@ def test_a_rule_quoted_wrong_out_loud_is_a_made_up_rule() -> None:
         amount=5,
         text="words",
     )
-    found = [_ruled(game, claim, label="lie")]
+    found = [_ruled(claim, label="lie")]
     moments = detect(game, verdicts=found)
     rule = next(m for m in moments if m.kind == "made_up_rule")
     assert rule.label == "MADE-UP RULE" and rule.claim == alibi.seq

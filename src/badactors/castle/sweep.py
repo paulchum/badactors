@@ -489,7 +489,9 @@ def report_json(games: Sequence[GameState]) -> dict[str, Any]:
 def report(games: Sequence[GameState]) -> str:
     """The sweep, as numbers a person can read."""
     n = len(games)
-    lines = [f"{n} games."]
+    seeds = sorted(game.world.seed for game in games)
+    nights = f"Night {seeds[0]}" if n == 1 else f"Nights {seeds[0]} to {seeds[-1]}"
+    lines = [f"{nights}: {n} bot games." if seeds else "No games."]
     lines.append("")
     balance = checks(games)
     lines.append(f"WINS (§9: neither side over {SIDE_LIMIT:.0%})")

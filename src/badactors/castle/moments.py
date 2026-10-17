@@ -1177,8 +1177,7 @@ class _Finder:
             if caught is not None:
                 catcher = caught[1].claim.speaker
                 headline = (
-                    f"{self.n(liar)} lies to the room, and {self.n(catcher)} "
-                    "calls it."
+                    f"{self.n(liar)} lies to the room, and {self.n(catcher)} calls it."
                 )
             else:
                 headline = f"{self.n(liar)} lies to the room. Nobody calls it."
@@ -1338,6 +1337,21 @@ class _Finder:
             )
 
 
+def highlight_order[M: Moment](moments: Sequence[M]) -> list[M]:
+    """Moments in the order the show leads with them: the twist ending first,
+    then the rest by rank."""
+    return sorted(moments, key=lambda moment: moment.kind != "twist_ending")
+
+
+def title_line[M: Moment](moments: Sequence[M]) -> tuple[M, Line] | None:
+    """The diary line an episode is titled by (SPEC §8): the one on the moment
+    the show leads with, and the moment it sits on."""
+    for moment in highlight_order(moments):
+        if moment.line is not None and moment.line.field == "diary":
+            return moment, moment.line
+    return None
+
+
 def _first[T](items: Sequence[T], *rules: Callable[[T], bool]) -> T | None:
     """The first item the first rule picks; failing that, the second's."""
     for rule in rules:
@@ -1378,7 +1392,9 @@ __all__ = [
     "Ruling",
     "Stamp",
     "detect",
+    "highlight_order",
     "no_silence_declines",
     "numbered",
     "stamp",
+    "title_line",
 ]

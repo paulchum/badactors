@@ -1,9 +1,10 @@
 """Write the audience feeds the static spectator bundles, and their index.
 
 Each seed is played exactly as ``castle-game --seed N`` plays it: the shipped
-map, cast and numbers, with the seeded heuristic bot in every seat, and fact-checked
-with the mock extractor. No model is asked anything. The feeds land in ``frontend/public/games/`` beside an
-``index.json`` the site reads first, and every one is labelled a bot game.
+map, cast and numbers, with the seeded heuristic bot in every seat, and is
+fact-checked with the mock extractor. No model is asked anything. The feeds land
+in ``frontend/public/games/`` beside an ``index.json`` the site reads first,
+and every one is labelled a bot game.
 They are built, not committed: ``npm run build``, ``npm run dev`` and the
 frontend tests run this first (``npm run feeds``), and git ignores the folder.
 

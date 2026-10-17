@@ -20,10 +20,9 @@ from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
-from badactors.castle.claims import MockExtractor, extract
 from badactors.castle.clips import highlights
 from badactors.castle.episode import episode
-from badactors.castle.factcheck import printout, verdicts
+from badactors.castle.factcheck import printout
 from badactors.castle.mapfile import load_map
 from badactors.castle.metrics import per_game
 from badactors.castle.metrics import printout as measures
@@ -97,24 +96,24 @@ def main(argv: list[str] | None = None) -> None:
     finished = played.game
     names: NameStyle = "model" if args.model_names else "character"
     stored = record(castle, cast, played)
-    feed = (
-        audience_feed(stored, checked(stored)) if args.feed or args.highlights else None
-    )
-    if args.highlights and feed is not None:
+    found = checked(stored)
+    feed = audience_feed(stored, found)
+    if args.highlights:
         print(highlights(feed, names=names))
     else:
-        print(episode(finished, agents=played.agents, names=names))
         print(
-            f"{played.observations} observations, every one leak-checked; "
-            f"{len(finished.world.ledger)} ledger entries; "
-            f"{sum(len(entry.rolls) for entry in finished.world.ledger)} recorded "
-            "rolls."
+            episode(finished, agents=played.agents, names=names, moments=feed.moments)
+        )
+        print(
+            f"Every one of the {played.observations} things the bots were shown "
+            f"was leak-checked first. {len(finished.world.ledger)} things happened "
+            f"on tape, and {sum(len(entry.rolls) for entry in finished.world.ledger)}"
+            " dice were rolled."
         )
     if args.ledger:
         print()
         print(timeline(finished.world))
     if args.verdicts:
-        found = verdicts(finished, extract(finished, MockExtractor()), log=played.log)
         print()
         print(printout(finished, found))
         print()
@@ -122,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.save:
         save_record(stored, args.save)
         print(f"Saved a replayable record to {args.save}.")
-    if args.feed and feed is not None:
+    if args.feed:
         save_feed(feed, args.feed)
         print(f"Saved the audience feed to {args.feed}.")
 
