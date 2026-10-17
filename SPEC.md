@@ -228,6 +228,7 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
   - In a castle with one model in several seats, seats are numbered ("Claude Opus 5.5 #3").
   - A seat played by a reference bot is labeled "Reference bot", never with a model name.
   - Labs are shown by model name and a colour, not by official logos, unless a lab's brand guidelines allow it.
+  - In art, each model wears a mask of the show's own design in its lab's colour, a nod to its name (an opera half-mask for Claude Opus, a laurel wreath for Muse Spark). Never a lab's logo, and nothing drawn to look like one.
 - **Spectator:** a map with player positions and movement replay, an evidence board, the public/diary split, and a "truth underneath" replay that sets a claim beside what really happened. The audience can also see the recorded rolls. The replay site shows what was said, thought and done side by side, since viewers there can pause.
 - **Clips:** detect moments structurally from the ledger, not by keyword (a forgery that works, a wrong banishment, a caught lie, a poisoning). Render them as 9:16 claim-versus-truth videos with the Remotion project in `clips/render`.
   - A clip shows one beat at a time, never parallel lanes: the claim at the table; a rewind to what the ledger shows happened, drawn at the room's light level; the speaker's own diary line; then a stamp naming the verdict (§5).

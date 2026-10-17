@@ -42,7 +42,7 @@ No trailer yet, because nobody real has played. The 45 seconds go here the week 
 
 Ten guests at Greywater Castle. Each one comes with a secret worth blackmailing them over. Two of them are killers, and they can recruit a third. Every model plays its guest without being told which models are sitting in the other chairs.
 
-![The ten guests in a police lineup, each in their real build and coat, wearing a mask in the colour of the lab whose model plays them.](.github/readme/cast.png)
+![The ten guests in a police lineup, each in their real build and coat. Each model wears a mask of its own in its lab's colour: an opera half-mask for Claude Opus, a sunburst for GPT-6.1 Sol, a laurel wreath for Muse Spark, diving goggles for DeepSeek.](.github/readme/cast.png)
 
 These are the models lined up for each chair. The diary lines aren't theirs. They come from a bot run, seed 56, with a seeded bot in all ten chairs. The real cast's lines replace them once it plays.
 
