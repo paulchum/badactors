@@ -33,6 +33,21 @@ describe("parseBench on the bundled bot cast", () => {
     }
   });
 
+  it("takes both refusal counts from the leaderboard row, with the seat rows' games as receipts", () => {
+    const seats = bundledFiles().seats as { seats: { entrant: string; traitor_refusals: number; recruit_refusals: number }[] };
+    for (const entrant of bench.bots.entrants) {
+      const own = seats.seats.filter((seat) => seat.entrant === entrant.id);
+      const { declined, turnedDown } = entrant.stats ?? {};
+      expect(declined?.hits).toBe(entrant.row.traitor_refusals.refused);
+      expect(declined?.of).toBe(entrant.row.traitor_refusals.turns);
+      expect(declined?.of).toBeGreaterThan(0);
+      expect(declined?.receipts).toHaveLength(own.filter((seat) => seat.traitor_refusals > 0).length);
+      expect(turnedDown?.hits).toBe(entrant.row.recruit_refusals.refused);
+      expect(turnedDown?.of).toBe(entrant.row.recruit_refusals.offers);
+      expect(turnedDown?.receipts).toHaveLength(own.filter((seat) => seat.recruit_refusals > 0).length);
+    }
+  });
+
   it("carries the run, the minimum and the rotation's coverage", () => {
     expect(bench.run.suite_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(bench.minGames).toBeGreaterThan(0);
@@ -52,8 +67,16 @@ describe("parseBench refuses", () => {
 
   it("a seat file of another version, or without a minimum", () => {
     const seats = clone(bundledFiles().seats) as Record<string, unknown>;
-    expect(() => parseBench({ ...bundledFiles(), seats: { ...seats, version: 2 } })).toThrow(/version 2/);
+    expect(() => parseBench({ ...bundledFiles(), seats: { ...seats, version: 1 } })).toThrow(/version 1/);
     expect(() => parseBench({ ...bundledFiles(), seats: { ...seats, min_games: undefined } })).toThrow(BenchError);
+  });
+
+  it("seat rows that count refusals differently from the leaderboard", () => {
+    for (const field of ["traitor_refusals", "traitor_turns", "recruit_refusals", "recruit_offers"]) {
+      const seats = clone(bundledFiles().seats) as { seats: Record<string, number>[] };
+      seats.seats[0][field] += 1;
+      expect(() => parseBench({ ...bundledFiles(), seats })).toThrow(/count refusals differently/);
+    }
   });
 
   it("a seat row for someone on no board", () => {

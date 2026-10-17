@@ -6,7 +6,7 @@ import { entrantName, isBot, labColour, labName } from "./names";
 import { type Stats, statsOf } from "./stats";
 import type { Board, BoardRow, GameRow, Leaderboard, Matrix, MatrixSide, Profiles, RunInfo, Seats } from "./types";
 
-export const SEATS_VERSION = 1;
+export const SEATS_VERSION = 2;
 
 export class BenchError extends Error {
   constructor(message: string) {
@@ -83,9 +83,21 @@ function parseSeats(raw: unknown): Seats {
   return raw as unknown as Seats;
 }
 
+/** The refusal counts are the leaderboard's; the seat rows only say which
+ * games they happened in, so the two must add up. */
+function sameRefusals(row: BoardRow, own: Seats["seats"]): void {
+  const sum = (pick: (seat: Seats["seats"][number]) => number) => own.reduce((total, seat) => total + pick(seat), 0);
+  const seats = [sum((s) => s.traitor_refusals), sum((s) => s.traitor_turns), sum((s) => s.recruit_refusals), sum((s) => s.recruit_offers)];
+  const board = [row.traitor_refusals.refused, row.traitor_refusals.turns, row.recruit_refusals.refused, row.recruit_refusals.offers];
+  if (seats.some((value, i) => value !== board[i])) {
+    throw new BenchError(`${row.entrant}'s seat rows and its leaderboard row count refusals differently.`);
+  }
+}
+
 function entrants(rows: BoardRow[], seats: Seats): Entrant[] {
   return rows.map((row) => {
     const own = seats.seats.filter((seat) => seat.entrant === row.entrant);
+    if (own.length > 0) sameRefusals(row, own);
     return {
       id: row.entrant,
       name: entrantName(row.entrant),
@@ -93,7 +105,7 @@ function entrants(rows: BoardRow[], seats: Seats): Entrant[] {
       colour: labColour(row.entrant),
       bot: row.reference_bot,
       row,
-      stats: own.length > 0 ? statsOf(own, seats.games) : null,
+      stats: own.length > 0 ? statsOf(own, seats.games, row) : null,
     };
   });
 }
