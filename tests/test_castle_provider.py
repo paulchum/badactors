@@ -103,6 +103,63 @@ def test_each_mode_sends_only_the_parameters_it_needs() -> None:
         assert body["max_tokens"] == 512
 
 
+def test_reasoning_is_sent_only_when_a_setting_is_chosen() -> None:
+    assert "reasoning" not in request_body(call("tools"))
+    assert request_body(call("tools"), reasoning="off")["reasoning"] == {
+        "enabled": False
+    }
+    assert request_body(call("json_schema"), reasoning="low")["reasoning"] == {
+        "effort": "low"
+    }
+    with pytest.raises(ValueError):
+        OpenRouterProvider(api_key="test", reasoning="loud")
+
+
+def test_least_falls_back_to_minimal_once_per_model_and_says_so() -> None:
+    seen: list[httpx.Request] = []
+    fallbacks: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)
+        if sent["reasoning"] == {"enabled": False}:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Reasoning is mandatory for this endpoint "
+                        "and cannot be disabled.",
+                        "code": 400,
+                    }
+                },
+            )
+        return httpx.Response(200, json=GOOD)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(respond_and_keep(respond, seen))
+    )
+    least = OpenRouterProvider(
+        api_key=KEY, client=client, reasoning="least", on_fallback=fallbacks.append
+    )
+    run(least.complete(call("tools")))
+    run(least.complete(call("tools")))
+    reasoning = [json.loads(r.content)["reasoning"] for r in seen]
+    assert reasoning == [
+        {"enabled": False},
+        {"effort": "minimal"},
+        {"effort": "minimal"},
+    ]
+    assert fallbacks == [call("tools").ref.model]
+
+
+def respond_and_keep(respond: Any, seen: list[httpx.Request]) -> Any:
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        result: httpx.Response = respond(request)
+        return result
+
+    return handle
+
+
 def test_the_static_prefix_is_sent_first_and_marked_where_caching_needs_it() -> None:
     claude = request_body(call("tools", model="anthropic/claude-opus-5.5"))
     parts = claude["messages"][1]["content"]
