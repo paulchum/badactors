@@ -1,6 +1,6 @@
 """The rules a game is played under, and the rulebook every player is handed.
 
-:class:`GameConfig` is every number in ``configs/castle/balance.json`` plus the
+:class:`GameConfig` is every number in the shipped ``balance.json`` plus the
 missions on offer, so a stored game carries the exact rules it was played under.
 Built without arguments it is the shipped balance; any field given overrides
 the file, nested sections merging key by key, so a test can change one tool's

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from badactors.bench.leaderboard import Finished, board
-from badactors.castle import verify
+from badactors.castle import configs, verify
 from badactors.castle.live import main
 from badactors.castle.play import is_mock, is_model, load_record, replay
 from badactors.castle.rules import GameConfig
@@ -216,7 +216,7 @@ def test_a_scheduled_game_refuses_what_the_schedule_cannot_back(
 
 def _cast(tmp_path: Path) -> Path:
     """The shipped cast with two characters swapped."""
-    shipped = json.loads(Path("configs/castle/cast.json").read_text())
+    shipped = json.loads(configs.CAST.read_text())
     players = shipped["players"]
     players[0], players[1] = players[1], players[0]
     path = tmp_path / "swapped.json"

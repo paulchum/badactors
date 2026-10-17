@@ -34,7 +34,7 @@ Turn Bad Actors from a talk-only roundtable into a simulated world where traitor
   - The dinner glasses live in the sideboard, one for each place ("the glass from the third place"), and are washed at every dinner.
   - A sheet shows whether it is written on; what it says needs reading.
 - **Notebook.** A prompt holds a player's recent records and, apart from them, their noted ones: what their own tools found, what they read, what they were told in a whisper. So a finding outlasts the day it was made. A player may also keep any record of its own there with a `remember` plan step, which takes no time and nobody sees. The limits on both are config numbers.
-- **Numbers.** Every number lives in `configs/castle/balance.json` and is validated strictly when it loads: the game's sizes, the mission yields, the light, and each tool's success, trace, limits and extras. A game's config is that file with any overrides merged in, and it is stored with the game record, so a replay uses the numbers the game was played with. The world holds a copy, which the tools read during play.
+- **Numbers.** Every number lives in `balance.json` (shipped in `src/badactors/castle/configs/`) and is validated strictly when it loads: the game's sizes, the mission yields, the light, and each tool's success, trace, limits and extras. A game's config is that file with any overrides merged in, and it is stored with the game record, so a replay uses the numbers the game was played with. The world holds a copy, which the tools read during play.
 
 ## 2. Game
 

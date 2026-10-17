@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from badactors.bench.cli import main
+from badactors.castle import configs
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.interview import ExitObservation
@@ -176,7 +177,7 @@ def test_a_planned_run_prints_the_power_estimate_before_its_schedule(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = tmp_path / "out"
-    cast = json.loads(Path("configs/castle/cast.json").read_text())
+    cast = json.loads(configs.CAST.read_text())
     open_weight = [cast["players"][6]["model"]]
     main(
         [

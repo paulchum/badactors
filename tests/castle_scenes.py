@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, ClassVar
 
+from badactors.castle import configs
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
 from badactors.castle.contracts import (
@@ -67,9 +67,8 @@ from badactors.castle.observe import GameObservation
 from badactors.castle.play import LoggedDecision, Referee, start_game
 from badactors.castle.rules import GameConfig
 
-ROOT = Path(__file__).resolve().parent.parent
-CASTLE = load_map(ROOT / "configs/castle/map.json")
-CAST = load_cast_file(ROOT / "configs/castle/cast.json")
+CASTLE = load_map(configs.MAP)
+CAST = load_cast_file(configs.CAST)
 MODELS = sorted(set(CAST.models().values()))
 NO_POISON = {"poison": {"per_game": 0}}
 """Tool overrides for a game where nobody may poison."""

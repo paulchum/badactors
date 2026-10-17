@@ -1,0 +1,19 @@
+{
+  "name": "Bad Actors",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "containerEnv": { "UV_LINK_MODE": "copy" },
+  "forwardPorts": [5173, 4173],
+  "portsAttributes": {
+    "5173": { "label": "site (npm run dev)" },
+    "4173": { "label": "site (npm run preview)" }
+  },
+  "postCreateCommand": "uv sync && (cd frontend && npm ci) && (cd clips/render && npm ci)",
+  "customizations": {
+    "vscode": {
+      "extensions": ["charliermarsh.ruff", "ms-python.python", "ms-python.mypy-type-checker"]
+    }
+  }
+}

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -17,6 +16,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
+from badactors.castle import configs
 from badactors.castle.contracts import (
     DAY_ORDER,
     GARMENT,
@@ -99,9 +99,8 @@ from badactors.castle.world import (
     would_interrupt,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
-MAP_PATH = ROOT / "configs/castle/map.json"
-CAST_PATH = ROOT / "configs/castle/cast.json"
+MAP_PATH = configs.MAP
+CAST_PATH = configs.CAST
 
 
 def _world(seed: int = 13) -> WorldState:

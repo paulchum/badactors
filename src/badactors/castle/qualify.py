@@ -17,8 +17,9 @@ toward the gate. A model failing more than 2% of its turns does not qualify. It
 is a cheap step of its own: the benchmark's pilot measures effect sizes only.
 
 The suite is frozen: ``--build`` writes it once, from fixed seeds, to
-``configs/castle/qualification.json.xz``, and it is kept, so every model
-answers the same questions and every result names the suite by its digest.
+``qualification.json.xz`` in :mod:`badactors.castle.configs`, and it is kept, so
+every model answers the same questions and every result names the suite by its
+digest.
 Rebuild it only on purpose; results from two suites are not comparable.
 
     uv run castle-qualify anthropic/claude-opus-5.5 --max-requests 700 \\
@@ -56,6 +57,7 @@ from badactors.castle.budget import (
     prompt_tokens,
 )
 from badactors.castle.cast import Cast, load_cast_file
+from badactors.castle.configs import CAST, MAP, SUITE
 from badactors.castle.contract_schema import compile_schema
 from badactors.castle.contracts import CastleMap, Contract
 from badactors.castle.decisions import Decision, ExitAnswer
@@ -90,11 +92,9 @@ from badactors.castle.rng import draw
 from badactors.castle.rules import GameConfig
 from badactors.castle.verify import HashingProvider
 
-_ROOT = Path(__file__).resolve().parents[3]
-_CONFIGS = _ROOT / "configs" / "castle"
 _CACHE = Path.home() / ".cache" / "badactors" / "openrouter-models.json"
 
-SUITE_PATH = _CONFIGS / "qualification.json.xz"
+SUITE_PATH = SUITE
 SUITE_SIZE = 300
 SUITE_SEEDS = 8
 """Bot games the suite is sampled from, on seeds 0 to 7."""
@@ -533,8 +533,8 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Rebuild the suite from bot games. Results from two suites differ.",
     )
-    parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
-    parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
+    parser.add_argument("--cast", default=str(CAST))
+    parser.add_argument("--map", default=str(MAP))
     budget = parser.add_argument_group("budget (all three required)")
     budget.add_argument("--max-requests", type=int)
     budget.add_argument("--max-tokens", type=int)

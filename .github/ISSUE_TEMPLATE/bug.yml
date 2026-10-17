@@ -1,0 +1,51 @@
+name: Something's broken
+description: A crash, a wrong result, or the referee getting it wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for writing this up. If it's a leak between players or anything to do with keys or spending, please don't post it here. Use the private report in the Security tab instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to make it happen again
+      description: The command you ran, with its seed. Most bugs here come down to one seed and one tick.
+      placeholder: uv run castle-game --seed 56 --highlights
+      render: sh
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: The error or the lines that look wrong. Leave out any keys.
+      render: text
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - The game or the world (castle-game, castle-sweep)
+        - Real models (castle-live, castle-qualify)
+        - The lie detector (--verdicts)
+        - Standings or receipts (castle-bench, castle-verify, castle-power)
+        - Clips (castle-clips, Remotion)
+        - The site (frontend)
+        - Installing or packaging
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Commit or version, Python, OS. Node too if it's the site or the clips.
+      placeholder: 0.1.0 (abc1234), Python 3.12, macOS 15

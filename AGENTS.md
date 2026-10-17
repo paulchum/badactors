@@ -22,13 +22,14 @@ src/badactors/
     CLIs            cli (castle-game), live (castle-live), sweep (castle-sweep),
                     qualify (castle-qualify), verify (castle-verify),
                     power (castle-power), clips (castle-clips)
+    configs/        the shipped castle: map, cast, balance numbers and the frozen
+                    qualification suite, read through importlib.resources
   bench/            ratings, leaderboard, matrix, steer, seats, dryrun, and
                     cli (castle-bench)
   server/           FastAPI app: owner-access guard and health check
 clips/render/       Remotion project for claim-versus-truth clips
 frontend/           React + Vite placeholder for the castle spectator
 scripts/            castle_three_days.py, a model-free walk through the world
-configs/castle/     castle map, cast, balance numbers, and the frozen qualification suite
 ```
 
 ## Commands
@@ -57,5 +58,5 @@ These are the only rules that aren't negotiable.
 
 - Change whatever the task needs across files, including refactors, schema changes, and test updates when behavior changes on purpose. Delete dead code instead of keeping shims.
 - New behavior ships with tests. Use property tests (hypothesis) for world invariants such as custody, perception and determinism.
-- Keep docs to this file, README.md (how to run) and SPEC.md (what we're building). Don't add progress logs, reports, changelogs or marketing docs.
+- Keep docs to this file, README.md (the show and how to run it), SPEC.md (what we're building), and the standard GitHub community files: CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, CITATION.cff and the templates under `.github/`. Don't add progress logs, reports, changelogs or marketing docs.
 - Run the relevant checks before saying something works.

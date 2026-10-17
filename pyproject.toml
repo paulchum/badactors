@@ -1,14 +1,27 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "badactors"
-version = "0.1.0"
-description = "AI social-deduction arena where frontier-model agents play a hidden-role game and the audience watches them lie."
+dynamic = ["version"]
+description = "AI models play a murder game in a castle, and every lie they tell gets caught on tape."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "paulchum" }]
+keywords = ["ai", "llm", "game", "social-deduction", "deception", "benchmark"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Games/Entertainment",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "anyio",
   "fastapi",
@@ -16,6 +29,12 @@ dependencies = [
   "pydantic>=2",
   "uvicorn",
 ]
+
+[project.urls]
+Homepage = "https://paulchum.github.io/badactors/"
+Repository = "https://github.com/paulchum/badactors"
+Issues = "https://github.com/paulchum/badactors/issues"
+Standings = "https://paulchum.github.io/badactors/?page=leaderboard"
 
 [project.scripts]
 castle-bench = "badactors.bench.cli:main"
@@ -36,8 +55,14 @@ dev = [
   "ruff",
 ]
 
+[tool.hatch.version]
+path = "src/badactors/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/badactors"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src/badactors", "/README.md", "/LICENSE", "/CITATION.cff"]
 
 [tool.ruff]
 line-length = 88

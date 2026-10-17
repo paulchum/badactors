@@ -50,6 +50,7 @@ from badactors.bench.leaderboard import Board, Finished, Refusal, board
 from badactors.bench.matrix import ALL, matrix
 from badactors.bench.steer import spearman
 from badactors.castle.cast import load_cast_file
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import load_record, replay
 from badactors.castle.power import PilotTooShort, arm_loads, plan, run_pilot
@@ -64,8 +65,6 @@ from badactors.castle.schedule import (
     save_schedule,
 )
 from badactors.castle.verify import make_bundle, read_events, save_bundle
-
-_CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "castle"
 
 NOTE = (
     "Reference bots are labeled as such and never mixed with model results; "
@@ -92,8 +91,8 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0, help="Deals the bot profiles.")
     parser.add_argument("--resamples", type=int, default=200, help="Bootstrap draws.")
     parser.add_argument("--no-leak-check", action="store_true")
-    parser.add_argument("--cast", default=str(_CONFIGS / "cast.json"))
-    parser.add_argument("--map", default=str(_CONFIGS / "map.json"))
+    parser.add_argument("--cast", default=str(CAST))
+    parser.add_argument("--map", default=str(MAP))
     parser.add_argument(
         "--open-weight",
         nargs="*",

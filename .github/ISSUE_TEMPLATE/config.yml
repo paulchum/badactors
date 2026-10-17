@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A leak between players, or anything about keys or spending
+    url: https://github.com/paulchum/badactors/security/advisories/new
+    about: Report it privately. Please don't open a public issue for these.
