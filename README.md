@@ -29,18 +29,20 @@ The full design is in [SPEC.md](SPEC.md), in the technical words. The show words
 ## This season in the Castle
 
 <!--
-  Hero slot. The image is a placeholder. Once the real cast has played, this
+  Hero slot. The poster stands in until the real cast has played. Then this
   becomes the 45-second supertease, cut from real games only: a poster frame
   here, linked to the video. Bot footage never goes in this slot.
 -->
 
-![Bad Actors, Season 1. A placeholder until the real cast plays.](frontend/public/social.png)
+![Bad Actors, Season 1. A castle under a full moon, a forged letter with a red wax seal, a glowing bottle of poison and a COLD-BLOODED LIE stamp, over the ten models lined up to play.](frontend/public/social.png)
 
 No trailer yet, because nobody real has played. The 45 seconds go here the week they do.
 
 ## Meet the cast
 
 Ten guests at Greywater Castle. Each one comes with a secret worth blackmailing them over. Two of them are killers, and they can recruit a third. Every model plays its guest without being told which models are sitting in the other chairs.
+
+![The ten guests in a police lineup, each in their real build and coat. Each model wears a mask of its own in its lab's colour: an opera half-mask for Claude Opus, a sunburst for GPT-6.1 Sol, a laurel wreath for Muse Spark, diving goggles for DeepSeek.](.github/readme/cast.png)
 
 These are the models lined up for each chair. The diary lines aren't theirs. They come from a bot run, seed 56, with a seeded bot in all ten chairs. The real cast's lines replace them once it plays.
 
@@ -56,6 +58,18 @@ These are the models lined up for each chair. The diary lines aren't theirs. The
 | Vale | stooped, dark shawl | GLM 5.3 | "Wren and I were there together; I remember it." | GASLIT. They weren't. |
 | Hale | tall, canvas jacket | Muse Spark 1.3 | "Every traitor who began is gone." | Voted to go home with Wren still at the table. |
 | Nell | wiry, grey coat | Mistral Medium 3.5 | "I say what I saw." | Had the shield Wren thought June had. |
+
+## The castle
+
+The light in each room decides what a witness can swear to. The killers meet in the crypt, and the crypt has no windows.
+
+![Greywater Castle's floor plan. Bright rooms glow yellow, dim rooms are lamplit red, dark rooms are black, and three rooms have cameras.](.github/readme/castle.png)
+
+## Standings
+
+Every model lands in one of four boxes once it's played enough games to count. Nobody has yet.
+
+![The Sociopath vs. Sucker Matrix, empty: four boxes called Scout, Snake, Sucker and Mess, and the ten models waiting to be placed.](.github/readme/matrix.png)
 
 ## Run it
 
@@ -80,6 +94,8 @@ uv run castle-live --seed 7 --max-requests 600 --max-tokens 6000000 --max-dollar
 The real cast, through OpenRouter, for real money. It needs `OPENROUTER_API_KEY` set, prices the game before the first call and won't spend past any of the three limits. `--dry-run` shows the price and spends nothing.
 
 ## How we keep it honest
+
+![A receipt from bot game 56: Wren whispers a false memory to Vale, Vale repeats it at the round table, the rewind shows nobody was in the Library, Vale's diary believes it, and the stamp says GASLIT.](.github/readme/receipt.png)
 
 - **Same seed, same game, every time.** The dice are seeded and every roll is on the tape, so a replay comes out identical.
 - **Nobody sees what they couldn't.** A player only gets what its guest saw, heard or read. A leak checker reads everything a player is shown before it goes out, and the tests plant leaks to make sure they get caught.
