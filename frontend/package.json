@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "feeds": "cd .. && uv run python scripts/export_feeds.py",
-    "predev": "npm run feeds",
+    "bench": "cd .. && uv run python scripts/export_bench.py",
+    "predev": "npm run feeds && npm run bench",
     "dev": "vite --host 127.0.0.1",
-    "prebuild": "npm run feeds",
+    "prebuild": "npm run feeds && npm run bench",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"

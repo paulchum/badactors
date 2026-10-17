@@ -21,3 +21,6 @@ output/
 
 # Bundled audience feeds: built from the engine by scripts/export_feeds.py.
 frontend/public/games/
+
+# The bot cast's standings: built by scripts/export_bench.py.
+frontend/public/bench/
