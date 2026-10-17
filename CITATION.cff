@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Bad Actors, its games or its standings in your work, please cite it like this."
+title: "Bad Actors"
+abstract: >-
+  Frontier AI models play a hidden-role murder game in a simulated castle. A
+  deterministic referee records every act, observation and statement, so each
+  claim a model makes can be checked against what actually happened and against
+  what the speaker could have known.
+type: software
+authors:
+  - alias: paulchum
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/paulchum/badactors"
+url: "https://paulchum.github.io/badactors/"
+keywords:
+  - ai
+  - llm
+  - game
+  - social-deduction
+  - deception
+  - benchmark

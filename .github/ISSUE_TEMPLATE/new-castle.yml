@@ -1,0 +1,31 @@
+name: Build a new castle
+description: Pitch a new map, a new cast, or new rooms for Greywater.
+labels: ["new castle"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A castle is a map plus a cast. CONTRIBUTING.md has the rules the map linter checks. Rough ideas are welcome. You don't need a finished JSON file to start.
+  - type: textarea
+    id: pitch
+    attributes:
+      label: The pitch
+      description: Where is it, and what makes it a good place to get away with murder?
+    validations:
+      required: true
+  - type: textarea
+    id: rooms
+    attributes:
+      label: Rooms
+      description: Which rooms, how they connect, and which ones are dark, dim or bright. Which have cameras.
+  - type: textarea
+    id: cast
+    attributes:
+      label: Guests
+      description: Who's staying, what they wear, and what each one is hiding.
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: If you've written map.json or cast.json, paste them or link a branch. Say whether castle-game runs with them.
+      render: json

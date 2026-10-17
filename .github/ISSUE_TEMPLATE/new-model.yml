@@ -1,0 +1,35 @@
+name: Put a new model in the castle
+description: Suggest a model for the cast, or tell us how one did in Tryouts.
+labels: ["new model"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every model tries out before it plays for the standings. If you've run Tryouts yourself, paste the result. If not, that's fine, we can run it.
+  - type: input
+    id: model
+    attributes:
+      label: OpenRouter model id
+      placeholder: lab/model-name
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this one
+      description: What makes it worth a chair. A new frontier model, an open-weight model that punches up, a model you think lies well.
+    validations:
+      required: true
+  - type: textarea
+    id: tryouts
+    attributes:
+      label: Tryouts result
+      description: The summary castle-qualify printed, or the out/qualify/<model>.json file. Say if it was --mock or --dry-run.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I didn't paste a key, a header or a raw request.
+          required: true
