@@ -50,10 +50,8 @@ def test_a_flag_beats_the_balance_file(
     balance.write_text(json.dumps(raw))
     record = tmp_path / "game.json"
 
-    castle_game(
-        ["--seed", "7", "--balance", str(balance), "--max-days", "2"]
-        + ["--save", str(record)]
-    )
+    flags = ["--balance", str(balance), "--max-days", "2", "--save", str(record)]
+    castle_game(["--seed", "7", *flags])
     capsys.readouterr()
 
     assert load_record(record).config.max_days == 2
