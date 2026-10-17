@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from badactors.castle.verify import load_bundle, verify
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -57,10 +59,14 @@ def test_it_writes_castle_benchs_json_and_a_bundle_per_game(
     assert site["min_games"] == 3
     assert site["run"]["command"] == "castle-bench --bots --seeds 2"
     assert site["run"]["rotation"] == "compact"
+    assert site["run"]["pairs_met"] == site["run"]["pairs_wanted"] == 8 * 7
     assert len(site["run"]["suite_digest"]) == 64
     for game in site["games"]:
-        assert (out / game["bundle"]).is_file()
+        bundle = load_bundle(out / game["bundle"])
+        assert bundle.head == game["head"]
         assert game["ticks"][0] <= game["ticks"][1]
+    first = site["games"][0]
+    assert verify(load_bundle(out / first["bundle"]), head=first["head"]) == []
 
 
 def test_every_seat_is_a_bot_and_matches_the_leaderboard(

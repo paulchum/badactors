@@ -10,11 +10,13 @@ Into ``frontend/public/bench/`` it writes castle-bench's own JSON unchanged
 each game's verify bundle under ``replays/bots/``, and ``seats.json`` with what
 castle-bench's JSON does not carry and the pages need:
 
-* ``run`` — the command, the rotation, the qualification suite's digest, and
+* ``run`` — the command, the rotation and the attacker-target pairs it
+  seated, the qualification suite's digest, and
   the commit and its date (the run date, so a rebuild of the same commit
   writes the same bytes);
 * ``min_games`` — below this many games a stat card is not drawn;
-* ``games`` — each game's seed, winner, ticks and bundle, for receipts;
+* ``games`` — each game's seed, winner, ticks, bundle and the head of its
+  hash chain, for receipts;
 * ``seats`` — one row per seat per game from the fact-checker (lies, unforced
   lies, lies nobody caught, memories planted in others and in this seat,
   evidence-based votes), the recruitment offers it refused and the
@@ -52,6 +54,7 @@ from badactors.castle.metrics import per_game
 from badactors.castle.qualify import load_suite
 from badactors.castle.rules import GameConfig
 from badactors.castle.schedule import Scenario
+from badactors.castle.verify import make_bundle
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "frontend" / "public" / "bench"
@@ -132,7 +135,7 @@ def seat_rows(finished: Finished) -> list[dict[str, Any]]:
             {
                 "game": finished.id,
                 "seat": seat,
-                "entrant": agent,
+                "entrant": agent.removeprefix("model:"),
                 "traitor": stats.role == "traitor",
                 "recruited": seat in game.traitor_since
                 and seat not in game.starting_traitors,
@@ -172,6 +175,7 @@ def game_row(finished: Finished) -> dict[str, Any]:
         "winner": finished.record.winner,
         "ticks": [ledger[0].tick, ledger[-1].tick] if ledger else [0, 0],
         "bundle": f"replays/bots/{finished.id}.json.gz",
+        "head": make_bundle(finished.record).head,
     }
 
 
@@ -185,7 +189,23 @@ def _git(*args: str) -> str | None:
     return done.stdout.strip() or None
 
 
+def pairs(schedule: dict[str, Any]) -> tuple[int, int]:
+    """Ordered attacker-target pairs the schedule seats across a game, an
+    attacker in a traitor seat and a target in a Faithful one, of all there are."""
+    met: set[tuple[str, str]] = set()
+    entrants: set[str] = set()
+    for game in schedule["games"]:
+        seats: dict[str, str] = game["seats"]
+        entrants.update(seats.values())
+        for traitor in game["traitors"]:
+            for seat, target in seats.items():
+                if seat not in game["traitors"] and target != seats[traitor]:
+                    met.add((seats[traitor], target))
+    return len(met), len(entrants) * (len(entrants) - 1)
+
+
 def run_info(seeds: int, schedule: dict[str, Any], games: int) -> dict[str, Any]:
+    met, wanted = pairs(schedule)
     return {
         "command": f"castle-bench --bots --seeds {seeds}",
         "seeds": seeds,
@@ -193,6 +213,8 @@ def run_info(seeds: int, schedule: dict[str, Any], games: int) -> dict[str, Any]
         "players": schedule["players"],
         "traitors": schedule["traitors"],
         "rotation": schedule["rotation"],
+        "pairs_met": met,
+        "pairs_wanted": wanted,
         "suite_digest": load_suite().digest,
         "commit": _git("rev-parse", "--short=12", "HEAD"),
         "date": _git("log", "-1", "--format=%cs"),
