@@ -1,9 +1,11 @@
 """Write the audience feeds the static spectator bundles, and their index.
 
 Each seed is played exactly as ``castle-game --seed N`` plays it: the shipped
-map, cast and numbers, with the seeded heuristic bot in every seat. No model is
-asked anything. The feeds land in ``frontend/public/games/`` beside an
-``index.json`` the site reads first, and every one is labelled a bot game.
+map, cast and numbers, with the seeded heuristic bot in every seat, and is
+fact-checked with the mock extractor. No model is asked anything. The feeds land
+in ``frontend/public/games/`` beside an ``index.json`` the site reads first,
+and every one is labelled a bot game. Beside them, ``cards/<game>/<claim>.svg``
+is a share card for every claim made out loud.
 They are built, not committed: ``npm run build``, ``npm run dev`` and the
 frontend tests run this first (``npm run feeds``), and git ignores the folder.
 
@@ -15,16 +17,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from collections import Counter
 from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
+from badactors.castle.clips import receipt_card
 from badactors.castle.configs import CAST, MAP
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import Feed, audience_feed, save_feed
+from badactors.castle.show import Feed, NameStyle, audience_feed, checked, save_feed
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "frontend" / "public" / "games"
@@ -37,7 +41,7 @@ have a forged note that works; in 35 the household banishes five of its own
 and the traitors win; on day 1 of 30 a traitor's accusation fools every one of
 the Faithful. Each has a round table for the landing game."""
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 def play(seed: int) -> Feed:
@@ -51,13 +55,15 @@ def play(seed: int) -> Feed:
         {pid: bot for pid in game.world.seats},
         models=list(cast.models().values()),
     )
-    return audience_feed(record(castle, cast, played))
+    stored = record(castle, cast, played)
+    return audience_feed(stored, checked(stored))
 
 
 def summary(game_id: str, feed: Feed) -> dict[str, object]:
     """What the site's game list shows before it loads a feed."""
     game = feed.game
     kinds = Counter(moment.kind for moment in feed.moments)
+    stamps = Counter(claim.stamp for claim in feed.claims)
     top = feed.moments[0] if feed.moments else None
     return {
         "id": game_id,
@@ -73,12 +79,27 @@ def summary(game_id: str, feed: Feed) -> dict[str, object]:
         "moments": len(feed.moments),
         "kinds": dict(sorted(kinds.items())),
         "twist": kinds["twist_ending"] > 0,
+        "fact_checked": game.fact_checked,
+        "claims": len(feed.claims),
+        "stamps": dict(sorted(stamps.items())),
         "headline": top.headline if top is not None else None,
     }
 
 
+def cards(game_id: str, feed: Feed, out: Path) -> int:
+    """A share card for every claim in one game, named as bots are named on the
+    site: by character for a bot game, by model for a model game."""
+    folder = out / "cards" / game_id
+    folder.mkdir(parents=True, exist_ok=True)
+    names: NameStyle = "character" if feed.game.reference_bots else "model"
+    for claim in feed.claims:
+        (folder / f"{claim.id}.svg").write_text(receipt_card(feed, claim, names=names))
+    return len(feed.claims)
+
+
 def export(seeds: list[int], out: Path) -> list[dict[str, object]]:
     out.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(out / "cards", ignore_errors=True)
     games: list[dict[str, object]] = []
     for seed in seeds:
         game_id = f"seed-{seed}"
@@ -87,7 +108,11 @@ def export(seeds: list[int], out: Path) -> list[dict[str, object]]:
             raise SystemExit(f"Seed {seed} was not a bot game; refusing to bundle it.")
         save_feed(feed, out / f"{game_id}.json")
         games.append(summary(game_id, feed))
-        print(f"{game_id}: {len(feed.events)} events, {len(feed.moments)} moments")
+        made = cards(game_id, feed, out)
+        print(
+            f"{game_id}: {len(feed.events)} events, {len(feed.moments)} moments, "
+            f"{made} share cards"
+        )
     keep = {str(game["file"]) for game in games} | {"index.json"}
     for stale in out.glob("*.json"):
         if stale.name not in keep:

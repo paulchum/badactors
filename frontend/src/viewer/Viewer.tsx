@@ -1,6 +1,7 @@
 // The replay site: the map and the scrubber, the highlights, one moment's said,
 // thought and done side by side, and the evidence board. Deep links carry the
-// game, the tick and the moment: ?game=seed-56&tick=41&moment=twist_ending-1110.
+// game, the tick and the moment, ?game=seed-56&tick=41&moment=twist_ending-1110,
+// and a claim's receipt opens with &claim=c927-1.
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -8,6 +9,7 @@ import { planFor } from "../feed/layout";
 import type { Game } from "../feed/load";
 import { type NameStyle, Naming, defaultStyle, eventText } from "../feed/naming";
 import { tokenTimeline, tokensAt } from "../feed/positions";
+import { titleLine } from "../feed/receipt";
 import type { FeedEvent, FeedMoment, GameIndex, GameSummary } from "../feed/types";
 import type { Route } from "../route";
 import { BotBanner, Brand, Failed, Loading, Panel, SeatName, when } from "../ui/common";
@@ -16,6 +18,7 @@ import { CastleMap, MapKey, garmentColour, initials } from "./CastleMap";
 import { EvidenceBoard } from "./EvidenceBoard";
 import { HighlightsRail, railOrder } from "./HighlightsRail";
 import { MomentPanel } from "./MomentPanel";
+import { ClaimReceipt } from "./Receipt";
 import { Scrubber } from "./Scrubber";
 
 type ViewerRoute = Extract<Route, { page: "viewer" }>;
@@ -47,12 +50,12 @@ function GamePicker({ index, current, go }: { index: GameIndex; current: GameSum
       <span className="sr-only sm:not-sr-only">Game</span>
       <select
         value={current.id}
-        onChange={(event) => go({ page: "viewer", game: event.target.value, tick: null, moment: null })}
+        onChange={(event) => go({ page: "viewer", game: event.target.value, tick: null, moment: null, claim: null })}
         className="min-w-0 max-w-[16rem] rounded-md border border-rim bg-panel px-2 py-1.5 text-stone-100"
       >
         {index.games.map((g) => (
           <option key={g.id} value={g.id}>
-            Seed {g.seed} · bot game · {g.winner === "traitor" ? "traitors win" : "Faithful win"}
+            Episode {g.seed} · {g.reference_bots ? "bots" : "models"} · {g.winner === "traitor" ? "traitors win" : "Faithful win"}
             {g.twist ? " · twist" : ""}
           </option>
         ))}
@@ -76,13 +79,19 @@ export function Replay({
   const plan = useMemo(() => planFor(feed.game.castle_id, feed.rooms), [feed]);
   const timeline = useMemo(() => tokenTimeline(feed), [feed]);
   const first = useMemo(() => railOrder(feed.moments)[0] ?? null, [feed]);
-  const [momentId, setMomentId] = useState<string | null>(() =>
-    feed.moments.some((m) => m.id === route.moment) ? route.moment : (first?.id ?? null),
-  );
+  const [claimId, setClaimId] = useState<string | null>(() => game.claim(route.claim)?.id ?? null);
+  const opened = game.claim(claimId);
+  const [momentId, setMomentId] = useState<string | null>(() => {
+    if (feed.moments.some((m) => m.id === route.moment)) return route.moment;
+    const own = opened ? feed.moments.find((m) => m.verdict?.claim === opened.id || m.claim === opened.seq) : undefined;
+    return own?.id ?? first?.id ?? null;
+  });
   const moment = feed.moments.find((m) => m.id === momentId) ?? null;
-  const [tick, setTick] = useState(() => Math.min(route.tick ?? (moment ? momentTick(game, moment) : 0), game.lastTick));
+  const [tick, setTick] = useState(() =>
+    Math.min(route.tick ?? opened?.tick ?? (moment ? momentTick(game, moment) : 0), game.lastTick),
+  );
   const [playing, setPlaying] = useState(false);
-  const [focus, setFocus] = useState<number | null>(moment?.claim ?? null);
+  const [focus, setFocus] = useState<number | null>(opened?.seq ?? moment?.claim ?? null);
   const [style, setStyle] = useState<NameStyle>(() => defaultStyle(feed));
   const [roles, setRoles] = useState(true);
   const [suspect, setSuspect] = useState<string>(() => moment?.seats[0] ?? feed.seats[0].id);
@@ -101,11 +110,11 @@ export function Replay({
 
   useEffect(() => {
     const timer = window.setTimeout(
-      () => go({ page: "viewer", game: summary.id, tick, moment: momentId }, "replace"),
+      () => go({ page: "viewer", game: summary.id, tick, moment: momentId, claim: claimId }, "replace"),
       playing ? 1200 : 150,
     );
     return () => window.clearTimeout(timer);
-  }, [tick, momentId, summary.id, go, playing]);
+  }, [tick, momentId, claimId, summary.id, go, playing]);
 
   const focused = focus !== null ? game.event(focus) : null;
   const selectMoment = (m: FeedMoment) => {
@@ -120,8 +129,18 @@ export function Replay({
     setTick(event.tick);
     setFocus(event.seq);
   };
+  const openReceipt = (id: string) => {
+    const claim = game.claim(id);
+    if (!claim) return;
+    setClaimId(id);
+    setPlaying(false);
+    setTick(claim.tick);
+    setFocus(claim.seq);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const tokens = tokensAt(timeline, tick);
   const happening = feed.events.filter((e) => e.tick === tick && !ROUTINE.has(e.type));
+  const title = titleLine(game, style);
 
   return (
     <>
@@ -134,12 +153,14 @@ export function Replay({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
-              {feed.game.castle} <span className="text-stone-500">· seed {feed.game.seed}</span>
+              Episode {feed.game.seed}
+              {title ? <span className="font-serif font-normal italic text-stone-300"> · “{title}”</span> : null}
             </h1>
             <p className="text-sm text-stone-400">
-              {feed.seats.length} players, {feed.game.days} days.{" "}
+              {feed.game.castle}. {feed.seats.length} players, {feed.game.days} days.{" "}
               {feed.game.winner === "traitor" ? "The traitors won." : feed.game.winner === "faithful" ? "The Faithful won." : ""}{" "}
-              {summary.moments} moments.
+              {summary.moments} moments
+              {feed.game.fact_checked ? `, ${feed.claims.length} claims, every one checked against the tape.` : ". Nothing's been fact-checked yet."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -162,6 +183,18 @@ export function Replay({
             </label>
           </div>
         </div>
+
+        {opened ? (
+          <ClaimReceipt
+            game={game}
+            gameId={summary.id}
+            claim={opened}
+            style={style}
+            naming={naming}
+            onClose={() => setClaimId(null)}
+            onJump={jump}
+          />
+        ) : null}
 
         <HighlightsRail moments={feed.moments} selected={momentId} style={style} onSelect={selectMoment} />
 
@@ -200,7 +233,9 @@ export function Replay({
           </div>
         </div>
 
-        {moment ? <MomentPanel game={game} moment={moment} style={style} naming={naming} focus={focus} onJump={jump} /> : null}
+        {moment ? (
+          <MomentPanel game={game} moment={moment} style={style} naming={naming} focus={focus} onJump={jump} onReceipt={openReceipt} />
+        ) : null}
 
         <EvidenceBoard
           game={game}

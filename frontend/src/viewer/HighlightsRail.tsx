@@ -49,6 +49,7 @@ export function HighlightsRail({
                 <span className="flex items-center justify-between gap-2">
                   <span className={`text-[11px] font-black tracking-[0.14em] ${twist ? "text-traitor" : "text-candle"}`}>
                     {moment.label}
+                    {moment.verdict && moment.verdict.stamp !== "TRUE" ? <span className="text-stone-400"> · {moment.verdict.stamp}</span> : null}
                   </span>
                   <span className="font-mono text-[10px] text-stone-400">
                     D{moment.day} · t{moment.first_tick}

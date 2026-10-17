@@ -1,7 +1,7 @@
 // A small hand-built feed for tests: three rooms, four seats, and whatever
 // entries a test adds. Not used by the site.
 
-import type { Feed, FeedEvent, FeedSeat, Frame, Phase, Whereabouts } from "./types";
+import type { Feed, FeedClaim, FeedEvent, FeedMoment, FeedSeat, Frame, Phase, Whereabouts } from "./types";
 
 type EventInit = Partial<FeedEvent> & Pick<FeedEvent, "tick" | "type">;
 
@@ -38,6 +38,8 @@ export function smallFeed(options: {
   events?: EventInit[];
   frames?: Record<number, Record<string, Partial<Whereabouts>>>;
   ticks?: number;
+  moments?: FeedMoment[];
+  claims?: FeedClaim[];
 }): Feed {
   const seats = options.seats ?? [seat("ada", 1), seat("bo", 2), seat("cy", 3), seat("di", 4)];
   const events: FeedEvent[] = (options.events ?? []).map((init, index) => ({
@@ -68,7 +70,7 @@ export function smallFeed(options: {
   }
   return {
     feed: "badactors.castle.feed",
-    version: 1,
+    version: 2,
     game: {
       world_id: "test",
       castle_id: "test",
@@ -78,6 +80,7 @@ export function smallFeed(options: {
       rated: false,
       winner: "faithful",
       reference_bots: seats.every((s) => s.played_by === "bot"),
+      fact_checked: (options.claims ?? []).length > 0,
       days: 1,
       ticks: last,
       pot: 0,
@@ -102,6 +105,7 @@ export function smallFeed(options: {
     events,
     positions,
     seatings: [],
-    moments: [],
+    moments: options.moments ?? [],
+    claims: options.claims ?? [],
   };
 }

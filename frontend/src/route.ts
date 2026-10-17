@@ -1,12 +1,12 @@
 // The site's pages live in the query string, so the static build needs no
-// server routes: "?game=seed-56&tick=41" is the viewer, the bare page the
-// landing game.
+// server routes: "?game=seed-56&tick=41" is the viewer, "?game=seed-56&claim=
+// c927-1" a claim's receipt in it, the bare page the landing game.
 
 import { useCallback, useEffect, useState } from "react";
 
 export type Route =
   | { page: "landing" }
-  | { page: "viewer"; game: string | null; tick: number | null; moment: string | null }
+  | { page: "viewer"; game: string | null; tick: number | null; moment: string | null; claim?: string | null }
   | { page: "leaderboard" }
   | { page: StandingsPage }
   | { page: "model"; id: string };
@@ -27,6 +27,7 @@ export function parseRoute(search: string): Route {
       game: params.get("game") || null,
       tick: Number.isFinite(tick) && tick >= 0 ? tick : null,
       moment: params.get("moment") || null,
+      claim: params.get("claim") || null,
     };
   }
   return { page: "landing" };
@@ -41,6 +42,7 @@ export function routeSearch(route: Route): string {
   params.set("game", route.game ?? "");
   if (route.tick !== null) params.set("tick", String(route.tick));
   if (route.moment !== null) params.set("moment", route.moment);
+  if (route.claim) params.set("claim", route.claim);
   return `?${params.toString()}`;
 }
 

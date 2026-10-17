@@ -19,20 +19,20 @@ function fakeFetch(files: Record<string, unknown>) {
 }
 
 describe("parseFeed", () => {
-  it("accepts a version-1 feed", () => {
+  it("accepts a version-2 feed", () => {
     const feed = smallFeed({ events: [{ tick: 0, type: "placed" }], ticks: 2 });
     expect(parseFeed(clone(feed)).positions).toHaveLength(3);
   });
 
   it("refuses what is not a feed, or another version", () => {
     expect(() => parseFeed({ hello: 1 })).toThrow(FeedError);
-    expect(() => parseFeed({ ...smallFeed({}), version: 2 })).toThrow(/version 2/);
+    expect(() => parseFeed({ ...smallFeed({}), version: 1 })).toThrow(/version 1/);
   });
 
-  it("refuses a ledger with a gap", () => {
+  it("refuses events with a gap", () => {
     const feed = smallFeed({ events: [{ tick: 0, type: "a" }, { tick: 0, type: "b" }] });
     feed.events[1].seq = 3;
-    expect(() => parseFeed(feed)).toThrow(/gapless/);
+    expect(() => parseFeed(feed)).toThrow(/no gaps/);
   });
 
   it("refuses positions that skip a seat or a tick", () => {
@@ -44,7 +44,7 @@ describe("parseFeed", () => {
     expect(() => parseFeed(missing)).toThrow(/ada/);
   });
 
-  it("refuses a moment pointing outside the ledger", () => {
+  it("refuses a moment or a claim pointing at an event the game doesn't have", () => {
     const feed = smallFeed({ events: [{ tick: 0, type: "a" }] });
     feed.moments.push({
       id: "refusal-9",
@@ -62,11 +62,16 @@ describe("parseFeed", () => {
       stakes: 1,
       contradiction: false,
       score: 1,
+      checked: false,
       truth: [],
       evidence: [],
       notes: {},
     });
-    expect(() => parseFeed(feed)).toThrow(/outside the ledger/);
+    expect(() => parseFeed(feed)).toThrow(/Moment refusal-9 points at event 9/);
+    const claimed = bundledGame("seed-56.json").feed;
+    const broken = clone(claimed);
+    broken.claims[0].proof = [broken.events.length + 1];
+    expect(() => parseFeed(broken)).toThrow(new RegExp(`Claim ${claimed.claims[0].id} points at event`));
   });
 });
 
@@ -74,7 +79,7 @@ describe("loading", () => {
   it("reads the index, then a feed, from beside the page", async () => {
     const feed = smallFeed({ ticks: 1 });
     const { fetcher, asked } = fakeFetch({
-      "./games/index.json": { version: 1, games: [{ id: "seed-1", file: "seed-1.json" }] },
+      "./games/index.json": { version: 2, games: [{ id: "seed-1", file: "seed-1.json" }] },
       "./games/seed-1.json": feed,
     });
     const index = await loadIndex(fetcher, "./");
@@ -102,6 +107,8 @@ describe("the bundled games", () => {
       expect(game.feed.seats.every((seat) => seat.played_by === "bot" && seat.model == null)).toBe(true);
       expect(game.feed.game.seed).toBe(summary.seed);
       expect(game.lastTick).toBe(summary.ticks);
+      expect(game.feed.game.fact_checked).toBe(true);
+      expect(game.feed.claims).toHaveLength(summary.claims);
     }
   });
 

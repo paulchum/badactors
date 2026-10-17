@@ -1,5 +1,5 @@
 // One moment, side by side: what was said, what was written privately, and
-// what the ledger shows happened, with the custody of the object in question.
+// what the tape shows happened, with the custody of the object in question.
 // Viewers here can pause, so the three run in parallel (SPEC §8); on a phone
 // they stack.
 
@@ -19,7 +19,10 @@ import {
 } from "../feed/naming";
 import { LINE_FIELDS, LINE_NAMES, custodyChain, intentText, momentColumns, objectInQuestion, placementText } from "../feed/story";
 import type { FeedEvent, FeedMoment } from "../feed/types";
+import { claimWhy } from "../feed/receipt";
+import { worst } from "../feed/stamps";
 import { LightBadge, Panel, PHASES, RollChips, SeatName } from "../ui/common";
+import { StampMark } from "./Receipt";
 
 const CONFIDENCE: Record<string, string> = {
   clear: "text-emerald-300",
@@ -27,16 +30,34 @@ const CONFIDENCE: Record<string, string> = {
   glimpse: "text-rose-300",
 };
 
-function Stamp({ moment }: { moment: FeedMoment }) {
-  const ruled = moment.verdict != null;
+function Stamp({
+  game,
+  moment,
+  style,
+  onReceipt,
+}: {
+  game: Game;
+  moment: FeedMoment;
+  style: NameStyle;
+  onReceipt: (claim: string) => void;
+}) {
+  const claim = game.ruled(moment);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <span className={`stamp stamp-in text-lg ${moment.kind === "twist_ending" || ruled ? "text-traitor" : "text-candle"}`}>
-        {moment.label}
-      </span>
-      <span className="text-xs text-stone-400">
-        {ruled ? "The fact-checker's verdict." : "What the ledger shows. Not yet fact-checked."}
-      </span>
+      <span className={`stamp stamp-in text-lg ${moment.kind === "twist_ending" ? "text-traitor" : "text-candle"}`}>{moment.label}</span>
+      {claim ? (
+        <>
+          <StampMark stamp={claim.stamp} size="text-lg" className="stamp-in" />
+          <span className="text-sm text-stone-300">{claimWhy(claim, style)}</span>
+          <button type="button" onClick={() => onReceipt(claim.id)} className="text-sm text-candle underline underline-offset-2">
+            See the receipt
+          </button>
+        </>
+      ) : (
+        <span className="text-xs text-stone-400">
+          {moment.checked ? "Nothing in these words to check." : "Not fact-checked yet. This is just what the tape shows."}
+        </span>
+      )}
     </div>
   );
 }
@@ -92,7 +113,7 @@ function Empty({ children }: { children: ReactNode }) {
 
 export function Witnesses({ game, event, style }: { game: Game; event: FeedEvent; style: NameStyle }) {
   const others = event.witnesses.filter((w) => w.sense !== "own");
-  if (others.length === 0) return <p className="mt-2 text-xs text-stone-500">Nobody else recorded it.</p>;
+  if (others.length === 0) return <p className="mt-2 text-xs text-stone-500">Nobody else saw it.</p>;
   const shown = others.slice(0, 6);
   return (
     <details className="mt-2 text-xs" open={others.length <= 3}>
@@ -131,7 +152,7 @@ function Custody({ game, moment, style, naming, onJump }: { game: Game; moment: 
       <h3 className="text-sm font-black uppercase tracking-[0.16em] text-stone-200">
         Custody: <span className="normal-case tracking-normal text-candle">{game.thingName(thing)}</span>
       </h3>
-      <p className="mb-2 text-xs text-stone-500">Every entry that moved or touched it, up to the end of the moment.</p>
+      <p className="mb-2 text-xs text-stone-500">Everyone who moved it or touched it, up to the end of the moment.</p>
       <ol className="relative grid gap-1.5 border-l border-candle/30 pl-4">
         {chain.map((link) => (
           <li key={link.seq} className="relative text-sm">
@@ -155,6 +176,7 @@ export function MomentPanel({
   naming,
   focus,
   onJump,
+  onReceipt,
 }: {
   game: Game;
   moment: FeedMoment;
@@ -162,6 +184,7 @@ export function MomentPanel({
   naming: Naming;
   focus: number | null;
   onJump: (event: FeedEvent) => void;
+  onReceipt: (claim: string) => void;
 }) {
   const columns = momentColumns(game, moment);
   const ring = (event: FeedEvent) => (event.seq === focus ? "ring-2 ring-candle/70" : "");
@@ -170,28 +193,36 @@ export function MomentPanel({
     <Panel>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <Stamp moment={moment} />
+          <Stamp game={game} moment={moment} style={style} onReceipt={onReceipt} />
           <p className="mt-3 font-serif text-lg leading-snug text-stone-100 sm:text-xl">{headline(moment, style)}</p>
         </div>
         <p className="shrink-0 font-mono text-[11px] text-stone-500 sm:text-right">
           {castle} · seed {seed}
           <br />
-          ticks {moment.first_tick}–{moment.last_tick} · entries {moment.first_seq}–{moment.last_seq}
+          day {moment.day} · ticks {moment.first_tick}–{moment.last_tick}
         </p>
       </div>
       <div className="mt-4 grid gap-5 md:grid-cols-3 md:gap-4">
         <Column title="Said" hint="Words spoken aloud or whispered, as they were said.">
           {columns.said.length === 0 ? <Empty>Nothing was said in words.</Empty> : null}
-          {columns.said.map((event) => (
-            <article key={event.seq} className={`rounded-lg bg-black/30 p-2.5 ${ring(event)}`}>
-              <EntryHead game={game} event={event} style={style} onJump={onJump} />
-              {event.seq === moment.claim ? (
-                <span className="mb-1 inline-block rounded bg-candle px-1.5 text-[10px] font-black uppercase tracking-wider text-ink">the claim</span>
-              ) : null}
-              <p className="font-serif text-[15px] leading-snug text-stone-100">“{eventQuote(event, style)}”</p>
-              <p className="mt-1 text-xs text-stone-500">{eventText(event, style)}</p>
-            </article>
-          ))}
+          {columns.said.map((event) => {
+            const checked = worst(game.claimsAt(event.seq));
+            return (
+              <article key={event.seq} className={`rounded-lg bg-black/30 p-2.5 ${ring(event)}`}>
+                <EntryHead game={game} event={event} style={style} onJump={onJump} />
+                {event.seq === moment.claim ? (
+                  <span className="mb-1 mr-2 inline-block rounded bg-candle px-1.5 text-[10px] font-black uppercase tracking-wider text-ink">the claim</span>
+                ) : null}
+                {checked ? (
+                  <button type="button" onClick={() => onReceipt(checked.id)} className="mb-1 inline-block" title="See the receipt">
+                    <StampMark stamp={checked.stamp} size="text-[11px]" className="!px-1.5 !py-0.5" />
+                  </button>
+                ) : null}
+                <p className="font-serif text-[15px] leading-snug text-stone-100">“{eventQuote(event, style)}”</p>
+                <p className="mt-1 text-xs text-stone-500">{eventText(event, style)}</p>
+              </article>
+            );
+          })}
         </Column>
         <Column title="Written privately" hint="Diaries and reasons only the audience reads.">
           {columns.privately.length === 0 ? <Empty>No private line sits on this moment.</Empty> : null}
@@ -211,7 +242,7 @@ export function MomentPanel({
             </article>
           ))}
         </Column>
-        <Column title="What happened" hint="The ledger, the first entry the one to rewind to.">
+        <Column title="What happened" hint="The tape. The first one is where a clip rewinds to.">
           {columns.happened.map((event, index) => (
             <article key={event.seq} className={`rounded-lg border border-rim bg-ink/80 p-2.5 ${ring(event)}`}>
               <EntryHead game={game} event={event} style={style} onJump={onJump} />

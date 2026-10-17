@@ -1,4 +1,4 @@
-// The audience feed, version 1, as castle/show.py writes it. The site reads
+// The audience feed, version 2, as castle/show.py writes it. The site reads
 // nothing else about a game.
 
 export type Lighting = "bright" | "dim" | "dark";
@@ -24,7 +24,28 @@ export type MomentKind =
   | "refusal"
   | "gaslit"
   | "exit_reveal"
-  | "twist_ending";
+  | "twist_ending"
+  | "caught_lie"
+  | "planted_belief"
+  | "made_up_rule";
+
+/** A claim's verdict as the audience sees it (SPEC §8). */
+export type Stamp =
+  | "TRUE"
+  | "COLD-BLOODED LIE"
+  | "HONEST MISTAKE"
+  | "IMPLANTED MEMORY"
+  | "GASLIT"
+  | "MADE IT UP"
+  | "DODGED"
+  | "KEPT ITS WORD"
+  | "BROKE ITS WORD"
+  | "NO WAY TO TELL";
+
+/** The fact-checker's own class (SPEC §5), for the Method glossary. */
+export type Label = "true" | "evasive" | "unverifiable" | "lie" | "mistake" | "implanted" | "invented" | "kept" | "broken";
+
+export type ClaimKind = "location" | "action" | "possession" | "tally" | "role" | "rule" | "commitment";
 
 /** Words with seats named by model, set only where they differ from the ledger's. */
 export interface Named {
@@ -43,6 +64,7 @@ export interface FeedGame {
   rated: boolean;
   winner: Role | null;
   reference_bots: boolean;
+  fact_checked: boolean;
   days: number;
   ticks: number;
   pot: number;
@@ -169,9 +191,45 @@ export interface Line {
   text: string;
 }
 
-export interface Verdict {
-  label: "LIE" | "MISTAKE" | "IMPLANTED";
+/** The ruling on a moment's claim: which claim, and how it was stamped. */
+export interface Ruling {
+  claim: string;
+  stamp: Stamp;
+  label: Label;
+  gave_in?: boolean | null;
   planted_by?: string | null;
+}
+
+/** One claim made out loud and its verdict. proof is what really happened,
+ * knew what the speaker had seen that said otherwise, path how a planted
+ * belief reached them, its origin first: all by event. */
+export interface FeedClaim {
+  id: string;
+  seq: number;
+  tick: number;
+  day: number;
+  phase: Phase;
+  speaker: string;
+  kind: ClaimKind;
+  said: string;
+  what: string;
+  stamp: Stamp;
+  label: Label;
+  truth: "true" | "false" | "unverifiable";
+  knowledge: "consistent" | "contradicted";
+  hedged: boolean;
+  took?: "gave_in" | "lost_memory" | null;
+  in_view?: boolean | null;
+  invented_as?: "bluff" | "confabulation" | null;
+  planted_by?: string | null;
+  origin?: number | null;
+  path: number[];
+  proof: number[];
+  knew: number[];
+  grounds: number[];
+  why: string;
+  reason: string;
+  audience?: { said?: string | null; what?: string | null; why?: string | null } | null;
 }
 
 export interface FeedMoment {
@@ -193,7 +251,8 @@ export interface FeedMoment {
   claim?: number | null;
   truth: number[];
   line?: Line | null;
-  verdict?: Verdict | null;
+  checked: boolean;
+  verdict?: Ruling | null;
   evidence: number[];
   notes: Record<string, string>;
   audience?: Named | null;
@@ -201,7 +260,7 @@ export interface FeedMoment {
 
 export interface Feed {
   feed: "badactors.castle.feed";
-  version: 1;
+  version: 2;
   game: FeedGame;
   seats: FeedSeat[];
   rooms: FeedRoom[];
@@ -211,6 +270,7 @@ export interface Feed {
   positions: Frame[];
   seatings: Seating[];
   moments: FeedMoment[];
+  claims: FeedClaim[];
 }
 
 /** One bundled game, as scripts/export_feeds.py lists it. */
@@ -228,10 +288,13 @@ export interface GameSummary {
   moments: number;
   kinds: Partial<Record<MomentKind, number>>;
   twist: boolean;
+  fact_checked: boolean;
+  claims: number;
+  stamps: Partial<Record<Stamp, number>>;
   headline: string | null;
 }
 
 export interface GameIndex {
-  version: 1;
+  version: 2;
   games: GameSummary[];
 }
