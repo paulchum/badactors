@@ -1,10 +1,11 @@
 // Loading the bundled games: the index first, then one feed at a time. The site
 // is static, so these are plain files beside the page.
 
-import type { Feed, FeedEvent, FeedRoom, FeedSeat, GameIndex, GameSummary } from "./types";
+import type { Feed, FeedClaim, FeedEvent, FeedMoment, FeedRoom, FeedSeat, GameIndex, GameSummary } from "./types";
 
 export const FEED_KIND = "badactors.castle.feed";
-export const FEED_VERSION = 1;
+export const FEED_VERSION = 2;
+export const INDEX_VERSION = 2;
 
 export class FeedError extends Error {
   constructor(message: string) {
@@ -35,14 +36,14 @@ export function parseFeed(raw: unknown): Feed {
     throw new FeedError(`Feed version ${String(raw.version)} is not one this site reads (${FEED_VERSION}).`);
   }
   if (!isObject(raw.game)) throw new FeedError("The feed has no game.");
-  for (const key of ["seats", "rooms", "passages", "things", "events", "positions", "seatings", "moments"]) {
+  for (const key of ["seats", "rooms", "passages", "things", "events", "positions", "seatings", "moments", "claims"]) {
     list(raw, key);
   }
   const feed = raw as unknown as Feed;
   if (feed.seats.length === 0) throw new FeedError("The feed has no seats.");
   feed.events.forEach((event, index) => {
     if (event.seq !== index + 1) {
-      throw new FeedError(`Event ${index + 1} has sequence number ${event.seq}; the ledger must be gapless.`);
+      throw new FeedError(`Event ${index + 1} is numbered ${event.seq}; the events must run 1, 2, 3 with no gaps.`);
     }
   });
   const ticks = feed.positions.length;
@@ -58,15 +59,26 @@ export function parseFeed(raw: unknown): Feed {
   const events = feed.events.length;
   for (const moment of feed.moments) {
     for (const seq of [moment.anchor, ...moment.truth, ...moment.evidence]) {
-      if (seq < 1 || seq > events) throw new FeedError(`Moment ${moment.id} points at entry ${seq}, outside the ledger.`);
+      if (seq < 1 || seq > events) throw new FeedError(`Moment ${moment.id} points at event ${seq}, which the game doesn't have.`);
+    }
+  }
+  const claims = new Set(feed.claims.map((claim) => claim.id));
+  for (const claim of feed.claims) {
+    for (const seq of [claim.seq, ...claim.proof, ...claim.knew, ...claim.path, ...claim.grounds]) {
+      if (seq < 1 || seq > events) throw new FeedError(`Claim ${claim.id} points at event ${seq}, which the game doesn't have.`);
+    }
+  }
+  for (const moment of feed.moments) {
+    if (moment.verdict && !claims.has(moment.verdict.claim)) {
+      throw new FeedError(`Moment ${moment.id} is stamped from claim ${moment.verdict.claim}, which the feed doesn't have.`);
     }
   }
   return feed;
 }
 
 export function parseIndex(raw: unknown): GameIndex {
-  if (!isObject(raw) || raw.version !== 1 || !Array.isArray(raw.games)) {
-    throw new FeedError("The game index is missing or not version 1.");
+  if (!isObject(raw) || raw.version !== INDEX_VERSION || !Array.isArray(raw.games)) {
+    throw new FeedError(`The game index is missing or not version ${INDEX_VERSION}.`);
   }
   for (const game of raw.games as unknown[]) {
     if (!isObject(game) || typeof game.id !== "string" || typeof game.file !== "string") {
@@ -114,11 +126,27 @@ export class Game {
   readonly seats: Map<string, FeedSeat>;
   readonly rooms: Map<string, FeedRoom>;
   readonly things: Map<string, string>;
+  readonly claims: Map<string, FeedClaim>;
 
   constructor(readonly feed: Feed) {
     this.seats = new Map(feed.seats.map((seat) => [seat.id, seat]));
     this.rooms = new Map(feed.rooms.map((room) => [room.id, room]));
     this.things = new Map(feed.things.map((thing) => [thing.id, thing.name]));
+    this.claims = new Map(feed.claims.map((claim) => [claim.id, claim]));
+  }
+
+  claim(id: string | null | undefined): FeedClaim | undefined {
+    return id ? this.claims.get(id) : undefined;
+  }
+
+  /** The claims an event's words make, in order. */
+  claimsAt(seq: number): FeedClaim[] {
+    return this.feed.claims.filter((claim) => claim.seq === seq);
+  }
+
+  /** The claim a moment's stamp is for, when the fact-checker ruled on it. */
+  ruled(moment: FeedMoment): FeedClaim | undefined {
+    return this.claim(moment.verdict?.claim);
   }
 
   get lastTick(): number {
@@ -127,7 +155,7 @@ export class Game {
 
   event(seq: number): FeedEvent {
     const event = this.feed.events[seq - 1];
-    if (event === undefined) throw new FeedError(`No entry ${seq}.`);
+    if (event === undefined) throw new FeedError(`This game has no event ${seq}.`);
     return event;
   }
 

@@ -1,5 +1,5 @@
 // The evidence board, one suspect at a time: what the house had on them, beside
-// what the ledger shows they did in secret, and the moments they are in.
+// what the tape shows they did in secret, and the moments they are in.
 
 import type { Game } from "../feed/load";
 import { type NameStyle, type Naming, eventQuote, eventText, headline, witnessText } from "../feed/naming";
@@ -101,7 +101,7 @@ export function EvidenceBoard({
               </li>
             ))}
             <li className="text-stone-400">
-              {named.length} record{named.length === 1 ? "" : "s"} by others name them at it; {unnamed.length} saw only a shape or a garment.
+              {named.length === 1 ? "One sighting names them" : `${named.length} sightings name them`}. {unnamed.length} saw only a shape or a garment.
             </li>
             {named.slice(-4).map(({ event, record }) => (
               <li key={`${event.seq}-${record.player}`} className="rounded bg-black/30 p-2 text-stone-300">
@@ -115,7 +115,7 @@ export function EvidenceBoard({
         <div className="min-w-0">
           <h4 className="mb-1.5 text-xs font-black uppercase tracking-[0.16em] text-stone-300">What they did in secret</h4>
           <ul className="grid grid-cols-1 gap-1.5 text-sm">
-            {board.secrets.length === 0 ? <li className="text-stone-500">Nothing the ledger counts as secret.</li> : null}
+            {board.secrets.length === 0 ? <li className="text-stone-500">Nothing secret on the tape.</li> : null}
             {board.secrets.map((event) => (
               <li key={event.seq} className="rounded border border-traitor/30 bg-traitor/5 p-2 text-stone-200">
                 <Jump event={event} onJump={onJump} />
