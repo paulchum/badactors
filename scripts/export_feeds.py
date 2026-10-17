@@ -4,7 +4,8 @@ Each seed is played exactly as ``castle-game --seed N`` plays it: the shipped
 map, cast and numbers, with the seeded heuristic bot in every seat, and is
 fact-checked with the mock extractor. No model is asked anything. The feeds land
 in ``frontend/public/games/`` beside an ``index.json`` the site reads first,
-and every one is labelled a bot game.
+and every one is labelled a bot game. Beside them, ``cards/<game>/<claim>.svg``
+is a share card for every claim made out loud.
 They are built, not committed: ``npm run build``, ``npm run dev`` and the
 frontend tests run this first (``npm run feeds``), and git ignores the folder.
 
@@ -16,15 +17,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from collections import Counter
 from pathlib import Path
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import load_cast_file
+from badactors.castle.clips import receipt_card
 from badactors.castle.mapfile import load_map
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import Feed, audience_feed, checked, save_feed
+from badactors.castle.show import Feed, NameStyle, audience_feed, checked, save_feed
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIGS = ROOT / "configs" / "castle"
@@ -83,8 +86,20 @@ def summary(game_id: str, feed: Feed) -> dict[str, object]:
     }
 
 
+def cards(game_id: str, feed: Feed, out: Path) -> int:
+    """A share card for every claim in one game, named as bots are named on the
+    site: by character for a bot game, by model for a model game."""
+    folder = out / "cards" / game_id
+    folder.mkdir(parents=True, exist_ok=True)
+    names: NameStyle = "character" if feed.game.reference_bots else "model"
+    for claim in feed.claims:
+        (folder / f"{claim.id}.svg").write_text(receipt_card(feed, claim, names=names))
+    return len(feed.claims)
+
+
 def export(seeds: list[int], out: Path) -> list[dict[str, object]]:
     out.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(out / "cards", ignore_errors=True)
     games: list[dict[str, object]] = []
     for seed in seeds:
         game_id = f"seed-{seed}"
@@ -93,7 +108,11 @@ def export(seeds: list[int], out: Path) -> list[dict[str, object]]:
             raise SystemExit(f"Seed {seed} was not a bot game; refusing to bundle it.")
         save_feed(feed, out / f"{game_id}.json")
         games.append(summary(game_id, feed))
-        print(f"{game_id}: {len(feed.events)} events, {len(feed.moments)} moments")
+        made = cards(game_id, feed, out)
+        print(
+            f"{game_id}: {len(feed.events)} events, {len(feed.moments)} moments, "
+            f"{made} share cards"
+        )
     keep = {str(game["file"]) for game in games} | {"index.json"}
     for stale in out.glob("*.json"):
         if stale.name not in keep:

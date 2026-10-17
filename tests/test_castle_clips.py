@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -25,6 +26,7 @@ from badactors.castle.clips import (
     clip_ready,
     highlights,
     main,
+    receipt_card,
 )
 from badactors.castle.play import record
 from badactors.castle.show import Feed, audience_feed, checked, load_feed, save_feed
@@ -288,6 +290,29 @@ def test_the_composition_reads_the_props_python_writes() -> None:
     ):
         for field in model.model_fields:
             assert re.search(rf"\b{field}\??:", source), (model.__name__, field)
+
+
+# ----------------------------------------------------------------- share cards
+
+
+def test_a_share_card_holds_the_words_the_stamp_and_the_receipt(
+    feeds: list[Feed],
+) -> None:
+    feed = feeds[SEEDS.index(56)]
+    for claim in feed.claims:
+        card = receipt_card(feed, claim, names="character")
+        root = ElementTree.fromstring(card)
+        shown = " ".join(root.itertext())
+        assert root.get("width") == "1200" and root.get("height") == "630"
+        assert claim.stamp in shown and REFERENCE_BANNER in shown
+        assert (
+            f"seed 56 · day {claim.day}, tick {claim.tick} · claim {claim.id}" in shown
+        )
+        assert not AUDIENCE_BANNED.search(shown)
+    tricky = feed.claims[0].model_copy(update={"why": "<b> & “quotes”"})
+    assert "&lt;b&gt; &amp; “quotes”" in receipt_card(feed, tricky, names="character")
+    named = receipt_card(feed, feed.claims[0], names="model")
+    assert "Reference bot #" in named
 
 
 # ------------------------------------------------------------------ highlights

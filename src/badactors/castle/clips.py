@@ -37,6 +37,7 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
+from xml.sax.saxutils import escape
 
 from pydantic import Field
 
@@ -647,6 +648,81 @@ def _wrapped(text: str, indent: str, most: int) -> list[str]:
     )
 
 
+# ------------------------------------------------------------- share cards
+
+CARD_WIDTH = 1200
+CARD_HEIGHT = 630
+_TONES = {
+    "COLD-BLOODED LIE": "#e0343c",
+    "GASLIT": "#e0343c",
+    "MADE IT UP": "#e0343c",
+    "BROKE ITS WORD": "#e0343c",
+    "IMPLANTED MEMORY": "#f2b134",
+    "HONEST MISTAKE": "#f2b134",
+    "DODGED": "#f2b134",
+    "TRUE": "#4cc38a",
+    "KEPT ITS WORD": "#4cc38a",
+    "NO WAY TO TELL": "#a59d90",
+}
+
+
+def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
+    """A static share card for one claim, as SVG: who said it, the words, the
+    stamp, why, and the receipt line. Bot games say so on the card."""
+    view = _View(feed, names)
+    game = feed.game
+    event = view.event(claim.seq)
+    quote = view.quote(event) or claim.said
+    lines = textwrap.wrap(f"“{quote}”", width=46, max_lines=4, placeholder=" …”")
+    why = textwrap.wrap(view.why(claim), width=70, max_lines=2, placeholder=" …")
+    colour = _TONES[claim.stamp]
+    size = 60 if len(claim.stamp) <= 10 else 44
+    receipt = (
+        f"{game.castle} · seed {game.seed} · day {claim.day}, tick {claim.tick} · "
+        f"claim {claim.id}"
+    )
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{CARD_WIDTH}" '
+        f'height="{CARD_HEIGHT}" viewBox="0 0 {CARD_WIDTH} {CARD_HEIGHT}">',
+        f'<rect width="{CARD_WIDTH}" height="{CARD_HEIGHT}" fill="#0b0d10"/>',
+        '<g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">',
+        '<text x="60" y="80" fill="#e0343c" font-size="30" font-weight="900" '
+        'letter-spacing="6">BAD ACTORS</text>',
+    ]
+    if game.reference_bots:
+        out.append(
+            '<text x="1140" y="80" text-anchor="end" fill="#e8c547" font-size="22" '
+            f'font-weight="700">{escape(REFERENCE_BANNER)}</text>'
+        )
+    out.append(
+        f'<text x="60" y="140" fill="#f4ede0" font-size="34" font-weight="800">'
+        f"{escape(view.name(claim.speaker))}</text>"
+    )
+    for index, line in enumerate(lines):
+        out.append(
+            f'<text x="60" y="{205 + index * 52}" fill="#f4ede0" font-size="40" '
+            f'font-family="Georgia, Times New Roman, serif">{escape(line)}</text>'
+        )
+    out.append(
+        f'<g transform="translate(360 440) rotate(-5)"><rect x="-300" y="-52" '
+        f'width="600" height="104" rx="14" fill="none" stroke="{colour}" '
+        f'stroke-width="10"/><text x="0" y="{size // 3}" text-anchor="middle" '
+        f'fill="{colour}" font-size="{size}" font-weight="900" letter-spacing="4">'
+        f"{escape(claim.stamp)}</text></g>"
+    )
+    for index, line in enumerate(why):
+        out.append(
+            f'<text x="60" y="{532 + index * 34}" fill="#d8d1c4" font-size="27" '
+            f'font-weight="700">{escape(line)}</text>'
+        )
+    out.append(
+        f'<text x="60" y="608" fill="#a59d90" font-size="20" '
+        f'font-family="Menlo, monospace">{escape(receipt)}</text>'
+    )
+    out.extend(["</g>", "</svg>"])
+    return "\n".join(out) + "\n"
+
+
 # ----------------------------------------------------------------------- CLI
 
 
@@ -728,5 +804,6 @@ __all__ = [
     "clip_ready",
     "highlights",
     "main",
+    "receipt_card",
     "write_props",
 ]
