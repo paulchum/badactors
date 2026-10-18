@@ -25,7 +25,9 @@ recorded as ``mock:<id>``, never as the model, and it is never rated.
 
 The saved record names ``model:<id>`` for every seat, replays to the identical
 ledger, and says how the game ended. A game stopped by its budget, or aborted
-by a 401, 402 or 403, is saved as far as it got and is never rated.
+by a 401, 402 or 403, is saved as far as it got and is never rated. A 402 for
+OpenRouter's in-flight budget is waited out and the call sent again (logged as
+``provider_wait``); only one that outlasts every wait aborts the game.
 
 Beside the record go the harness log (``.harness.jsonl``: every call's tokens
 and cost, mode changes, stops) and the game's verify bundle
@@ -322,6 +324,13 @@ def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     ]
     for (seat, reason), count in sorted(failures.items(), key=str):
         lines.append(f"Failed turns: {seat} {reason} x{count}")
+    waits = live.harness.of("provider_wait")
+    if waits:
+        seconds = sum(float(wait["seconds"]) for wait in waits)
+        lines.append(
+            f"Waited out OpenRouter's in-flight budget {len(waits)} times "
+            f"({seconds:.0f} s in all)."
+        )
     for change in live.harness.of("mode_downgrade"):
         lines.append(
             f"Mode: {change['model']} moved from {change['old']} to {change['new']} "

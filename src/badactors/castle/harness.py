@@ -29,6 +29,12 @@ answer was given to, so the ledger is exactly the one a one-at-a-time game
 would have written, whatever order the replies arrived in. Table speech,
 votes, doses, offers, nominations and interviews are asked one at a time.
 
+A 402 for OpenRouter's in-flight budget is no answer and nobody's fault: the
+same call is sent again after a wait, a few times with a growing pause, each
+wait logged as a ``provider_wait``. The model is not charged and its turn goes
+on; if the budget is still full after the last wait, the run stops as if the
+credit were gone.
+
 When the budget cannot cover the next call the game stops there, marked
 ``stopped:budget``; a 401, 402 or 403 aborts it as ``aborted:operator``. Either
 way the partial record replays to the same point, and is never rated.
@@ -39,7 +45,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -98,6 +104,7 @@ from badactors.castle.provider import (
     CallRef,
     Closer,
     HarnessLog,
+    InFlightFull,
     Mode,
     ModeBook,
     ModelInfo,
@@ -125,6 +132,12 @@ _REFUSAL = re.compile(
 """A refusal in prose: an answer that opens by declining the task. Words in
 character ("I can't believe Mara...") are not one."""
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+
+WAITS: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0, 30.0)
+"""Seconds to wait before each resend of a call OpenRouter turned away because
+its in-flight budget was full."""
+
+type Sleep = Callable[[float], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -155,6 +168,8 @@ class ModelPlayer:
     flight at once."""
     mock: bool = False
     """The provider is the mock one: the seeded bot answers for the model."""
+    waits: Sequence[float] = WAITS
+    sleep: Sleep = asyncio.sleep
 
     @property
     def agent(self) -> str:
@@ -239,6 +254,32 @@ class ModelPlayer:
             raise
 
     async def _call(self, call: ProviderCall) -> Reply:
+        """The call, sent again after a wait while OpenRouter's in-flight budget
+        is full. Waiting holds no slot and charges nothing."""
+        for tries, pause in enumerate(self.waits, start=1):
+            try:
+                return await self._send(call)
+            except InFlightFull as exc:
+                self.log.write(
+                    "provider_wait",
+                    ref=_ref(call.ref),
+                    status=exc.status,
+                    tries=tries,
+                    seconds=pause,
+                    retry_after=exc.retry_after,
+                )
+            await self.sleep(pause)
+        try:
+            return await self._send(call)
+        except InFlightFull as exc:
+            raise OperatorError(
+                f"OpenRouter's in-flight budget was still full after {len(self.waits)} "
+                f"waits: {exc}",
+                status=exc.status,
+                body=exc.body,
+            ) from exc
+
+    async def _send(self, call: ProviderCall) -> Reply:
         if self.slots is None:
             return await self.provider.complete(call)
         async with self.slots:
@@ -535,6 +576,8 @@ def play_live(
     mock: bool = False,
     world_id: str = "castle-game",
     arm: ArmKind | None = None,
+    waits: Sequence[float] = WAITS,
+    sleep: Sleep = asyncio.sleep,
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
     the seats they name, and return its record. With ``mock``, the provider is
@@ -569,6 +612,8 @@ def play_live(
             max_tokens=max_tokens,
             slots=slots[model],
             mock=mock,
+            waits=waits,
+            sleep=sleep,
         )
         for seat, model in seat_models.items()
     }
@@ -621,6 +666,7 @@ def play_live(
 
 
 __all__ = [
+    "WAITS",
     "LiveGame",
     "LiveReferee",
     "ModelPlayer",

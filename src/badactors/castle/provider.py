@@ -23,7 +23,10 @@ for the rest of the run, and the move is logged (:class:`ModeBook`).
 :class:`TransportError`, which fails the turn. A 401, 402 or 403 is an
 :class:`OperatorError`: the key is bad or the credit gone, which would fail
 every turn of every model alike, so the run stops instead and no model is
-charged with it.
+charged with it. One 402 is neither: OpenRouter's in-flight budget is full
+(``in_flight_budget_exhausted``), which says the key has credit but too much
+of it is held by requests still open. That is :class:`InFlightFull`, and the
+harness waits and sends the same call again.
 
 **Records.** :class:`RecordingProvider` writes each call's reference, mode and
 response body (or error) as a replay fixture, never a key or a header;
@@ -150,6 +153,28 @@ class ParameterRejected(TransportError):
 
 class OperatorError(ProviderError):
     """401, 402 or 403: the run's key or credit, not the model. Stops the run."""
+
+
+IN_FLIGHT = "in_flight_budget_exhausted"
+"""OpenRouter's reason for a 402 sent while the key's credit is held by
+requests still in flight."""
+
+
+class InFlightFull(ProviderError):
+    """A 402 for OpenRouter's in-flight budget: no reply yet, and nobody's
+    fault. The same call is sent again once other requests settle."""
+
+    @property
+    def retry_after(self) -> float | None:
+        """The wait OpenRouter suggested, in seconds, when it named one."""
+        error = self.body.get("error") if isinstance(self.body, Mapping) else None
+        metadata = error.get("metadata") if isinstance(error, Mapping) else None
+        headers = metadata.get("headers") if isinstance(metadata, Mapping) else None
+        given = headers.get("Retry-After") if isinstance(headers, Mapping) else None
+        try:
+            return float(cast(str, given))
+        except (TypeError, ValueError):
+            return None
 
 
 class Provider(Protocol):
@@ -286,7 +311,10 @@ def parse_reply(raw: Mapping[str, Any]) -> Reply:
 
 
 def _status_error(status: int, body: object) -> ProviderError:
-    text = json.dumps(body)[:300] if not isinstance(body, str) else body[:300]
+    whole = body if isinstance(body, str) else json.dumps(body)
+    text = whole[:300]
+    if status == 402 and IN_FLIGHT in whole:
+        return InFlightFull(f"OpenRouter {status}: {text}", status=status, body=body)
     if status in (401, 402, 403):
         return OperatorError(f"OpenRouter {status}: {text}", status=status, body=body)
     if 400 <= status < 500 and status != 429:
@@ -612,6 +640,7 @@ type Closer = Callable[[], Coroutine[Any, Any, None]]
 
 
 __all__ = [
+    "IN_FLIGHT",
     "MODES",
     "OPENROUTER",
     "TOOL",
@@ -619,6 +648,7 @@ __all__ = [
     "Closer",
     "FixtureProvider",
     "HarnessLog",
+    "InFlightFull",
     "Mode",
     "ModeBook",
     "ModelInfo",

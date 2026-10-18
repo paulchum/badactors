@@ -5,8 +5,10 @@ first question goes over HTTP to the real OpenRouter provider, whose transport
 serves one recorded response (``fixtures/openrouter``, in the format
 ``RecordingProvider`` writes). Each bad response must fail the turn with the
 right reason class and log no decision as Sol's choice — never a pass, never a
-silence — except a 402, which is the run's problem and aborts it. The game's
-verify bundle keeps each bad call's reason in its hashed receipt.
+silence — except a 402, which is the run's problem and aborts it, and a 402 for
+OpenRouter's in-flight budget, which is nobody's: the call is sent again after
+a wait. The game's verify bundle keeps each bad call's reason, and each wait,
+in its hashed receipt.
 """
 
 from __future__ import annotations
@@ -23,9 +25,18 @@ from badactors.castle.budget import Limits
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.play import replay
-from badactors.castle.provider import HarnessLog, OpenRouterProvider, Routed
+from badactors.castle.provider import (
+    CallRef,
+    HarnessLog,
+    OpenRouterProvider,
+    Provider,
+    ProviderCall,
+    Reply,
+    Routed,
+    replay_fixture,
+)
 from badactors.castle.rules import GameConfig
-from badactors.castle.verify import HashingProvider, make_bundle, verify
+from badactors.castle.verify import HashingProvider, make_bundle, parts, verify
 from castle_scenes import CAST, CASTLE
 
 FIXTURES = Path(__file__).parent / "fixtures" / "openrouter"
@@ -182,6 +193,106 @@ def test_a_402_aborts_the_run_and_charges_no_model() -> None:
     assert verify(bundle) == []
     (paid,) = [call for call in bundle.exchanges if call.status == 402]
     assert paid.seat == SEAT and paid.failure is None
+
+
+class Busy:
+    """OpenRouter's recorded in-flight 402 for Sol's first question, ``times``
+    times, then the bot behind the mock provider answers it."""
+
+    def __init__(self, inner: Provider, times: int) -> None:
+        self.inner = inner
+        self.times = times
+        self.sent: list[CallRef] = []
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        if call.ref.key == f"{SEAT}/0/1":
+            self.sent.append(call.ref)
+            if len(self.sent) <= self.times:
+                return replay_fixture(fixture("in_flight_402"))
+        return await self.inner.complete(call)
+
+
+def busy_game(times: int) -> tuple[LiveGame, Busy, list[float]]:
+    pauses: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        pauses.append(seconds)
+
+    log = HarnessLog()
+    busy = Busy(BotProvider(HeuristicBot(seed=SEED)), times)
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=SEED,
+        config=GameConfig.shipped(max_days=2),
+        provider=HashingProvider(busy, log, "openrouter"),
+        models=mock_models(CAST.models().values()),
+        limits=Limits(10_000, 10**9, 100.0),
+        harness=log,
+        sleep=sleep,
+    )
+    return live, busy, pauses
+
+
+def test_an_in_flight_402_waits_and_sends_the_same_call_again() -> None:
+    live, busy, pauses = busy_game(times=2)
+    stored = live.record
+    assert stored.outcome == "finished"
+    assert len(busy.sent) == 3 and len(set(busy.sent)) == 1
+    assert pauses == [2.0, 4.0]
+    waits = live.harness.of("provider_wait")
+    assert [(w["ref"]["seat"], w["tries"], w["seconds"]) for w in waits] == [
+        (SEAT, 1, 2.0),
+        (SEAT, 2, 4.0),
+    ]
+    assert waits[0]["retry_after"] == 120.0 and waits[0]["status"] == 402
+    first = first_question(live)
+    assert len(first) == 1 and first[0].decision is not None
+    assert first[0].reason is None and not first[0].refused
+    assert not [e for e in stored.ledger if e.type == "turn_failed"]
+    assert live.budget.spent.requests == len(live.harness.of("call"))
+    bundle = make_bundle(stored, live.harness.events)
+    assert verify(bundle) == []
+    mine = [call for call in bundle.exchanges if call.seat == SEAT][:3]
+    assert [(c.status, c.wait, c.failure) for c in mine] == [
+        (402, 2.0, None),
+        (402, 4.0, None),
+        (None, None, None),
+    ]
+
+
+def test_the_same_game_without_the_402s_writes_the_same_ledger() -> None:
+    waited, _, _ = busy_game(times=3)
+    plain, _, _ = busy_game(times=0)
+    assert _dumped(waited.record.ledger) == _dumped(plain.record.ledger)
+
+
+def test_an_in_flight_budget_that_stays_full_aborts_after_the_last_wait() -> None:
+    live, busy, pauses = busy_game(times=100)
+    stored = live.record
+    assert pauses == [2.0, 4.0, 8.0, 16.0, 30.0]
+    assert len(busy.sent) == 6
+    assert stored.outcome == "aborted:operator" and not stored.rated
+    assert "in-flight budget was still full" in (live.referee.stopped_by or "")
+    assert not [e for e in stored.ledger if e.type == "turn_failed"]
+    assert not [entry for entry in stored.decisions if entry.player_id == SEAT]
+    assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
+    bundle = make_bundle(stored, live.harness.events)
+    assert verify(bundle) == []
+    mine = [call for call in bundle.exchanges if call.seat == SEAT]
+    assert [c.wait for c in mine] == [2.0, 4.0, 8.0, 16.0, 30.0, None]
+    assert all(c.status == 402 and c.failure is None for c in mine)
+
+
+def test_a_bundle_without_waits_hashes_as_before_the_field() -> None:
+    live, _ = play("empty")
+    bundle = make_bundle(live.record, live.harness.events)
+    assert all(call.wait is None for call in bundle.exchanges)
+    assert all(
+        "wait" not in part
+        for kind, part in parts(live.record, bundle.exchanges)
+        if kind == "exchange"
+    )
 
 
 def _dumped(entries: Any) -> list[Any]:
