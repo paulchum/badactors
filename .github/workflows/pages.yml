@@ -2,6 +2,7 @@ name: Pages
 
 # Build the static spectator after CI passes and publish it to GitHub Pages.
 # Enable Pages with GitHub Actions as its source in repository settings first.
+# Private copies publish only through an explicit workflow dispatch.
 # The bundled games are exported from the engine at build time (npm's prebuild runs
 # scripts/export_feeds.py), so nothing generated is committed.
 
@@ -24,7 +25,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+       github.event.workflow_run.event == 'push' &&
+       !github.event.repository.private)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
