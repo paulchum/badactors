@@ -47,7 +47,7 @@ function H({ id, children }: { id: string; children: ReactNode }) {
 }
 
 function Code({ children }: { children: ReactNode }) {
-  return <code className="break-all rounded bg-panel px-1 font-mono text-[0.85em] text-stone-200">{children}</code>;
+  return <code className="break-all rounded-sm bg-panel px-1 font-mono text-[0.85em] text-stone-200">{children}</code>;
 }
 
 export function MethodPage({ bench }: { bench: Bench }) {

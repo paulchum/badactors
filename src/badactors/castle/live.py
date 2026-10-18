@@ -103,6 +103,15 @@ def parser() -> argparse.ArgumentParser:
         help="The most one answer may generate; each call reserves this.",
     )
     parser.add_argument(
+        "--reasoning",
+        choices=("default", "least", "off", "minimal", "low", "medium", "high"),
+        default="default",
+        help=(
+            "OpenRouter's reasoning setting for every seat. default sends none; "
+            "least is off, or minimal where a model's reasoning is mandatory."
+        ),
+    )
+    parser.add_argument(
         "--concurrency", type=int, default=4, help="Calls in flight per model."
     )
     parser.add_argument("--sequential", action="store_true", help="No prefetching.")
@@ -208,7 +217,10 @@ def main(argv: list[str] | None = None) -> None:
         key = os.environ.get("OPENROUTER_API_KEY", "")
         if not key:
             sys.exit("Set OPENROUTER_API_KEY to play with real models.")
-        openrouter = OpenRouterProvider(api_key=key, timeout=args.timeout)
+        openrouter = OpenRouterProvider(
+            api_key=key,
+            timeout=args.timeout,
+        )
         closers.append(openrouter.aclose)
         provider = openrouter
     provider = HashingProvider(
@@ -227,6 +239,7 @@ def main(argv: list[str] | None = None) -> None:
         limits=limits,
         max_tokens=args.max_output_tokens,
         concurrency=args.concurrency,
+        reasoning=args.reasoning,
         harness=harness,
         check_leaks=not args.no_leak_check,
         concurrent=not args.sequential,

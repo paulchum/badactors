@@ -73,7 +73,15 @@ Every model lands in one of four boxes once it's played enough games to count. N
 
 ## Run it
 
-You need [uv](https://docs.astral.sh/uv/), and Node 22 for the site. In order:
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node 22.12+ for the site. Start from a checkout:
+
+```sh
+git clone https://github.com/paulchum/badactors.git
+cd badactors
+uv sync --locked
+```
+
+Then play a free bot game:
 
 ```sh
 uv run castle-game --seed 56 --highlights
@@ -106,16 +114,16 @@ The real cast, through OpenRouter, for real money. It needs `OPENROUTER_API_KEY`
 
 ## Episodes
 
-Games air as Episode 1, Episode 2 and on, each titled by a line from somebody's diary. Bot game 56 would be called *"The memory I planted earns its keep now."* Episode 1's title is whatever the real cast writes down.
+An episode is one game, numbered by its seed and titled by a line from somebody's diary. Bot Episode 56 is called *"End it now, while I'm still here."* The real cast gets its own titles once it plays.
 
-Sweeps are numbered as nights: Night 1, Night 2. A night is a pile of games played back to back, like the 200 bot games `castle-sweep` runs to check the odds.
+In a sweep, each game is a night, numbered by its seed too. The 200 bot games `castle-sweep` runs to check the odds are Nights 0 to 199.
 
 ## For builders
 
 Python 3.12+ and [uv](https://docs.astral.sh/uv/). Nothing here calls a model or needs a key except `castle-live` and `castle-qualify` without `--mock`. Anything that spends money takes three limits first: requests, tokens and dollars.
 
 ```sh
-uv sync
+uv sync --locked
 ```
 
 To get the commands without a checkout:
@@ -175,6 +183,8 @@ uv run castle-live --seed 7 --max-requests 600 --max-tokens 6000000 --max-dollar
 ```
 
 If the estimate doesn't fit, it stops before the first call; `--allow-partial` plays until the money runs out. A ten-chair game asks 200 to 400 questions. Each call reserves its worst case (`--max-output-tokens`, 4096 by default) before it goes out, so a game can't overspend. When the next call wouldn't fit, the game stops there, marked `stopped:budget`.
+
+`--reasoning` leaves each model at its default unless you choose `off`, `minimal`, `low`, `medium` or `high`. `--reasoning least` starts with reasoning off; when an endpoint says reasoning is mandatory, the harness asks again with minimal reasoning and keeps that setting for the model. Both requests count toward the budget and get their own receipts. If the retry won't fit, the game stops before sending it.
 
 The record (`--save`) names `model:<id>` for every chair, replays to the identical game and says how it ended. A game stopped by its budget, or by a 401, 402 or 403, is saved as far as it got and never rated. Every failed turn says why: `transport`, `content_filter`, `refusal`, `empty`, `unparseable` or `invalid`. None of them turns into a pass. Next to the record you get `.harness.jsonl`, with every call's tokens and cost, and `.bundle.json.gz`, the game's receipt: the record, a hashed receipt for every provider call and a hash chain over both. It never holds a key, a header or a word of the conversation. `--record` also keeps every raw response as a replay fixture.
 
@@ -254,10 +264,11 @@ cd frontend && npm ci && npm run test && npm run build && npm run preview
 
 ```sh
 uv run pytest -q && uv run mypy src && uv run ruff check && uv run ruff format --check
+uv run pip-audit --skip-editable
 uv run python scripts/castle_three_days.py --days 1
 uv run castle-game --seed 7 --highlights --verdicts
-(cd frontend && npm ci && npm run test && npm run build)
-(cd clips/render && npm ci && npx tsc --noEmit)
+(cd frontend && npm ci && npm audit && npm run test && npm run build)
+(cd clips/render && npm ci && npm audit && npx tsc --noEmit)
 ```
 
 ## Glossary

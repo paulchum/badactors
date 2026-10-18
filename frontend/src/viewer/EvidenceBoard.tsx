@@ -74,7 +74,7 @@ export function EvidenceBoard({
           {seat.detail ? `, ${seat.detail}` : ""}
         </span>
         {roles ? (
-          <span className={`rounded px-2 py-0.5 text-xs font-black uppercase tracking-wider ${seat.role === "traitor" ? "bg-traitor text-white" : "bg-faithful/80 text-white"}`}>
+          <span className={`rounded-sm px-2 py-0.5 text-xs font-black uppercase tracking-wider ${seat.role === "traitor" ? "bg-traitor text-white" : "bg-faithful/80 text-white"}`}>
             {seat.role === "traitor" ? (seat.recruited_by ? `traitor from day ${turned?.day}, recruited by ${naming.name(seat.recruited_by)}` : "traitor") : "faithful"}
           </span>
         ) : null}
@@ -94,7 +94,7 @@ export function EvidenceBoard({
               </li>
             ))}
             {board.accusations.map((event) => (
-              <li key={event.seq} className="rounded bg-black/30 p-2">
+              <li key={event.seq} className="rounded-sm bg-black/30 p-2">
                 <Jump event={event} onJump={onJump} />
                 <SeatName game={game} id={event.actor} style={style} className="text-stone-200" />
                 {eventQuote(event, style) ? <span className="block font-serif text-stone-200">“{eventQuote(event, style)}”</span> : null}
@@ -104,7 +104,7 @@ export function EvidenceBoard({
               {named.length === 1 ? "One sighting names them" : `${named.length} sightings name them`}. {unnamed.length} saw only a shape or a garment.
             </li>
             {named.slice(-4).map(({ event, record }) => (
-              <li key={`${event.seq}-${record.player}`} className="rounded bg-black/30 p-2 text-stone-300">
+              <li key={`${event.seq}-${record.player}`} className="rounded-sm bg-black/30 p-2 text-stone-300">
                 <Jump event={event} onJump={onJump} />
                 <SeatName game={game} id={record.player} style={style} className="text-stone-200" /> wrote: {witnessText(record, style)}
               </li>
@@ -117,7 +117,7 @@ export function EvidenceBoard({
           <ul className="grid grid-cols-1 gap-1.5 text-sm">
             {board.secrets.length === 0 ? <li className="text-stone-500">Nothing secret on the tape.</li> : null}
             {board.secrets.map((event) => (
-              <li key={event.seq} className="rounded border border-traitor/30 bg-traitor/5 p-2 text-stone-200">
+              <li key={event.seq} className="rounded-sm border border-traitor/30 bg-traitor/5 p-2 text-stone-200">
                 <Jump event={event} onJump={onJump} />
                 {eventText(event, style)}
                 <span className="block text-xs text-stone-500">
@@ -135,7 +135,7 @@ export function EvidenceBoard({
             {board.moments.length === 0 ? <li className="text-stone-500">None.</li> : null}
             {board.moments.map((moment) => (
               <li key={moment.id}>
-                <button type="button" onClick={() => onMoment(moment)} className="w-full rounded bg-black/30 p-2 text-left hover:bg-black/50">
+                <button type="button" onClick={() => onMoment(moment)} className="w-full rounded-sm bg-black/30 p-2 text-left hover:bg-black/50">
                   <span className="text-[11px] font-black tracking-[0.12em] text-candle">{moment.label}</span>{" "}
                   <span className="text-stone-300">{headline(moment, style)}</span>
                 </button>

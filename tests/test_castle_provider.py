@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from badactors.castle.provider import (
     OperatorError,
     ParameterRejected,
     ProviderCall,
+    ReasoningRequired,
     RecordingProvider,
     TransportError,
     load_fixtures,
@@ -101,6 +103,58 @@ def test_each_mode_sends_only_the_parameters_it_needs() -> None:
     for body in (tools, schema, json_object, prompt):
         assert body["messages"][0] == {"role": "system", "content": SYSTEM}
         assert body["max_tokens"] == 512
+
+
+def test_reasoning_is_sent_only_when_a_setting_is_chosen() -> None:
+    assert "reasoning" not in request_body(call("tools"))
+    assert request_body(replace(call("tools"), reasoning="off"))["reasoning"] == {
+        "enabled": False
+    }
+    assert request_body(replace(call("json_schema"), reasoning="low"))["reasoning"] == {
+        "effort": "low"
+    }
+
+
+def test_mandatory_reasoning_is_one_failed_http_call_without_a_hidden_retry() -> None:
+    seen: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)
+        if sent["reasoning"] == {"enabled": False}:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Reasoning is mandatory for this endpoint "
+                        "and cannot be disabled.",
+                        "code": 400,
+                    }
+                },
+            )
+        return httpx.Response(200, json=GOOD)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(respond_and_keep(respond, seen))
+    )
+    single = OpenRouterProvider(api_key=KEY, client=client)
+    with pytest.raises(ReasoningRequired):
+        run(single.complete(replace(call("tools"), reasoning="off")))
+    assert len(seen) == 1
+    run(single.complete(replace(call("tools"), reasoning="minimal")))
+    reasoning = [json.loads(r.content)["reasoning"] for r in seen]
+    assert reasoning == [
+        {"enabled": False},
+        {"effort": "minimal"},
+    ]
+
+
+def respond_and_keep(respond: Any, seen: list[httpx.Request]) -> Any:
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        result: httpx.Response = respond(request)
+        return result
+
+    return handle
 
 
 def test_the_static_prefix_is_sent_first_and_marked_where_caching_needs_it() -> None:

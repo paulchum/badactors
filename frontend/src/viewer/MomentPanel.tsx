@@ -124,7 +124,7 @@ export function Witnesses({ game, event, style }: { game: Game; event: FeedEvent
         {shown.map((record) => {
           const quote = witnessQuote(record, style);
           return (
-            <li key={record.player} className="rounded bg-black/30 px-2 py-1">
+            <li key={record.player} className="rounded-sm bg-black/30 px-2 py-1">
               <SeatName game={game} id={record.player} style={style} className="text-stone-200" />{" "}
               <span className={`font-mono text-[10px] uppercase ${CONFIDENCE[record.confidence] ?? ""}`}>
                 {record.sense} · {record.confidence}
@@ -156,7 +156,7 @@ function Custody({ game, moment, style, naming, onJump }: { game: Game; moment: 
       <ol className="relative grid gap-1.5 border-l border-candle/30 pl-4">
         {chain.map((link) => (
           <li key={link.seq} className="relative text-sm">
-            <span aria-hidden className={`absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full ${link.where ? "bg-candle" : "border border-candle bg-ink"}`} />
+            <span aria-hidden className={`absolute left-[-21px] top-1.5 h-2.5 w-2.5 rounded-full ${link.where ? "bg-candle" : "border border-candle bg-ink"}`} />
             <button type="button" onClick={() => onJump(game.event(link.seq))} className="mr-2 font-mono text-[11px] text-stone-400 hover:text-candle">
               D{link.day} t{link.tick}
             </button>
@@ -211,11 +211,11 @@ export function MomentPanel({
               <article key={event.seq} className={`rounded-lg bg-black/30 p-2.5 ${ring(event)}`}>
                 <EntryHead game={game} event={event} style={style} onJump={onJump} />
                 {event.seq === moment.claim ? (
-                  <span className="mb-1 mr-2 inline-block rounded bg-candle px-1.5 text-[10px] font-black uppercase tracking-wider text-ink">the claim</span>
+                  <span className="mb-1 mr-2 inline-block rounded-sm bg-candle px-1.5 text-[10px] font-black uppercase tracking-wider text-ink">the claim</span>
                 ) : null}
                 {checked ? (
                   <button type="button" onClick={() => onReceipt(checked.id)} className="mb-1 inline-block" title="See the receipt">
-                    <StampMark stamp={checked.stamp} size="text-[11px]" className="!px-1.5 !py-0.5" />
+                    <StampMark stamp={checked.stamp} size="text-[11px]" className="px-1.5! py-0.5!" />
                   </button>
                 ) : null}
                 <p className="font-serif text-[15px] leading-snug text-stone-100">“{eventQuote(event, style)}”</p>
@@ -227,7 +227,7 @@ export function MomentPanel({
         <Column title="Written privately" hint="Diaries and reasons only the audience reads.">
           {columns.privately.length === 0 ? <Empty>No private line sits on this moment.</Empty> : null}
           {columns.privately.map((event) => (
-            <article key={event.seq} className={`rounded-lg p-2.5 diary ${ring(event)} ${moment.line?.seq === event.seq ? "outline outline-2 outline-offset-2 outline-traitor/70" : ""}`}>
+            <article key={event.seq} className={`rounded-lg p-2.5 diary ${ring(event)} ${moment.line?.seq === event.seq ? "outline-solid outline-2 outline-offset-2 outline-traitor/70" : ""}`}>
               <EntryHead game={game} event={event} style={style} onJump={onJump} paper />
               {LINE_FIELDS.map((field) => {
                 const line = privateLine(event, field, style);
@@ -247,7 +247,7 @@ export function MomentPanel({
             <article key={event.seq} className={`rounded-lg border border-rim bg-ink/80 p-2.5 ${ring(event)}`}>
               <EntryHead game={game} event={event} style={style} onJump={onJump} />
               {index < moment.truth.length ? (
-                <span className="mb-1 inline-block rounded bg-traitor px-1.5 text-[10px] font-black uppercase tracking-wider text-white">the truth</span>
+                <span className="mb-1 inline-block rounded-sm bg-traitor px-1.5 text-[10px] font-black uppercase tracking-wider text-white">the truth</span>
               ) : null}
               <p className="text-sm text-stone-100">{eventText(event, style)}</p>
               {eventQuote(event, style) && !event.actor ? <p className="mt-1 font-serif text-sm text-stone-300">“{eventQuote(event, style)}”</p> : null}

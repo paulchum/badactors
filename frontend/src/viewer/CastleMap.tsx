@@ -69,7 +69,7 @@ function floor(box: { x: number; y: number; w: number; h: number }, count: numbe
 /** What the map's marks mean. */
 export function MapKey({ roles }: { roles: boolean }) {
   const swatch = (light: Lighting) => (
-    <span className="inline-block h-3 w-4 rounded-sm align-[-2px]" style={{ background: ROOM[light].fill, border: `1px solid ${ROOM[light].edge}` }} />
+    <span className="inline-block h-3 w-4 rounded-xs align-[-2px]" style={{ background: ROOM[light].fill, border: `1px solid ${ROOM[light].edge}` }} />
   );
   return (
     <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-stone-400">
@@ -77,7 +77,7 @@ export function MapKey({ roles }: { roles: boolean }) {
       <li>{swatch("dim")} dim: garments only</li>
       <li>{swatch("dark")} dark: shapes</li>
       <li>
-        <span className="inline-block h-3 w-4 rounded-sm border border-dashed border-stone-400 align-[-2px]" /> private
+        <span className="inline-block h-3 w-4 rounded-xs border border-dashed border-stone-400 align-[-2px]" /> private
       </li>
       <li>
         <span className="text-traitor">●</span> camera

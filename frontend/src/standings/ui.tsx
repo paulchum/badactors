@@ -51,7 +51,7 @@ export function Shell({ current, bots, children }: { current: Route["page"]; bot
 export function BotLabel() {
   return (
     <div role="note" className="mt-3 border-y border-amber-500/30 bg-amber-950/70 px-4 py-2 text-sm text-amber-100">
-      <span className="mr-2 rounded bg-amber-400 px-1.5 py-0.5 text-xs font-black uppercase tracking-wider text-amber-950">
+      <span className="mr-2 rounded-sm bg-amber-400 px-1.5 py-0.5 text-xs font-black uppercase tracking-wider text-amber-950">
         Bot cast
       </span>
       Every number here comes from seeded bots, not AI models. The real cast hasn't played yet.
@@ -61,7 +61,7 @@ export function BotLabel() {
 
 export function BotChip() {
   return (
-    <span className="rounded bg-stone-600 px-1 py-px text-[10px] font-black uppercase tracking-wider text-stone-100">bot</span>
+    <span className="rounded-sm bg-stone-600 px-1 py-px text-[10px] font-black uppercase tracking-wider text-stone-100">bot</span>
   );
 }
 
