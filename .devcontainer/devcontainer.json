@@ -10,7 +10,7 @@
     "5173": { "label": "site (npm run dev)" },
     "4173": { "label": "site (npm run preview)" }
   },
-  "postCreateCommand": "uv sync && (cd frontend && npm ci) && (cd clips/render && npm ci)",
+  "postCreateCommand": "uv sync --locked && (cd frontend && npm ci) && (cd clips/render && npm ci)",
   "customizations": {
     "vscode": {
       "extensions": ["charliermarsh.ruff", "ms-python.python", "ms-python.mypy-type-checker"]

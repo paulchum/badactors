@@ -37,12 +37,13 @@ scripts/            castle_three_days.py, a model-free walk through the world
 ## Commands
 
 ```sh
-uv sync
+uv sync --locked
 uv run pytest -q
 uv run mypy src
 uv run ruff check && uv run ruff format --check
-cd frontend && npm ci && npm run test && npm run build
-cd clips/render && npm ci && npx tsc --noEmit
+uv run pip-audit --skip-editable
+(cd frontend && npm ci && npm audit && npm run test && npm run build)
+(cd clips/render && npm ci && npm audit && npx tsc --noEmit)
 ```
 
 ## Invariants

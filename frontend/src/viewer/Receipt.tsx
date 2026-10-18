@@ -92,7 +92,7 @@ export function ClaimReceipt({
                 <h3 className="mb-1.5 text-xs font-black uppercase tracking-[0.16em] text-stone-300">{group.title}</h3>
                 <ol className="grid gap-1.5 text-sm">
                   {group.lines.map((line) => (
-                    <li key={line.seq} className="rounded bg-black/30 p-2 text-stone-200">
+                    <li key={line.seq} className="rounded-sm bg-black/30 p-2 text-stone-200">
                       {onJump ? (
                         <button
                           type="button"
@@ -131,7 +131,7 @@ export function ClaimReceipt({
         <div className="grid gap-2 border-t border-rim pt-3">
           <label className="flex flex-wrap items-center gap-2 text-sm text-stone-400">
             <span>Link to this receipt</span>
-            <input readOnly value={absolute} className="min-w-0 flex-1 rounded border border-rim bg-black/40 px-2 py-1 font-mono text-xs text-stone-200" onFocus={(e) => e.currentTarget.select()} />
+            <input readOnly value={absolute} className="min-w-0 flex-1 rounded-sm border border-rim bg-black/40 px-2 py-1 font-mono text-xs text-stone-200" onFocus={(e) => e.currentTarget.select()} />
             <button type="button" onClick={copy} className="rounded-full bg-candle px-3 py-1 font-semibold text-ink">
               Copy
             </button>

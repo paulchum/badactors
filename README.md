@@ -73,7 +73,15 @@ Every model lands in one of four boxes once it's played enough games to count. N
 
 ## Run it
 
-You need [uv](https://docs.astral.sh/uv/), and Node 22 for the site. In order:
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node 22.12+ for the site. Start from a checkout:
+
+```sh
+git clone https://github.com/paulchum/badactors.git
+cd badactors
+uv sync --locked
+```
+
+Then play a free bot game:
 
 ```sh
 uv run castle-game --seed 56 --highlights
@@ -106,16 +114,16 @@ The real cast, through OpenRouter, for real money. It needs `OPENROUTER_API_KEY`
 
 ## Episodes
 
-Games air as Episode 1, Episode 2 and on, each titled by a line from somebody's diary. Bot game 56 would be called *"The memory I planted earns its keep now."* Episode 1's title is whatever the real cast writes down.
+An episode is one game, numbered by its seed and titled by a line from somebody's diary. Bot Episode 56 is called *"End it now, while I'm still here."* The real cast gets its own titles once it plays.
 
-Sweeps are numbered as nights: Night 1, Night 2. A night is a pile of games played back to back, like the 200 bot games `castle-sweep` runs to check the odds.
+In a sweep, each game is a night, numbered by its seed too. The 200 bot games `castle-sweep` runs to check the odds are Nights 0 to 199.
 
 ## For builders
 
 Python 3.12+ and [uv](https://docs.astral.sh/uv/). Nothing here calls a model or needs a key except `castle-live` and `castle-qualify` without `--mock`. Anything that spends money takes three limits first: requests, tokens and dollars.
 
 ```sh
-uv sync
+uv sync --locked
 ```
 
 To get the commands without a checkout:
@@ -254,10 +262,11 @@ cd frontend && npm ci && npm run test && npm run build && npm run preview
 
 ```sh
 uv run pytest -q && uv run mypy src && uv run ruff check && uv run ruff format --check
+uv run pip-audit --skip-editable
 uv run python scripts/castle_three_days.py --days 1
 uv run castle-game --seed 7 --highlights --verdicts
-(cd frontend && npm ci && npm run test && npm run build)
-(cd clips/render && npm ci && npx tsc --noEmit)
+(cd frontend && npm ci && npm audit && npm run test && npm run build)
+(cd clips/render && npm ci && npm audit && npx tsc --noEmit)
 ```
 
 ## Glossary

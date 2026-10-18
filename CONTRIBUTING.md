@@ -6,10 +6,10 @@ Before you change game, world, harness or benchmark code, read [SPEC.md](SPEC.md
 
 ## Setting up
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node 22 if you touch the site or the clips. Or open the repo in the dev container, which has all three.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node 22.12+ if you touch the site or the clips. Or open the repo in the dev container, which has all three.
 
 ```sh
-uv sync
+uv sync --locked
 (cd frontend && npm ci)
 (cd clips/render && npm ci)
 ```
@@ -22,11 +22,20 @@ Run these before you open a pull request. CI runs the same ones.
 
 ```sh
 uv run pytest -q && uv run mypy src && uv run ruff check && uv run ruff format --check
-(cd frontend && npm run test && npm run build)
-(cd clips/render && npx tsc --noEmit)
+uv run pip-audit --skip-editable
+(cd frontend && npm audit && npm run test && npm run build)
+(cd clips/render && npm audit && npx tsc --noEmit)
 ```
 
 New behaviour comes with tests. For world rules (who holds what, who saw what, same seed same game) write a property test with hypothesis. If you change something on purpose and an old test breaks, update the test in the same change.
+
+CI also scans the checked-out Git history with [Gitleaks](https://github.com/gitleaks/gitleaks). To run that check locally after installing it:
+
+```sh
+gitleaks git . --log-opts=--all --redact --no-banner
+```
+
+The one entry in `.gitleaksignore` identifies a historical mocked-provider test sentinel. Don't add broad exclusions for keys or test files. If a real key is found, revoke it before dealing with the Git history.
 
 ## The six rules
 
@@ -83,3 +92,11 @@ A castle is a map plus a cast. Write both, keep the shipped ones as your templat
 - Anything a bot played says so. Never present a bot game as a model game.
 
 Be decent to each other. The [Code of Conduct](CODE_OF_CONDUCT.md) applies everywhere this project lives. Found a leak or a key? Don't open an issue. Follow [SECURITY.md](SECURITY.md).
+
+## Publishing on GitHub
+
+Before making a private copy public, review its full Git history and open branches, run the checks above, and merge the reviewed changes into `main`. CI must pass on that commit. GitHub can refuse to start jobs when an account has a billing or Actions spending-limit problem; resolve that in the account's Billing and plans settings before relying on its checks.
+
+Set the repository's description and homepage, then change its visibility when ready to publish. In Settings → Code security, enable private vulnerability reporting, dependency alerts, secret scanning and push protection where available. Confirm that the private [report form](https://github.com/paulchum/badactors/security/advisories/new) linked from SECURITY.md and the issue templates works. Protect `main` against force pushes and deletion, and require the CI checks `checks`, `frontend`, `clips` and `secrets` before merging pull requests.
+
+For the spectator site, choose **GitHub Actions** under Settings → Pages → Build and deployment. Then run the **Pages** workflow on `main`. Pushes to `main` publish only after CI succeeds, and Pages checks out the exact commit CI tested. Open the resulting site at `/badactors/` and check the landing game's reveal, its replay receipt and the standings. The default build includes only labelled bot games and requires no keys. Publishing the repository and publishing the site are separate actions.
