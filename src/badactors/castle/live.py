@@ -220,12 +220,7 @@ def main(argv: list[str] | None = None) -> None:
         openrouter = OpenRouterProvider(
             api_key=key,
             timeout=args.timeout,
-            reasoning=args.reasoning,
-            on_fallback=lambda model: harness.write(
-                "reasoning_fallback", model=model, setting="minimal"
-            ),
         )
-        harness.write("reasoning", setting=args.reasoning)
         closers.append(openrouter.aclose)
         provider = openrouter
     provider = HashingProvider(
@@ -244,6 +239,7 @@ def main(argv: list[str] | None = None) -> None:
         limits=limits,
         max_tokens=args.max_output_tokens,
         concurrency=args.concurrency,
+        reasoning=args.reasoning,
         harness=harness,
         check_leaks=not args.no_leak_check,
         concurrent=not args.sequential,

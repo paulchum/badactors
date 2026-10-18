@@ -184,6 +184,8 @@ uv run castle-live --seed 7 --max-requests 600 --max-tokens 6000000 --max-dollar
 
 If the estimate doesn't fit, it stops before the first call; `--allow-partial` plays until the money runs out. A ten-chair game asks 200 to 400 questions. Each call reserves its worst case (`--max-output-tokens`, 4096 by default) before it goes out, so a game can't overspend. When the next call wouldn't fit, the game stops there, marked `stopped:budget`.
 
+`--reasoning` leaves each model at its default unless you choose `off`, `minimal`, `low`, `medium` or `high`. `--reasoning least` starts with reasoning off; when an endpoint says reasoning is mandatory, the harness asks again with minimal reasoning and keeps that setting for the model. Both requests count toward the budget and get their own receipts. If the retry won't fit, the game stops before sending it.
+
 The record (`--save`) names `model:<id>` for every chair, replays to the identical game and says how it ended. A game stopped by its budget, or by a 401, 402 or 403, is saved as far as it got and never rated. Every failed turn says why: `transport`, `content_filter`, `refusal`, `empty`, `unparseable` or `invalid`. None of them turns into a pass. Next to the record you get `.harness.jsonl`, with every call's tokens and cost, and `.bundle.json.gz`, the game's receipt: the record, a hashed receipt for every provider call and a hash chain over both. It never holds a key, a header or a word of the conversation. `--record` also keeps every raw response as a replay fixture.
 
 To run all of it free, put the seeded bot behind a mock provider. You get the same game as `castle-game` with the same seed, and its chairs are recorded as `mock:<id>` so no standings take it:

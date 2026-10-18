@@ -2,9 +2,10 @@
 
 :class:`ModelPlayer` puts one question to one model: it renders the player's
 observation (``prompt``), compiles the request's schema (``contract_schema``),
-reserves the call's worst case (``budget``), and makes exactly one provider call
-in the model's current mode (``provider``). What comes back is read, never
-argued with:
+reserves each call's worst case (``budget``), and asks the provider in the model's
+current mode (``provider``). A mandatory-reasoning rejection under ``least`` may
+trigger a new, separately budgeted and receipted call with minimal reasoning.
+What the model answers is read, never argued with:
 
 * a provider's content filter, or a refusal in the model's own words, fails the
   turn at once as ``content_filter`` or ``refusal``. They are results;
@@ -40,7 +41,7 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -95,6 +96,7 @@ from badactors.castle.play import (
 )
 from badactors.castle.prompt import Rendered, assert_render_clean, render, render_exit
 from badactors.castle.provider import (
+    REASONING,
     CallRef,
     Closer,
     HarnessLog,
@@ -105,6 +107,7 @@ from badactors.castle.provider import (
     ParameterRejected,
     Provider,
     ProviderCall,
+    ReasoningRequired,
     Reply,
     TransportError,
     Usage,
@@ -139,6 +142,31 @@ class Question:
 
 
 @dataclass
+class ReasoningBook:
+    """The run's reasoning policy, shared by every seat of each model."""
+
+    setting: str = "default"
+    minimal: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        if self.setting not in ("default", "least") and self.setting not in REASONING:
+            raise ValueError(f"unknown reasoning setting {self.setting!r}")
+
+    def for_model(self, model: str) -> str:
+        if self.setting != "least":
+            return self.setting
+        return "minimal" if model in self.minimal else "off"
+
+    def fallback(self, model: str, rejected: str) -> bool:
+        # Several off requests can be in flight when the first rejection arrives.
+        # Each may retry once, with its own reservation and minimal setting.
+        if self.setting != "least" or rejected != "off":
+            return False
+        self.minimal.add(model)
+        return True
+
+
+@dataclass
 class ModelPlayer:
     """One seat, played by one model through one provider."""
 
@@ -155,6 +183,8 @@ class ModelPlayer:
     flight at once."""
     mock: bool = False
     """The provider is the mock one: the seeded bot answers for the model."""
+    reasoning: ReasoningBook = field(default_factory=ReasoningBook)
+    attempts: dict[int, int] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def agent(self) -> str:
@@ -193,50 +223,69 @@ class ModelPlayer:
     async def answer(
         self, question: Question, held: Reservation | None = None
     ) -> Decision:
-        """One provider call, read. Raises ``TurnFailure`` or ``BadAnswer``
+        """Ask one question, with a budgeted reasoning fallback if needed.
+        Raises ``TurnFailure`` or ``BadAnswer``
         for an answer that cannot be used, ``BudgetExhausted`` before a call
         that would not fit, and ``OperatorError`` for the run's own failures."""
         mode = self.modes.mode(self.model)
-        held = held if held is not None else self.reserve(question)
-        call = ProviderCall(
-            ref=question.ref,
-            messages=question.rendered.messages,
-            schema=question.schema,
-            mode=mode,
-            max_tokens=self.max_tokens,
-            source=question.source,
-        )
-        try:
-            reply = await self._call(call)
-        except OperatorError as exc:
-            self.budget.release(held)
-            self.log.write("operator_error", ref=_ref(call.ref), status=exc.status)
-            raise
-        except ParameterRejected as exc:
-            self.budget.settle(held, self.info, Usage())
-            self.modes.rejected(self.model, mode, str(exc))
-            self._failed(call, "transport", str(exc))
-            raise TurnFailure(str(exc), "transport") from exc
-        except TransportError as exc:
-            known = Usage() if exc.status is not None else None
-            self.budget.settle(held, self.info, known)
-            self._failed(call, "transport", str(exc))
-            raise TurnFailure(str(exc), "transport") from exc
-        cost = self.budget.settle(held, self.info, reply.usage)
-        self.log.write(
-            "call",
-            ref=_ref(call.ref),
-            mode=mode,
-            finish_reason=reply.finish_reason,
-            prompt_tokens=reply.usage.prompt_tokens,
-            completion_tokens=reply.usage.completion_tokens,
-            dollars=cost.dollars,
-        )
-        try:
-            return self.read(reply, question, mode)
-        except (TurnFailure, BadAnswer) as exc:
-            self._failed(call, exc.reason, str(exc))
-            raise
+        while True:
+            held = held if held is not None else self.reserve(question)
+            ordinal = question.ref.ordinal
+            attempt = max(question.ref.attempt, self.attempts.get(ordinal, 0) + 1)
+            self.attempts[ordinal] = attempt
+            call = ProviderCall(
+                ref=replace(question.ref, attempt=attempt),
+                messages=question.rendered.messages,
+                schema=question.schema,
+                mode=mode,
+                max_tokens=self.max_tokens,
+                source=question.source,
+                reasoning=self.reasoning.for_model(self.model),
+            )
+            try:
+                reply = await self._call(call)
+            except ReasoningRequired as exc:
+                self.budget.settle(held, self.info, Usage())
+                if not self.reasoning.fallback(self.model, call.reasoning):
+                    self._failed(call, "transport", str(exc))
+                    raise TurnFailure(str(exc), "transport") from exc
+                self.log.write(
+                    "reasoning_fallback",
+                    ref=_ref(call.ref),
+                    model=self.model,
+                    setting="minimal",
+                )
+                held = None
+                continue
+            except OperatorError as exc:
+                self.budget.release(held)
+                self.log.write("operator_error", ref=_ref(call.ref), status=exc.status)
+                raise
+            except ParameterRejected as exc:
+                self.budget.settle(held, self.info, Usage())
+                self.modes.rejected(self.model, mode, str(exc))
+                self._failed(call, "transport", str(exc))
+                raise TurnFailure(str(exc), "transport") from exc
+            except TransportError as exc:
+                known = Usage() if exc.status is not None else None
+                self.budget.settle(held, self.info, known)
+                self._failed(call, "transport", str(exc))
+                raise TurnFailure(str(exc), "transport") from exc
+            cost = self.budget.settle(held, self.info, reply.usage)
+            self.log.write(
+                "call",
+                ref=_ref(call.ref),
+                mode=mode,
+                finish_reason=reply.finish_reason,
+                prompt_tokens=reply.usage.prompt_tokens,
+                completion_tokens=reply.usage.completion_tokens,
+                dollars=cost.dollars,
+            )
+            try:
+                return self.read(reply, question, mode)
+            except (TurnFailure, BadAnswer) as exc:
+                self._failed(call, exc.reason, str(exc))
+                raise
 
     async def _call(self, call: ProviderCall) -> Reply:
         if self.slots is None:
@@ -526,6 +575,7 @@ def play_live(
     concurrency: int = 4,
     harness: HarnessLog | None = None,
     modes: ModeBook | None = None,
+    reasoning: str = "default",
     scope: ContentScope | None = None,
     check_leaks: bool = True,
     concurrent: bool = True,
@@ -554,6 +604,7 @@ def play_live(
         )
     )
     budget = Budget(limits)
+    thinking = ReasoningBook(reasoning)
     slots = {
         model: asyncio.Semaphore(concurrency) for model in set(seat_models.values())
     }
@@ -569,6 +620,7 @@ def play_live(
             max_tokens=max_tokens,
             slots=slots[model],
             mock=mock,
+            reasoning=thinking,
         )
         for seat, model in seat_models.items()
     }
@@ -587,6 +639,7 @@ def play_live(
     )
     for model, mode in sorted(book.modes.items()):
         log.write("mode", model=model, mode=mode)
+    log.write("reasoning", setting=reasoning)
     try:
         referee.run()
     finally:
@@ -625,5 +678,6 @@ __all__ = [
     "LiveReferee",
     "ModelPlayer",
     "Question",
+    "ReasoningBook",
     "play_live",
 ]

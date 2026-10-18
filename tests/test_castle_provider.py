@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from badactors.castle.provider import (
     OperatorError,
     ParameterRejected,
     ProviderCall,
+    ReasoningRequired,
     RecordingProvider,
     TransportError,
     load_fixtures,
@@ -105,19 +107,16 @@ def test_each_mode_sends_only_the_parameters_it_needs() -> None:
 
 def test_reasoning_is_sent_only_when_a_setting_is_chosen() -> None:
     assert "reasoning" not in request_body(call("tools"))
-    assert request_body(call("tools"), reasoning="off")["reasoning"] == {
+    assert request_body(replace(call("tools"), reasoning="off"))["reasoning"] == {
         "enabled": False
     }
-    assert request_body(call("json_schema"), reasoning="low")["reasoning"] == {
+    assert request_body(replace(call("json_schema"), reasoning="low"))["reasoning"] == {
         "effort": "low"
     }
-    with pytest.raises(ValueError):
-        OpenRouterProvider(api_key="test", reasoning="loud")
 
 
-def test_least_falls_back_to_minimal_once_per_model_and_says_so() -> None:
+def test_mandatory_reasoning_is_one_failed_http_call_without_a_hidden_retry() -> None:
     seen: list[httpx.Request] = []
-    fallbacks: list[str] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent = json.loads(request.content)
@@ -137,18 +136,16 @@ def test_least_falls_back_to_minimal_once_per_model_and_says_so() -> None:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(respond_and_keep(respond, seen))
     )
-    least = OpenRouterProvider(
-        api_key=KEY, client=client, reasoning="least", on_fallback=fallbacks.append
-    )
-    run(least.complete(call("tools")))
-    run(least.complete(call("tools")))
+    single = OpenRouterProvider(api_key=KEY, client=client)
+    with pytest.raises(ReasoningRequired):
+        run(single.complete(replace(call("tools"), reasoning="off")))
+    assert len(seen) == 1
+    run(single.complete(replace(call("tools"), reasoning="minimal")))
     reasoning = [json.loads(r.content)["reasoning"] for r in seen]
     assert reasoning == [
         {"enabled": False},
         {"effort": "minimal"},
-        {"effort": "minimal"},
     ]
-    assert fallbacks == [call("tools").ref.model]
 
 
 def respond_and_keep(respond: Any, seen: list[httpx.Request]) -> Any:

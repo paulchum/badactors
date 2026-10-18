@@ -80,7 +80,8 @@ trouble."""
 @dataclass(frozen=True)
 class CallRef:
     """Which question a call answers: the seat's ``ordinal``-th question of
-    the game, at its ``attempt`` (1, or 2 for the corrective retry)."""
+    the game, at its numbered HTTP ``attempt``. Configuration fallbacks and
+    the corrective retry each receive a new attempt number."""
 
     game_id: str
     seat: str
@@ -106,6 +107,7 @@ class ProviderCall:
     source: object | None = field(default=None, compare=False, repr=False)
     """The observation the messages were rendered from. Only an in-process mock
     reads it; nothing sends it anywhere."""
+    reasoning: str = "default"
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,11 @@ class ParameterRejected(TransportError):
     Fails the turn, and moves the model down a mode."""
 
 
+class ReasoningRequired(TransportError):
+    """The endpoint requires reasoning. The harness may retry with a new
+    reservation under ``least``; the provider never retries it itself."""
+
+
 class OperatorError(ProviderError):
     """401, 402 or 403: the run's key or credit, not the model. Stops the run."""
 
@@ -180,15 +187,13 @@ REASONING: dict[str, dict[str, Any]] = {
     "medium": {"effort": "medium"},
     "high": {"effort": "high"},
 }
-"""OpenRouter's reasoning setting for each ``--reasoning`` choice. "default"
-sends none and leaves each model at its own default. "least" sends "off", and
-for a model whose endpoint says reasoning is mandatory, "minimal" from then on."""
+"""The wire values chosen by the harness. ``default`` sends no setting."""
 
 MANDATORY = "reasoning is mandatory"
 """How OpenRouter says a model cannot have its reasoning switched off."""
 
 
-def request_body(call: ProviderCall, *, reasoning: str = "default") -> dict[str, Any]:
+def request_body(call: ProviderCall) -> dict[str, Any]:
     """The chat-completions body for one call. Only what the mode needs, plus
     the run's reasoning setting when one was chosen."""
     model = call.ref.model
@@ -235,8 +240,8 @@ def request_body(call: ProviderCall, *, reasoning: str = "default") -> dict[str,
         body["response_format"] = {"type": "json_object"}
     if call.mode != "prompt":
         body["provider"] = {"require_parameters": True}
-    if reasoning != "default":
-        body["reasoning"] = dict(REASONING[reasoning])
+    if call.reasoning != "default":
+        body["reasoning"] = dict(REASONING[call.reasoning])
     return body
 
 
@@ -289,6 +294,10 @@ def _status_error(status: int, body: object) -> ProviderError:
     text = json.dumps(body)[:300] if not isinstance(body, str) else body[:300]
     if status in (401, 402, 403):
         return OperatorError(f"OpenRouter {status}: {text}", status=status, body=body)
+    if status == 400 and MANDATORY in text.casefold():
+        return ReasoningRequired(
+            f"OpenRouter {status}: {text}", status=status, body=body
+        )
     if 400 <= status < 500 and status != 429:
         folded = text.casefold()
         if any(word in folded for word in PARAMETER_WORDS):
@@ -311,51 +320,21 @@ class OpenRouterProvider:
         client: httpx.AsyncClient | None = None,
         url: str = f"{OPENROUTER}/chat/completions",
         timeout: float = 180.0,
-        reasoning: str = "default",
-        on_fallback: Callable[[str], None] | None = None,
     ) -> None:
-        if reasoning not in ("default", "least") and reasoning not in REASONING:
-            raise ValueError(f"unknown reasoning setting {reasoning!r}")
-        self._reasoning = reasoning
-        self._on_fallback = on_fallback
-        self.minimal: set[str] = set()
-        """Models that refused "off" under "least" and get "minimal" instead."""
         self._api_key = (
             api_key if api_key is not None else os.getenv("OPENROUTER_API_KEY", "")
         )
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._url = url
 
-    def _setting(self, model: str) -> str:
-        if self._reasoning != "least":
-            return self._reasoning
-        return "minimal" if model in self.minimal else "off"
-
     async def complete(self, call: ProviderCall) -> Reply:
-        try:
-            return await self._send(call)
-        except TransportError as exc:
-            model = call.ref.model
-            if (
-                self._reasoning != "least"
-                or model in self.minimal
-                or exc.status != 400
-                or MANDATORY not in str(exc).casefold()
-            ):
-                raise
-            self.minimal.add(model)
-            if self._on_fallback is not None:
-                self._on_fallback(model)
-            return await self._send(call)
-
-    async def _send(self, call: ProviderCall) -> Reply:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         try:
             response = await self._client.post(
                 self._url,
-                json=request_body(call, reasoning=self._setting(call.ref.model)),
+                json=request_body(call),
                 headers=headers,
             )
         except httpx.TimeoutException as exc:
@@ -628,6 +607,7 @@ __all__ = [
     "Provider",
     "ProviderCall",
     "ProviderError",
+    "ReasoningRequired",
     "RecordingProvider",
     "Reply",
     "Routed",
