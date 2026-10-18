@@ -147,8 +147,15 @@ class Question:
     ref: CallRef
     rendered: Rendered
     schema: Schema
+    """The plain schema: sent in tools mode, JSON mode and the prompt, and the
+    one every answer is checked against."""
+    strict: Schema
+    """The strict schema, sent in ``json_schema`` mode."""
     request: Request
     source: GameObservation | ExitObservation
+
+    def sent(self, mode: Mode) -> Schema:
+        return self.strict if mode == "json_schema" else self.schema
 
 
 @dataclass
@@ -185,6 +192,7 @@ class ModelPlayer:
             ref=ref,
             rendered=render(observation, recipient=self.model),
             schema=compile_schema(observation),
+            strict=compile_schema(observation, strict=True),
             request=observation.request,
             source=observation,
         )
@@ -194,12 +202,13 @@ class ModelPlayer:
             ref=ref,
             rendered=render_exit(departing, recipient=self.model),
             schema=compile_exit_schema(departing),
+            strict=compile_exit_schema(departing, strict=True),
             request=departing.request,
             source=departing,
         )
 
     def reserve(self, question: Question) -> Reservation:
-        schema = len(json.dumps(question.schema))
+        schema = max(len(json.dumps(question.schema)), len(json.dumps(question.strict)))
         prompt = prompt_tokens(question.rendered, schema)
         return self.budget.reserve(self.info, prompt, self.max_tokens)
 
@@ -216,7 +225,7 @@ class ModelPlayer:
         call = ProviderCall(
             ref=question.ref,
             messages=question.rendered.messages,
-            schema=question.schema,
+            schema=question.sent(mode),
             mode=mode,
             max_tokens=self.max_tokens,
             source=question.source,
@@ -359,9 +368,24 @@ def _json(text: str) -> tuple[Any, str | None]:
 
 def _errors(exc: ValidationError) -> str:
     return "; ".join(
-        f"{ROOT}." + ".".join(str(part) for part in error["loc"]) + f": {error['msg']}"
+        f"{ROOT}." + ".".join(str(part) for part in error["loc"]) + f": {_said(error)}"
         for error in exc.errors()[:3]
     )
+
+
+def _said(error: Any) -> str:
+    """What was wrong, with the cap and the length given when it was too
+    long, so the retry can be the right length."""
+    cap = (error.get("ctx") or {}).get("max_length")
+    given = error.get("input")
+    if error["type"] == "string_too_long" and isinstance(given, str):
+        return (
+            f"{len(given)} characters, over the cap of {cap}; "
+            f"say it in {cap} characters or fewer"
+        )
+    if error["type"] == "too_long" and isinstance(given, list):
+        return f"{len(given)} items, over the cap of {cap}"
+    return str(error["msg"])
 
 
 def _ref(ref: CallRef) -> dict[str, object]:

@@ -100,6 +100,7 @@ CASES = [
     ("json_schema_400", "transport", 1),
     ("empty", "empty", 2),
     ("malformed", "unparseable", 2),
+    ("over_length", "invalid", 2),
     ("refusal", "refusal", 1),
     ("timeout", "transport", 1),
     ("content_filter", "content_filter", 1),
@@ -177,6 +178,22 @@ def test_a_retry_names_the_error_and_restates_the_legal_answers() -> None:
         if entry.type == "refused" and entry.actor_id == SEAT
     ]
     assert [w.player_id for w in refused[0].witnesses] == [SEAT]
+
+
+def test_a_retry_for_an_answer_over_a_cap_quotes_the_cap_and_the_length() -> None:
+    _, sent = play("over_length")
+    diary = json.loads(
+        fixture("over_length")["body"]["choices"][0]["message"]["tool_calls"][0][
+            "function"
+        ]["arguments"]
+    )["decision"]["diary"]
+    retry = sent[1]["messages"][-1]["content"]
+    assert (
+        f"{len(diary)} characters, over the cap of 600; say it in 600 characters "
+        "or fewer"
+    ) in retry
+    tool = sent[0]["tools"][0]["function"]["parameters"]
+    assert tool["properties"]["decision"]["properties"]["diary"]["maxLength"] == 600
 
 
 def test_a_402_aborts_the_run_and_charges_no_model() -> None:

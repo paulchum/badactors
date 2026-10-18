@@ -9,13 +9,23 @@ one is compiled on its own:
   its rooms for an alibi, its citable records for a report;
 * a plan's steps filtered to the tools the player's kit carries, with rooms and
   players named from the castle and the roster;
-* the strict-mode subset every provider understands: one root object wrapping
-  the answer as ``decision``, every property required (optional ones nullable),
-  no additional properties, every ``$ref`` inlined, and length and range limits
-  moved into the descriptions, where no provider can reject them.
+* a subset every provider understands: one root object wrapping the answer as
+  ``decision``, no additional properties, every ``$ref`` inlined, a tag such as
+  a decision's ``kind`` given as a one-value ``enum`` (some providers drop
+  ``const`` from a function's parameters, and a model then guesses the tag),
+  and every length and range limit written into its description as well.
 
-:func:`validate` checks a value against that subset, so a schema-invalid answer
-is named exactly, by path, before the decision types see it.
+Each request compiles two ways. The **plain** schema, for tools, JSON mode and
+the prompt, keeps the limits as keywords (``maxLength`` and the rest) and
+requires what the decision types require, so a field they leave optional, such
+as a wait step's reason, may be left out and takes its default. The **strict**
+schema, for ``json_schema`` with ``strict: true``, requires every property
+(optional ones nullable) and keeps the limits only in the descriptions, where
+no provider can reject them.
+
+:func:`validate` checks a value against either, so a schema-invalid answer is
+named exactly, by path, before the decision types see it. Lengths and ranges
+are left to the decision types, which name the cap and the length given.
 """
 
 from __future__ import annotations
@@ -129,8 +139,9 @@ def kit_tools(role: Role) -> tuple[ToolName, ...]:
     return tuple(name for name in carried if name in PLAN_TOOLS)
 
 
-def compile_schema(observation: GameObservation) -> Schema:
-    """The schema for the answer to ``observation.request``."""
+def compile_schema(observation: GameObservation, *, strict: bool = False) -> Schema:
+    """The schema for the answer to ``observation.request``: the plain one, or
+    the strict one."""
     request = observation.request
     rooms = [room.id for room in observation.castle.rooms]
     players = [character.id for character in observation.cast]
@@ -141,15 +152,22 @@ def compile_schema(observation: GameObservation) -> Schema:
             rooms=rooms,
             players=players,
             tools=kit_tools(observation.role),
+            strict=strict,
         )
         for kind in answer_kinds(request)
     ]
     return _root(variants)
 
 
-def compile_exit_schema(departing: ExitObservation) -> Schema:
+def compile_exit_schema(departing: ExitObservation, *, strict: bool = False) -> Schema:
     request = departing.request
-    return _root([_decision("exit_interview", request, rooms=[], players=[], tools=())])
+    return _root(
+        [
+            _decision(
+                "exit_interview", request, rooms=[], players=[], tools=(), strict=strict
+            )
+        ]
+    )
 
 
 def _root(variants: Sequence[Schema]) -> Schema:
@@ -169,8 +187,9 @@ def _decision(
     rooms: Sequence[str],
     players: Sequence[str],
     tools: Sequence[ToolName],
+    strict: bool,
 ) -> Schema:
-    schema = copy.deepcopy(_base(kind))
+    schema = copy.deepcopy(_base(kind, strict))
     properties = schema["properties"]
     if "target" in properties:
         _enum(properties["target"], request.options)
@@ -189,6 +208,7 @@ def _decision(
             "or unknown.",
             "properties": {
                 seat: {"type": "string", "description": "at most 80 characters"}
+                | ({} if strict else {"minLength": 1, "maxLength": 80})
                 for seat in request.options
             },
             "required": list(request.options),
@@ -207,8 +227,8 @@ def _decision(
 
 
 def _allowed(step: Schema, tools: Sequence[ToolName]) -> bool:
-    tool = step["properties"].get("tool")
-    return tool is None or tool["const"] in tools
+    tool = _tag(step["properties"].get("tool", {}))
+    return tool is None or tool in tools
 
 
 _PLAYER_FIELDS = frozenset({"to", "hand", "as_player", "subject", "replace_with"})
@@ -244,11 +264,12 @@ def _enum(field: Schema, values: Iterable[object]) -> None:
 
 
 @cache
-def _base(kind: str) -> Schema:
-    """One decision's schema in the strict subset, before any narrowing."""
+def _base(kind: str, strict: bool) -> Schema:
+    """One decision's schema in the subset, plain or strict, before any
+    narrowing."""
     raw = DECISIONS[kind].model_json_schema(ref_template="#/$defs/{model}")
     defs = raw.pop("$defs", {})
-    schema: Schema = _strict(_inline(raw, defs), name=None)
+    schema: Schema = _subset(_inline(raw, defs), name=None, strict=strict)
     return schema
 
 
@@ -266,9 +287,9 @@ def _inline(value: Any, defs: Mapping[str, Any]) -> Any:
     return {key: _inline(item, defs) for key, item in value.items()}
 
 
-def _strict(value: Any, *, name: str | None) -> Any:
+def _subset(value: Any, *, name: str | None, strict: bool) -> Any:
     if isinstance(value, list):
-        return [_strict(item, name=None) for item in value]
+        return [_subset(item, name=None, strict=strict) for item in value]
     if not isinstance(value, dict):
         return value
     notes = [
@@ -280,14 +301,17 @@ def _strict(value: Any, *, name: str | None) -> Any:
     ]
     result: Schema = {}
     for key, item in value.items():
-        if key in _DROPPED or key in _LIMITS or key == "pattern":
+        if key in _DROPPED or key == "pattern" or (strict and key in _LIMITS):
             continue
         if key == "properties":
             result[key] = {
-                prop: _strict(schema, name=prop) for prop, schema in item.items()
+                prop: _subset(schema, name=prop, strict=strict)
+                for prop, schema in item.items()
             }
+        elif key == "const":
+            result["enum"] = [item]
         else:
-            result[key] = _strict(item, name=None)
+            result[key] = _subset(item, name=None, strict=strict)
     if "oneOf" in result:
         result["anyOf"] = result.pop("oneOf")
     if "anyOf" in result:
@@ -303,11 +327,19 @@ def _strict(value: Any, *, name: str | None) -> Any:
     if result.get("type") == "object" and "properties" in result:
         required = set(value.get("required", []))
         for prop, schema in result["properties"].items():
-            if prop not in required and not _nullable(schema) and "const" not in schema:
+            if (
+                prop not in required
+                and not _nullable(schema)
+                and "const" not in value["properties"].get(prop, {})
+            ):
                 default = value["properties"][prop].get("default", ...)
                 if default is None:
                     result["properties"][prop] = {"anyOf": [schema, {"type": "null"}]}
-        result["required"] = list(result["properties"])
+        result["required"] = [
+            prop
+            for prop, schema in result["properties"].items()
+            if strict or prop in required or _tag(schema) is not None
+        ]
         result["additionalProperties"] = False
     return result
 
@@ -354,8 +386,9 @@ def _check(schema: Schema, value: Any, path: str) -> list[str]:
     kind = schema.get("type")
     if kind is not None and not _is(value, kind):
         return [f"{path}: expected {kind}, got {_typename(value)}"]
-    if "const" in schema and value != schema["const"]:
-        return [f"{path}: must be {schema['const']!r}"]
+    tag = _tag(schema)
+    if tag is not None and value != tag:
+        return [f"{path}: must be {tag!r}"]
     if "enum" in schema and value not in schema["enum"]:
         choices = ", ".join(repr(item) for item in schema["enum"])
         return [f"{path}: {value!r} is not one of {choices}"]
@@ -407,21 +440,31 @@ def _discriminated(variant: Schema, value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     properties = variant.get("properties", {})
-    keys = [key for key in ("kind", "tool") if "const" in properties.get(key, {})]
-    return bool(keys) and all(
-        value.get(key) == properties[key]["const"] for key in keys
-    )
+    tags = {key: _tag(properties.get(key, {})) for key in ("kind", "tool")}
+    keys = [key for key, tag in tags.items() if tag is not None]
+    return bool(keys) and all(value.get(key) == tags[key] for key in keys)
 
 
 def _tags(variants: Sequence[Schema]) -> list[str]:
     tags = []
     for variant in variants:
         properties = variant.get("properties", {})
-        kind = properties.get("kind", {}).get("const")
-        tool = properties.get("tool", {}).get("const")
+        kind = _tag(properties.get("kind", {}))
+        tool = _tag(properties.get("tool", {}))
         if kind is not None:
             tags.append(f"{kind}:{tool}" if tool else str(kind))
     return tags
+
+
+def _tag(schema: Schema) -> Any:
+    """The one value a tag property allows, or ``None`` for any other
+    property."""
+    if "const" in schema:
+        return schema["const"]
+    allowed = schema.get("enum")
+    if isinstance(allowed, list) and len(allowed) == 1 and "type" in schema:
+        return allowed[0]
+    return None
 
 
 def _is(value: Any, kind: str) -> bool:
