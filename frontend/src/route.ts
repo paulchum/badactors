@@ -1,17 +1,24 @@
 // The site's pages live in the query string, so the static build needs no
-// server routes: "?game=seed-56&tick=41" is the viewer, the bare page the
-// landing game.
+// server routes: "?game=seed-56&tick=41" is the viewer, "?game=seed-56&claim=
+// c927-1" a claim's receipt in it, the bare page the landing game.
 
 import { useCallback, useEffect, useState } from "react";
 
 export type Route =
   | { page: "landing" }
-  | { page: "viewer"; game: string | null; tick: number | null; moment: string | null }
-  | { page: "leaderboard" };
+  | { page: "viewer"; game: string | null; tick: number | null; moment: string | null; claim?: string | null }
+  | { page: StandingsPage }
+  | { page: "model"; id: string };
+
+export type StandingsPage = "standings" | "gaslit" | "matrix" | "method";
+const STANDINGS: readonly string[] = ["standings", "gaslit", "matrix", "method"];
 
 export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
-  if (params.get("page") === "leaderboard") return { page: "leaderboard" };
+  if (params.get("page") === "leaderboard") return { page: "standings" };
+  const page = params.get("page") ?? "";
+  if (STANDINGS.includes(page)) return { page: page as StandingsPage };
+  if (page === "model" && params.get("id")) return { page: "model", id: params.get("id") ?? "" };
   if (params.has("game") || params.get("page") === "games") {
     const tick = Number.parseInt(params.get("tick") ?? "", 10);
     return {
@@ -19,6 +26,7 @@ export function parseRoute(search: string): Route {
       game: params.get("game") || null,
       tick: Number.isFinite(tick) && tick >= 0 ? tick : null,
       moment: params.get("moment") || null,
+      claim: params.get("claim") || null,
     };
   }
   return { page: "landing" };
@@ -26,11 +34,13 @@ export function parseRoute(search: string): Route {
 
 export function routeSearch(route: Route): string {
   if (route.page === "landing") return "";
-  if (route.page === "leaderboard") return "?page=leaderboard";
+  if (route.page === "model") return `?${new URLSearchParams({ page: "model", id: route.id }).toString()}`;
+  if (route.page !== "viewer") return `?page=${route.page}`;
   const params = new URLSearchParams();
   params.set("game", route.game ?? "");
   if (route.tick !== null) params.set("tick", String(route.tick));
   if (route.moment !== null) params.set("moment", route.moment);
+  if (route.claim) params.set("claim", route.claim);
   return `?${params.toString()}`;
 }
 

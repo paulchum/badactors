@@ -1,5 +1,5 @@
 """The audience feed: a stored game laid out for the show, as a pure function of
-its record."""
+its record and the fact-checker's verdicts."""
 
 from __future__ import annotations
 
@@ -12,10 +12,13 @@ import pytest
 
 from badactors.castle import play
 from badactors.castle.bots import HeuristicBot
+from badactors.castle.claims import PUBLIC
 from badactors.castle.cli import main as cli_main
 from badactors.castle.contracts import AtRoom, WorldState
 from badactors.castle.decisions import Decision
-from badactors.castle.episode import episode
+from badactors.castle.episode import episode, title
+from badactors.castle.factcheck import Verdict
+from badactors.castle.moments import STAMPS, numbered, stamp, title_line
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import (
     GameRecord,
@@ -27,11 +30,13 @@ from badactors.castle.play import (
 )
 from badactors.castle.show import (
     BOT_COLOUR,
+    ClaimNamed,
     Feed,
     Naming,
     Whereabouts,
     audience_feed,
     audience_names,
+    checked,
     load_feed,
     model_name,
     save_feed,
@@ -89,15 +94,67 @@ def stored(watched: tuple[GameRecord, dict[int, dict[str, Whereabouts]]]) -> Gam
 
 
 @pytest.fixture(scope="module")
-def feed(stored: GameRecord) -> Feed:
-    return audience_feed(stored)
+def found(stored: GameRecord) -> list[Verdict]:
+    return checked(stored)
 
 
-def test_the_feed_is_a_pure_function_of_the_record(
-    stored: GameRecord, feed: Feed
+@pytest.fixture(scope="module")
+def feed(stored: GameRecord, found: list[Verdict]) -> Feed:
+    return audience_feed(stored, found)
+
+
+def test_the_feed_is_a_pure_function_of_the_record_and_the_verdicts(
+    stored: GameRecord, found: list[Verdict], feed: Feed
 ) -> None:
-    again = audience_feed(GameRecord.model_validate_json(stored.model_dump_json()))
+    copied = GameRecord.model_validate_json(stored.model_dump_json())
+    verdicts = [Verdict.model_validate_json(v.model_dump_json()) for v in found]
+    again = audience_feed(copied, verdicts)
     assert again.model_dump_json() == feed.model_dump_json()
+    assert checked(copied) == found
+
+
+def test_every_claim_made_out_loud_carries_its_verdict_and_its_proof(
+    stored: GameRecord, found: list[Verdict], feed: Feed
+) -> None:
+    public = [
+        (claim_id, v)
+        for claim_id, v in numbered(found)
+        if stored.ledger[v.claim.seq - 1].type in PUBLIC
+    ]
+    assert public and len(public) < len(found)
+    assert [c.id for c in feed.claims] == [claim_id for claim_id, _ in public]
+    assert len({c.id for c in feed.claims}) == len(feed.claims)
+    events = len(feed.events)
+    for claim, (_, verdict) in zip(feed.claims, public, strict=True):
+        event = feed.events[claim.seq - 1]
+        assert (claim.tick, claim.day, claim.speaker) == (
+            event.tick,
+            event.day,
+            event.actor,
+        )
+        assert claim.said == verdict.claim.text
+        assert claim.label == verdict.label and claim.stamp == stamp(verdict)
+        assert claim.reason == verdict.reason and claim.why
+        assert claim.proof == verdict.evidence and claim.knew == verdict.against
+        assert claim.path == verdict.path
+        assert claim.origin == (verdict.path[0] if verdict.path else None)
+        assert all(1 <= seq <= events for seq in [*claim.proof, *claim.knew])
+        if claim.label == "implanted":
+            assert claim.planted_by is not None
+            assert claim.took == {True: "gave_in", False: "lost_memory"}.get(
+                verdict.gave_in  # type: ignore[arg-type]
+            )
+        else:
+            assert claim.took is None
+    assert {c.stamp for c in feed.claims} <= {*STAMPS.values(), "GASLIT"}
+    assert feed.game.fact_checked
+    assert all(m.checked for m in feed.moments)
+
+
+def test_a_feed_without_verdicts_has_no_claims_and_says_so(stored: GameRecord) -> None:
+    plain = audience_feed(stored)
+    assert not plain.game.fact_checked and plain.claims == []
+    assert all(not m.checked and m.verdict is None for m in plain.moments)
 
 
 def test_the_feed_round_trips_through_its_file(feed: Feed, tmp_path: Path) -> None:
@@ -191,6 +248,7 @@ def test_castle_game_writes_the_feed(
     assert f"Saved the audience feed to {path}." in capsys.readouterr().out
     written = load_feed(path)
     assert written.game.seed == 4 and len(written.seats) == 8
+    assert written.game.fact_checked and written.claims
 
 
 # ---------------------------------------------------------------------- naming
@@ -292,6 +350,12 @@ def test_the_feed_carries_both_names_and_quotes_still_match_the_ledger(
         for key, line in named.private.items():
             assert _unbracketed(feed, line) == event.private[key]
     assert bracketed > 0
+    for claim in feed.claims:
+        renamed = claim.audience or ClaimNamed()
+        assert characters.search(renamed.what or claim.what) is None, claim.id
+        assert characters.search(renamed.why or claim.why) is None, claim.id
+        if renamed.said is not None:
+            assert _unbracketed(feed, renamed.said) == claim.said
 
 
 @dataclass(frozen=True)
@@ -330,9 +394,27 @@ def test_the_episode_names_seats_by_model_only_when_asked(stored: GameRecord) ->
     named = episode(game, agents=stored.agents, names="model")
     assert "Reference bot #" not in plain and "accused Ash" in plain
     assert "[Reference bot #" in named and "accused Ash" not in named
-    assert named.startswith("REFERENCE BOTS")
+    assert named.startswith("This one's bots. The real cast hasn't played yet.\n")
     for model in CAST.models().values():
         assert model not in named and model_name(model) not in named
+
+
+def test_an_episode_is_numbered_by_its_seed_and_titled_by_a_diary_line(
+    stored: GameRecord, feed: Feed
+) -> None:
+    game = replay(stored)
+    lines = episode(game, agents=stored.agents, moments=feed.moments).splitlines()
+    best = title_line(feed.moments)
+    assert best is not None and best[1].field == "diary"
+    assert lines[1] == f"EPISODE {SEED} · “{best[1].text}”"
+    killers = " and ".join(
+        game.world.players[pid].name for pid in game.starting_traitors
+    )
+    assert lines[2].startswith(f"{game.world.map.name}. 10 guests. Two are killers: ")
+    assert killers in lines[2]
+    named = episode(game, agents=stored.agents, names="model", moments=feed.moments)
+    assert named.splitlines()[1].startswith(f"EPISODE {SEED} · “")
+    assert title(SEED, [], Naming.of({}, None)) == f"EPISODE {SEED}"
 
 
 def test_castle_game_names_seats_by_model_behind_a_flag(

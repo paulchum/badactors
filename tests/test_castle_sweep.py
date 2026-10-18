@@ -309,6 +309,10 @@ def test_the_report_shows_each_rolls_configured_chance_beside_it(
             assert on_chance(rate, chances[key]) is True, key
     text = report(games)
     assert re.search(rf"forge:trace .* configured +{tools.forge.trace:.0%}", text)
+    seeds = sorted(game.world.seed for game in games)
+    assert text.startswith(
+        f"Nights {seeds[0]} to {seeds[-1]}: {len(games)} bot games.\n"
+    )
 
 
 def test_the_balance_checks_read_the_same_numbers_the_report_shows(

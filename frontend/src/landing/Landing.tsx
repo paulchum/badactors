@@ -1,6 +1,6 @@
-// The landing game, "Who is lying?". One round table from a bundled game plays
-// as captions: three players accuse each other. The visitor picks the liar; the
-// curtain drops on the diaries, the ledger's truth and the stamp, then how the
+// The landing game, WHO'S LYING?. One round table from a bundled game plays as
+// captions: three players accuse each other. The visitor picks the liar; the
+// curtain drops on the diaries, what the tape shows and the stamp, then how the
 // table itself voted, and a grid to share. Only then the links out.
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -9,8 +9,10 @@ import { LEADERBOARD_URL, REPO_URL, TALLY_URL } from "../config";
 import type { Game } from "../feed/load";
 import { type NameStyle, Naming, defaultStyle, eventQuote, eventText, privateLine } from "../feed/naming";
 import { type Puzzle, type Result, dailyPick, dayNumber, puzzleOfRound, puzzlesFrom, score, shareGrid, voteSquare } from "../feed/puzzle";
+import { claimWhy } from "../feed/receipt";
 import type { GameSummary } from "../feed/types";
 import { href } from "../route";
+import { StampMark, receiptHref } from "../viewer/Receipt";
 import { BotBanner, Brand, Failed, LightBadge, Loading, PHASES, SeatName, when } from "../ui/common";
 import { useGame, useIndex } from "../ui/data";
 import { type Picks, sendPick } from "./tally";
@@ -33,7 +35,7 @@ export function Landing({ today }: { today?: Date }) {
     <div className="app-shell flex flex-col">
       <header className="flex items-center justify-between px-4 py-3">
         <Brand />
-        <span className="font-mono text-xs text-stone-500">Who is lying? #{day + 1}</span>
+        <span className="font-mono text-xs text-stone-500">WHO'S LYING? #{day + 1}</span>
       </header>
       {botGame ? <BotBanner compact /> : null}
       {index.state === "error" ? <Failed message={index.message} /> : null}
@@ -126,7 +128,7 @@ export function Stage({ game, summary, puzzle, number }: { game: Game; summary: 
             {when(opened.day, opened.phase)} · {game.feed.game.castle}
           </p>
           <h1 className="mt-1 text-[28px] font-black leading-tight tracking-tight">
-            {present} at the table. At least one is a traitor.
+            {present} at the table. Three of them talk. One is lying.
           </h1>
           <ol
             className="mt-5 grid gap-4"
@@ -147,14 +149,17 @@ export function Stage({ game, summary, puzzle, number }: { game: Game; summary: 
           {step === "captions" ? (
             <div className="mt-auto flex items-center justify-between pt-8 text-sm text-stone-500">
               <span>Tap to go faster</span>
-              <button type="button" className="underline underline-offset-4" onClick={() => setStep("ask")}>
+              <button type="button" className="underline underline-offset-4" onClick={() => {
+                setShown(puzzle.captions.length);
+                setStep("ask");
+              }}>
                 Skip to the vote
               </button>
             </div>
           ) : (
             <section ref={ask} className="caption-in mt-8 scroll-mb-4" aria-labelledby="ask">
               <h2 id="ask" className="text-center text-4xl font-black tracking-tight text-traitor">
-                WHO IS LYING?
+                WHO'S LYING?
               </h2>
               <div className="mt-4 grid gap-3">
                 {puzzle.suspects.map((suspect) => {
@@ -193,7 +198,7 @@ function Section({ title, delay, children }: { title: string; delay: number; chi
   );
 }
 
-function Reveal({
+export function Reveal({
   game,
   summary,
   puzzle,
@@ -216,6 +221,7 @@ function Reveal({
   const botGame = game.feed.game.reference_bots;
   const liar = naming.name(puzzle.liar);
   const lie = game.event(puzzle.suspects.find((s) => s.traitor)!.words);
+  const ruled = game.claim(puzzle.claim);
   const grid = shareGrid(puzzle, result, number, botGame);
   const url = typeof window === "undefined" ? "" : `${window.location.origin}${window.location.pathname}`;
   const banished = puzzle.table.banished;
@@ -224,7 +230,7 @@ function Reveal({
   const moment =
     game.feed.moments.find((m) => m.claim === lie.seq || m.anchor === puzzle.table.closed) ??
     game.feed.moments.find((m) => m.seats.includes(puzzle.liar) && m.first_tick <= lie.tick && lie.tick <= m.last_tick);
-  const watch = href({ page: "viewer", game: summary.id, tick: lie.tick, moment: moment?.id ?? null });
+  const watch = href({ page: "viewer", game: summary.id, tick: lie.tick, moment: moment?.id ?? null, claim: null });
   const votes = new Map(puzzle.table.votes.map((v) => [v.voter, v.target]));
   const humans = picks ? Object.values(picks).reduce((a, b) => a + b, 0) : 0;
 
@@ -245,7 +251,7 @@ function Reveal({
   return (
     <div>
       <p className="text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
-        You picked {naming.name(result.pick)}. The curtain is down.
+        You picked {naming.name(result.pick)}.
       </p>
 
       <Section title="The diaries" delay={0}>
@@ -254,12 +260,20 @@ function Reveal({
             const said = game.event(suspect.words);
             const own = suspect.line !== null ? game.event(suspect.line) : null;
             const line = own ? (privateLine(own, "diary", style) ?? privateLine(own, "reason", style)) : null;
+            const checked = game.claim(suspect.claim);
             return (
               <li key={suspect.id} className="diary rounded-lg p-3 shadow-lg">
-                <div className="flex items-center justify-between gap-2 font-sans not-italic">
+                <div className="flex flex-wrap items-center justify-between gap-2 font-sans not-italic">
                   <strong className="text-base text-stone-900">{naming.name(suspect.id)}</strong>
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white ${suspect.traitor ? "bg-traitor" : "bg-faithful"}`}>
-                    {suspect.traitor ? "traitor" : "faithful"}
+                  <span className="flex items-center gap-1.5">
+                    {checked ? (
+                      <a href={receiptHref(summary.id, checked)} className="rounded-sm bg-ink px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-stone-100">
+                        {checked.stamp}
+                      </a>
+                    ) : null}
+                    <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white ${suspect.traitor ? "bg-traitor" : "bg-faithful"}`}>
+                      {suspect.traitor ? "traitor" : "faithful"}
+                    </span>
                   </span>
                 </div>
                 <p className="mt-1 font-sans text-xs not-italic text-stone-600">Said: “{eventQuote(said, style)}”</p>
@@ -270,7 +284,7 @@ function Reveal({
         </ul>
       </Section>
 
-      <Section title="What the ledger shows" delay={350}>
+      <Section title="What the tape shows" delay={350}>
         <ol className="grid gap-2">
           {puzzle.truth.map((seq) => {
             const event = game.event(seq);
@@ -299,12 +313,21 @@ function Reveal({
         <div className="relative rounded-lg border border-traitor/40 bg-black/40 p-4">
           <SeatName game={game} id={puzzle.liar} style={style} className="text-sm text-stone-300" />
           <p className="mt-1 font-serif text-xl leading-snug text-stone-50">“{eventQuote(lie, style)}”</p>
-          <span className="stamp stamp-in absolute -right-1 -top-4 bg-ink/60 text-3xl text-traitor" style={{ animationDelay: "900ms" }}>
-            LIE
-          </span>
-          <p className="mt-3 text-xs text-stone-400">
-            {liar} was a traitor, accusing one of the Faithful. That is what the roles show; the fact-checker has not ruled on it.
-          </p>
+          {ruled ? (
+            <>
+              <span className="absolute -right-1 -top-5 stamp-in" style={{ animationDelay: "900ms" }}>
+                <StampMark stamp={ruled.stamp} size="text-2xl sm:text-3xl" />
+              </span>
+              <p className="mt-3 text-sm text-stone-200">{claimWhy(ruled, style)}</p>
+              <a className="mt-2 inline-block text-sm text-candle underline underline-offset-4" href={receiptHref(summary.id, ruled, moment?.id ?? null)}>
+                See the receipt
+              </a>
+            </>
+          ) : (
+            <p className="mt-3 text-xs text-stone-400">
+              {liar} was a traitor, accusing one of the Faithful. Nobody's fact-checked this game yet, so that's the roles talking.
+            </p>
+          )}
         </div>
       </Section>
 
@@ -312,10 +335,10 @@ function Reveal({
         <p className={`text-3xl font-black leading-tight ${result.correct ? "text-emerald-300" : "text-traitor"}`}>
           {result.correct
             ? `You caught it. ${result.caught} of ${result.of} players at the table did.`
-            : `${liar} fooled you. ${result.caught} of ${result.of} players at the table caught it.`}
+            : `You got fooled by ${liar}. ${result.caught} of ${result.of} players at the table caught it.`}
         </p>
         <p className="mt-2 text-sm text-stone-400">
-          {botGame ? "The reference bots' votes" : "The models' votes"}, counting the Faithful only; the traitors knew.
+          {botGame ? "How the bots voted" : "How the models voted"}. Faithful only, since the traitors already knew.
           {banished ? ` ${naming.name(banished)} was banished, and was ${puzzle.table.role === "traitor" ? "a traitor" : "one of the Faithful"}.` : ""}
         </p>
         <ul className="mt-3 grid grid-cols-1 gap-1 text-sm min-[400px]:grid-cols-2">
@@ -338,7 +361,7 @@ function Reveal({
               return (
                 <div key={suspect.id} className="flex items-center gap-2 text-sm">
                   <span className="w-20 truncate">{naming.name(suspect.id)}</span>
-                  <span className="h-3 flex-1 overflow-hidden rounded bg-white/10">
+                  <span className="h-3 flex-1 overflow-hidden rounded-sm bg-white/10">
                     <span className={`block h-full ${suspect.traitor ? "bg-traitor" : "bg-stone-400"}`} style={{ width: `${share}%` }} />
                   </span>
                   <span className="w-10 text-right font-mono text-xs">{share}%</span>
@@ -360,7 +383,7 @@ function Reveal({
           Share your result
         </button>
         {copied ? <p className="mt-2 text-center text-sm text-stone-400">{copied}</p> : null}
-        <p className="mt-2 text-center text-xs text-stone-500">A new table every day.</p>
+        <p className="mt-2 text-center text-xs text-stone-500">A new table every night.</p>
       </Section>
 
       <Section title="Keep going" delay={1700}>
@@ -370,17 +393,18 @@ function Reveal({
           </a>
           <a
             className="rounded-xl border border-rim bg-panel px-4 py-3 text-center font-semibold hover:border-candle"
-            href={LEADERBOARD_URL || href({ page: "leaderboard" })}
+            href={LEADERBOARD_URL || href({ page: "standings" })}
           >
-            Leaderboard
+            Standings
           </a>
           <a className="rounded-xl border border-rim bg-panel px-4 py-3 text-center font-semibold hover:border-candle" href={REPO_URL}>
-            ★ Star on GitHub
+            Run it yourself
           </a>
         </nav>
         <p className="mt-3 text-center font-mono text-[11px] text-stone-500">
-          {game.feed.game.castle} · seed {game.feed.game.seed} · {PHASES[lie.phase]}, day {lie.day} · entries {puzzle.table.opened}–
-          {puzzle.table.closed}
+          {game.feed.game.castle} · seed {game.feed.game.seed} · day {lie.day}, {PHASES[lie.phase]} · ticks{" "}
+          {game.event(puzzle.table.opened).tick}–{game.event(puzzle.table.closed).tick}
+          {ruled ? ` · claim ${ruled.id}` : ""}
         </p>
       </Section>
     </div>

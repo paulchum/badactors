@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from badactors.castle.show import load_feed
+from badactors.castle.show import load_feed, vocabulary
 
 ROOT = Path(__file__).resolve().parent.parent
 DIGESTS = Path(__file__).resolve().parent / "fixtures" / "feeds" / "digests.json"
@@ -36,9 +36,10 @@ def _script() -> ModuleType:
 def exported(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> tuple[Path, list[dict[str, Any]]]:
-    """Seed 56 exported once, into a folder that held a stale feed."""
+    """Seed 56 exported once, into a folder that held a stale feed and cards."""
     out = tmp_path_factory.mktemp("games")
     (out / "seed-41.json").write_text("{}")
+    (out / "cards" / "seed-41").mkdir(parents=True)
     games = _script().export([56], out)
     return out, games
 
@@ -48,7 +49,7 @@ def test_an_export_is_the_same_every_time(
 ) -> None:
     out, _ = exported
     _script().export([56], tmp_path)
-    for name in ("seed-56.json", "index.json"):
+    for name in ("seed-56.json", "index.json", "show.json"):
         assert (tmp_path / name).read_bytes() == (out / name).read_bytes()
 
 
@@ -72,7 +73,18 @@ def test_the_index_lists_each_exported_seed_as_a_bot_game(
     assert _script().SEEDS[0] == 56
     index = json.loads((out / "index.json").read_text())
     assert [game["seed"] for game in index["games"]] == [56]
-    assert sorted(path.name for path in out.iterdir()) == ["index.json", "seed-56.json"]
+    assert sorted(path.name for path in out.iterdir()) == [
+        "cards",
+        "index.json",
+        "seed-56.json",
+        "show.json",
+    ]
+    assert json.loads((out / "show.json").read_text()) == vocabulary()
+    feed = load_feed(out / "seed-56.json")
+    assert sorted(p.name for p in (out / "cards" / "seed-56").iterdir()) == sorted(
+        f"{claim.id}.svg" for claim in feed.claims
+    )
+    assert index["games"][0]["claims"] == len(feed.claims)
     for game in index["games"]:
         assert game["reference_bots"] is True
         assert game["played_by"] == ["bot"]

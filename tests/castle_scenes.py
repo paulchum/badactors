@@ -9,8 +9,10 @@ The planted scenes at the end are for the fact-checker: one scripted first day
 each, in which every seat the script leaves alone plays :class:`Quiet` and does
 as little as the rules allow, so the one claim under test is the only thing that
 happens: a lie, a repeated noisy tally, a repeated forged note, a gaslight that
-took, a rumour relayed three hops, a bluff, an evasive alibi, and a signature
-backdated into a log someone reads.
+took, a gaslighter telling their own invention, a poisoner denying the dose, a
+false sighting told from a memory gone stale (and the same one first started
+as a rumour), a rumour relayed three hops, a bluff, an evasive alibi, and a
+signature backdated into a log someone reads.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from badactors.castle.decisions import (
     ExitAnswer,
     Pass,
     PlanChoice,
+    Poison,
     Question,
     Recruit,
     Refuse,
@@ -524,6 +527,120 @@ def gaslight_scene(**options: Any) -> Staged:
     return stage(script, **options)
 
 
+def gaslighter_scene(**options: Any) -> Staged:
+    """As the round table gathers, a traitor whispers to one of the Faithful
+    that the two of them spent free time together in the Library, though
+    neither left the Great Hall; asked for an alibi, the traitor gives the one
+    they planted. ``recent_limit`` is short by default, so the traitor's own
+    steps through free time have left their prompt by then: only the planting
+    says they knew."""
+    options.setdefault("recent_limit", 8)
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitor, faithful = sides(game)
+        asker, victim = faithful[0], faithful[1]
+        me, kind = observation.viewer_id, observation.request.kind
+        world = game.world
+        if me == traitor and kind == "plan" and world.phase == "round_table":
+            if _did(game, traitor, "whisper", tool="gaslight") is None:
+                return _plan(
+                    Gaslight(
+                        to=victim,
+                        room_id="library",
+                        day=1,
+                        phase="free_time",
+                        text="You and I were in the Library all through free time "
+                        "on day 1. Tell them, if anyone asks.",
+                        intent=Intent(
+                            target=victim,
+                            effect="alibi",
+                            want=traitor,
+                            window="next_phase",
+                        ),
+                    )
+                )
+        if me == traitor and kind == "alibi":
+            return Alibi(
+                room="library",
+                companion=victim if victim in observation.request.options else None,
+                diary="The Library, with them. They'll back me up.",
+            )
+        return _demand(observation, asker, traitor)
+
+    return stage(script, **options)
+
+
+def poisoner_scene(**options: Any) -> Staged:
+    """At the first dinner a traitor doses a neighbour, who is dead by
+    breakfast. At the second table one of the Faithful demands another's
+    alibi, which everyone in the hall notes down; at the third the traitor
+    swears to having poisoned nobody. ``recent_limit`` and ``notebook_limit``
+    are short by default, so the dose has left the traitor's prompt by then.
+    Every vote goes to one of the Faithful, so the traitor stays."""
+    options.setdefault("recent_limit", 1)
+    options.setdefault("notebook_limit", 1)
+    options.setdefault("until", (3, "dinner"))
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitor, faithful = sides(game)
+        me, request, day = observation.viewer_id, observation.request, game.world.day
+        living = [pid for pid in faithful if game.world.players[pid].alive]
+        if request.kind == "vote":
+            return Vote(target=next(pid for pid in request.options if pid in living))
+        if me == traitor and request.kind == "poison" and day == 1:
+            return Poison(target=request.options[0])
+        if day == 2 and len(living) > 1 and me == living[0]:
+            return _demand(observation, me, living[1])
+        if me == traitor and request.kind == "accuse" and day == 3:
+            return Accuse(
+                target=request.options[0],
+                text="I never poisoned anyone. Look elsewhere.",
+                diary="Nobody saw the glass.",
+            )
+        return None
+
+    return stage(script, **options)
+
+
+def sighting_scene(*, rumour: bool, **options: Any) -> Staged:
+    """A traitor stands in the bright Great Hall with one of the Faithful all
+    through free time, then tells the table that the Faithful was in the
+    Library then. With ``rumour``, the traitor first starts that very rumour as
+    the table gathers. ``recent_limit`` is short by default, so the sighting
+    has left the traitor's prompt by the time it speaks."""
+    options.setdefault("recent_limit", 8)
+    sentence = "{} was in the Library during free time on day 1."
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitor, faithful = sides(game)
+        subject, listener = faithful[0], faithful[1]
+        me, kind, world = observation.viewer_id, observation.request.kind, game.world
+        if me == traitor and kind == "plan" and world.phase == "round_table":
+            if rumour and _did(game, traitor, "whisper", tool="rumor") is None:
+                return _plan(
+                    Rumor(
+                        to=listener,
+                        text="People are saying "
+                        + sentence.format(name(game, subject)),
+                        intent=Intent(
+                            target=listener,
+                            effect="belief",
+                            want=subject,
+                            window="next_vote",
+                        ),
+                    )
+                )
+        if me == traitor and kind == "accuse":
+            return Accuse(
+                target=subject,
+                text=sentence.format(name(game, subject)),
+                diary="That's how I remember it.",
+            )
+        return None
+
+    return stage(script, **options)
+
+
 def rumour_scene(**options: Any) -> Staged:
     """A traitor starts a rumour that one of the Faithful spent free time in the
     Library; it is relayed three times, and the last to hear it tells the
@@ -623,17 +740,20 @@ __all__ = [
     "evasive_scene",
     "forged_note_scene",
     "gaslight_scene",
+    "gaslighter_scene",
     "lie_scene",
     "misreported",
     "of_type",
     "pause_at",
     "plant_record",
+    "poisoner_scene",
     "recruiting",
     "referee",
     "rewrite_record",
     "rumour_scene",
     "run_until",
     "sides",
+    "sighting_scene",
     "stage",
     "tally_scene",
     "tampered_log_scene",

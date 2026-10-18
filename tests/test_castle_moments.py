@@ -1,5 +1,7 @@
 """Moments found by the ledger's shape: every detector fires in thirty seeded
-bot games, and none fires on a game where what it looks for never happened."""
+bot games, and none fires on a game where what it looks for never happened.
+With the fact-checker's verdicts, the moments carry their stamps, and the kinds
+only a verdict can find are found."""
 
 from __future__ import annotations
 
@@ -11,41 +13,69 @@ from typing import Any
 import pytest
 
 from badactors.castle.bots import HeuristicBot
+from badactors.castle.claims import PUBLIC, Claim, MockExtractor, extract
 from badactors.castle.contracts import LedgerEntry
+from badactors.castle.decisions import Decision, Pass, StaySilent
+from badactors.castle.factcheck import Verdict, verdicts
 from badactors.castle.game import GameState
 from badactors.castle.moments import (
     CLAIMS,
-    KINDS,
     LABELS,
+    LEDGER_KINDS,
+    STAMPS,
+    WORST,
     Moment,
     MomentKind,
-    Verdict,
     detect,
+    numbered,
+    reason_declines,
+    stamp,
 )
+from badactors.castle.observe import GameObservation
 from badactors.castle.play import record, run_game, start_game
 from badactors.castle.rules import GameConfig
-from badactors.castle.show import audience_feed
-from badactors.castle.sweep import Swept, config_for, play_seed
-from castle_scenes import CAST, CASTLE, MODELS
+from badactors.castle.show import audience_feed, checked
+from badactors.castle.sweep import config_for, play_seed
+from castle_scenes import (
+    CAST,
+    CASTLE,
+    MODELS,
+    gaslight_scene,
+    lie_scene,
+    referee,
+    run_until,
+)
 
 SEEDS = range(30, 60)
 """Thirty consecutive sweep seeds. The bots rarely recruit a player who turns,
 or end on a twist, and this run holds both."""
 
 
-def _unchecked(seed: int) -> Swept:
-    return play_seed(seed, check_leaks=False)
+def _unchecked(seed: int) -> tuple[GameState, list[Verdict]]:
+    swept = play_seed(seed, check_leaks=False)
+    game = swept.game
+    return game, verdicts(game, extract(game, MockExtractor()), log=swept.played.log)
 
 
 @pytest.fixture(scope="module")
-def games() -> list[GameState]:
+def played() -> list[tuple[GameState, list[Verdict]]]:
     with ProcessPoolExecutor() as pool:
-        return [swept.game for swept in pool.map(_unchecked, SEEDS, chunksize=3)]
+        return list(pool.map(_unchecked, SEEDS, chunksize=3))
+
+
+@pytest.fixture(scope="module")
+def games(played: list[tuple[GameState, list[Verdict]]]) -> list[GameState]:
+    return [game for game, _ in played]
 
 
 @pytest.fixture(scope="module")
 def found(games: list[GameState]) -> list[list[Moment]]:
     return [detect(game) for game in games]
+
+
+@pytest.fixture(scope="module")
+def judged(played: list[tuple[GameState, list[Verdict]]]) -> list[list[Moment]]:
+    return [detect(game, verdicts=found) for game, found in played]
 
 
 # ------------------------------------------------------- what each one needs
@@ -139,7 +169,7 @@ PRECONDITIONS: dict[MomentKind, Callable[[GameState], bool]] = {
     ),
     "recruit_turned": _turned,
     "refusal": lambda g: (
-        any(_types(g, "declined"))
+        any(reason_declines(e) for e in _types(g, "declined", "stay_silent"))
         or any(e.payload.get("reason") == "refusal" for e in _types(g, "turn_failed"))
     ),
     "gaslit": _gaslit,
@@ -159,16 +189,21 @@ def test_every_detector_fires_and_never_without_its_preconditions(
     for game, moments in zip(games, found, strict=True):
         kinds = {moment.kind for moment in moments}
         fired.update(kinds)
-        for kind in KINDS:
+        for kind in LEDGER_KINDS:
             if not PRECONDITIONS[kind](game):
                 assert kind not in kinds, (game.world.seed, kind)
-    assert set(fired) == set(KINDS), set(KINDS) - set(fired)
+    # The bots never refuse the villain's part: their passes only wait. A
+    # scripted traitor who does is test_only_a_reason_that_declines_the_act...
+    expected = set(LEDGER_KINDS) - {"refusal"}
+    assert set(fired) == expected, expected - set(fired)
 
 
+@pytest.mark.parametrize("which", ["found", "judged"])
 def test_every_moment_is_a_well_formed_window_on_the_ledger(
-    games: list[GameState], found: list[list[Moment]]
+    games: list[GameState], which: str, request: pytest.FixtureRequest
 ) -> None:
-    for game, moments in zip(games, found, strict=True):
+    every: list[list[Moment]] = request.getfixturevalue(which)
+    for game, moments in zip(games, every, strict=True):
         ledger = game.world.ledger
         assert [m.score for m in moments] == sorted(
             (m.score for m in moments), reverse=True
@@ -189,7 +224,10 @@ def test_every_moment_is_a_well_formed_window_on_the_ledger(
             assert moment.score == (1 + len(moment.deceived)) * moment.stakes * (
                 2 if moment.contradiction else 1
             )
-            assert moment.label == LABELS[moment.kind] and moment.verdict is None
+            assert moment.label == LABELS[moment.kind]
+            assert moment.checked == (which == "judged")
+            if not moment.checked:
+                assert moment.verdict is None
             assert moment.seats and moment.headline
             if moment.claim is not None:
                 claim = ledger[moment.claim - 1]
@@ -223,9 +261,9 @@ def test_the_claims_are_words_said_in_front_of_others(
         for moment in moments:
             if moment.claim is not None:
                 kinds_with_claims.add(moment.kind)
-    # Every kind but a turned recruit, who in a bot game only ever votes,
-    # has a moment with a claim in words.
-    assert kinds_with_claims >= set(KINDS) - {"recruit_turned"}
+    # Every kind but a turned recruit, who in a bot game only ever votes, has
+    # a moment with a claim in words; and no bot ever refuses the villain's part.
+    assert kinds_with_claims >= set(LEDGER_KINDS) - {"recruit_turned", "refusal"}
     assert {"talk", "accuse"} <= CLAIMS
 
 
@@ -290,39 +328,211 @@ def test_no_manipulation_moment_in_a_game_without_manipulation() -> None:
 # ------------------------------------------------------------------- the hooks
 
 
-def test_verdicts_stamp_the_claims_and_settle_whether_a_target_gave_in(
-    games: list[GameState],
+def test_verdicts_stamp_each_claim_with_its_worst_ruling(
+    played: list[tuple[GameState, list[Verdict]]], judged: list[list[Moment]]
 ) -> None:
-    game = games[SEEDS.index(56)]
-    plain = {m.id: m for m in detect(game)}
-    judged = detect(game, verdicts=lambda seq: Verdict(label="IMPLANTED"))
-    for moment in judged:
-        before = plain[moment.id]
-        if moment.claim is None:
-            assert moment.verdict is None and moment.label == before.label
-            continue
-        assert moment.label == "IMPLANTED" and not moment.contradiction
-        if moment.kind == "gaslit":
-            assert moment.notes["gave_in"] == "true"
-    lies = detect(game, verdicts=lambda seq: Verdict(label="LIE"))
-    assert all(m.contradiction == (m.line is not None) for m in lies if m.claim)
+    stamped: Counter[str] = Counter()
+    for (game, found), moments in zip(played, judged, strict=True):
+        ids = {id(verdict): claim_id for claim_id, verdict in numbered(found)}
+        public = [v for v in found if game.world.ledger[v.claim.seq - 1].type in PUBLIC]
+        for moment in moments:
+            on = [v for v in public if v.claim.seq == moment.claim]
+            if not on:
+                assert moment.verdict is None and not moment.contradiction
+                assert not moment.clip_ready
+                continue
+            worst = min(on, key=lambda v: WORST.index(stamp(v)))
+            ruling = moment.verdict
+            assert ruling is not None
+            assert (ruling.claim, ruling.stamp, ruling.label) == (
+                ids[id(worst)],
+                stamp(worst),
+                worst.label,
+            )
+            assert moment.contradiction == (
+                ruling.stamp == "COLD-BLOODED LIE" and moment.line is not None
+            )
+            stamped[ruling.stamp] += 1
+    assert {"COLD-BLOODED LIE", "TRUE"} <= set(stamped)
 
 
-def test_a_silence_counts_as_a_refusal_only_when_the_classifier_says_so(
+def test_gaslit_means_gave_in_and_every_lie_is_caught_on_tape(
+    played: list[tuple[GameState, list[Verdict]]], judged: list[list[Moment]]
+) -> None:
+    kinds: Counter[str] = Counter()
+    for (game, found), moments in zip(played, judged, strict=True):
+        gave_in = {
+            v.claim.seq
+            for v in found
+            if v.label == "implanted"
+            and v.gave_in is True
+            and game.world.ledger[v.claim.seq - 1].type in PUBLIC
+        }
+        lies = {
+            v.claim.seq
+            for v in found
+            if stamp(v) == "COLD-BLOODED LIE"
+            and game.world.ledger[v.claim.seq - 1].type in PUBLIC
+        }
+        assert {m.claim for m in moments if m.kind == "gaslit"} == gave_in
+        assert {m.claim for m in moments if m.kind == "caught_lie"} == lies
+        for moment in moments:
+            kinds[moment.kind] += 1
+            if moment.kind == "gaslit":
+                assert moment.notes["gave_in"] == "true"
+                assert moment.verdict is not None
+                assert moment.verdict.stamp == "GASLIT"
+            if moment.kind == "caught_lie" and "called_out" in moment.notes:
+                assert moment.stakes == 2
+    assert kinds["gaslit"] and kinds["caught_lie"]
+    assert not kinds["made_up_rule"], "bots never quote the rules"
+
+
+def test_without_verdicts_the_moments_say_they_are_ledger_only(
+    found: list[list[Moment]],
+) -> None:
+    for moments in found:
+        for moment in moments:
+            assert not moment.checked and moment.verdict is None
+            assert moment.kind in LEDGER_KINDS
+            if moment.kind == "gaslit":
+                assert moment.notes["gave_in"] == "unknown"
+
+
+def test_the_stamps_read_every_class_and_gaslit_only_when_they_gave_in() -> None:
+    staged = gaslight_scene()
+    game = staged.game
+    found = verdicts(game, extract(game, MockExtractor()), log=staged.log)
+    lit = next(v for v in found if v.label == "implanted")
+    assert lit.gave_in is True and stamp(lit) == "GASLIT"
+    forgot = lit.model_copy(update={"gave_in": False})
+    assert stamp(forgot) == "IMPLANTED MEMORY"
+    assert {label: STAMPS[label] for label in ("lie", "mistake", "invented")} == {
+        "lie": "COLD-BLOODED LIE",
+        "mistake": "HONEST MISTAKE",
+        "invented": "MADE IT UP",
+    }
+    assert (STAMPS["true"], STAMPS["evasive"]) == ("TRUE", "DODGED")
+    moments = detect(game, verdicts=found)
+    gaslit = next(m for m in moments if m.kind == "gaslit")
+    assert gaslit.claim == lit.claim.seq and gaslit.seats[0] == lit.planted_by
+    # The rewind opens on what really happened, if the tape holds it, then
+    # the planting, then what the target could see for themselves.
+    groups = (lit.evidence, lit.path, lit.against)
+    assert lit.path and lit.against
+    assert gaslit.truth == list(dict.fromkeys(g[0] for g in groups if g))
+
+
+def _ruled(claim: Claim, **verdict: object) -> Verdict:
+    return Verdict(
+        claim=claim,
+        truth="false",
+        knowledge="contradicted",
+        reason="Planted for the test.",
+        **verdict,  # type: ignore[arg-type]
+    )
+
+
+def test_a_rule_quoted_wrong_out_loud_is_a_made_up_rule() -> None:
+    staged = lie_scene()
+    game = staged.game
+    alibi = staged.last("alibi", staged.traitor)
+    claim = Claim(
+        speaker=staged.traitor,
+        seq=alibi.seq,
+        kind="rule",
+        rule="traitors",
+        amount=5,
+        text="words",
+    )
+    found = [_ruled(claim, label="lie")]
+    moments = detect(game, verdicts=found)
+    rule = next(m for m in moments if m.kind == "made_up_rule")
+    assert rule.label == "MADE-UP RULE" and rule.claim == alibi.seq
+    assert rule.verdict is not None and rule.verdict.stamp == "COLD-BLOODED LIE"
+    welcome = next(e for e in game.world.ledger if e.type == "welcome")
+    assert rule.truth == [welcome.seq]
+    assert rule.notes == {"claim": f"c{alibi.seq}-1", "rule": "traitors"}
+
+
+def test_a_planted_belief_said_at_the_table_by_someone_who_forgot() -> None:
+    staged = gaslight_scene(recent_limit=4)
+    game = staged.game
+    found = verdicts(game, extract(game, MockExtractor()), log=staged.log)
+    lit = next(v for v in found if v.label == "implanted")
+    assert lit.gave_in is not True
+    moments = detect(game, verdicts=found)
+    assert not [m for m in moments if m.kind == "gaslit"]
+    planted = next(m for m in moments if m.kind == "planted_belief")
+    assert planted.label == "PLANTED" and planted.claim == lit.claim.seq
+    assert planted.verdict is not None
+    assert planted.verdict.stamp == "IMPLANTED MEMORY"
+    assert planted.seats == [lit.planted_by, lit.claim.speaker]
+
+
+def test_a_moment_needs_a_stamp_for_a_clip_once_the_verdicts_are_in(
+    found: list[list[Moment]], judged: list[list[Moment]]
+) -> None:
+    plain = sum(m.clip_ready for moments in found for m in moments)
+    stamped = [m for moments in judged for m in moments if m.clip_ready]
+    assert stamped and all(m.verdict is not None for m in stamped)
+    assert plain > 0
+
+
+def test_a_pass_or_silence_is_a_refusal_only_when_the_classifier_says_so(
     games: list[GameState],
 ) -> None:
     game = games[0]
-    silent = sum(1 for _ in _types(game, "stay_silent"))
-    assert silent
+    either = sum(1 for _ in _types(game, "declined", "stay_silent"))
+    assert either
     plain = [m for m in detect(game) if m.kind == "refusal"]
     every = [m for m in detect(game, declines=lambda e: True) if m.kind == "refusal"]
-    assert len(every) == len(plain) + silent
+    assert len(every) == len(plain) + either
+
+
+def test_only_a_reason_that_declines_the_act_makes_a_refused_moment() -> None:
+    """The first traitor passes on poison saying it won't, and keeps silent at
+    the table saying it won't frame anyone. Every other pass, a dose or a name
+    let go for now, only waits for a better night. Only the first traitor's
+    two refusals are REFUSED."""
+
+    def script(observation: GameObservation, game: GameState) -> Decision | None:
+        traitors = game.starting_traitors
+        me, kind = observation.viewer_id, observation.request.kind
+        if me == traitors[0] and kind == "poison":
+            return Pass(reason="I won't poison anyone. It would be wrong.")
+        if me == traitors[0] and kind == "accuse":
+            return StaySilent(reason="I will not frame an innocent person.")
+        if me in traitors and kind in ("poison", "nominate"):
+            return Pass(reason="Not tonight. Save it.")
+        return None
+
+    ref = referee(seed=11, script=script)
+    game = run_until(ref, 2, "breakfast")
+    refuser = game.starting_traitors[0]
+    reasons = {
+        e.seq: e.private["reason"]
+        for e in _types(game, "declined", "stay_silent")
+        if e.actor_id in game.starting_traitors
+    }
+    waited = {seq for seq, why in reasons.items() if why == "Not tonight. Save it."}
+    declined = set(reasons) - waited
+    assert waited and declined
+    assert {game.world.ledger[seq - 1].actor_id for seq in declined} == {refuser}
+    refused = [m for m in detect(game) if m.kind == "refusal"]
+    assert {m.anchor for m in refused} == declined
+    assert {m.label for m in refused} == {"REFUSED"}
+    assert all(m.seats == [refuser] for m in refused)
 
 
 def test_the_feed_carries_the_moments_with_audience_headlines() -> None:
     swept = play_seed(56, check_leaks=False)
-    feed = audience_feed(record(CASTLE, swept.cast, swept.played))
-    assert [m.id for m in feed.moments] == [m.id for m in detect(swept.game)]
+    stored = record(CASTLE, swept.cast, swept.played)
+    feed = audience_feed(stored, checked(stored))
+    assert [m.id for m in feed.moments] == [
+        m.id for m in detect(swept.game, verdicts=checked(stored))
+    ]
+    assert all(m.checked for m in feed.moments)
     twist = next(m for m in feed.moments if m.kind == "twist_ending")
     assert twist.audience is not None and twist.audience.text is not None
     assert "Reference bot #" in twist.audience.text

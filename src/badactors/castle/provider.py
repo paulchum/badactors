@@ -80,7 +80,8 @@ trouble."""
 @dataclass(frozen=True)
 class CallRef:
     """Which question a call answers: the seat's ``ordinal``-th question of
-    the game, at its ``attempt`` (1, or 2 for the corrective retry)."""
+    the game, at its numbered HTTP ``attempt``. Configuration fallbacks and
+    the corrective retry each receive a new attempt number."""
 
     game_id: str
     seat: str
@@ -106,6 +107,7 @@ class ProviderCall:
     source: object | None = field(default=None, compare=False, repr=False)
     """The observation the messages were rendered from. Only an in-process mock
     reads it; nothing sends it anywhere."""
+    reasoning: str = "default"
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,11 @@ class ParameterRejected(TransportError):
     Fails the turn, and moves the model down a mode."""
 
 
+class ReasoningRequired(TransportError):
+    """The endpoint requires reasoning. The harness may retry with a new
+    reservation under ``least``; the provider never retries it itself."""
+
+
 class OperatorError(ProviderError):
     """401, 402 or 403: the run's key or credit, not the model. Stops the run."""
 
@@ -173,8 +180,22 @@ def answer_format(mode: Mode, schema: Schema) -> str:
     )
 
 
+REASONING: dict[str, dict[str, Any]] = {
+    "off": {"enabled": False},
+    "minimal": {"effort": "minimal"},
+    "low": {"effort": "low"},
+    "medium": {"effort": "medium"},
+    "high": {"effort": "high"},
+}
+"""The wire values chosen by the harness. ``default`` sends no setting."""
+
+MANDATORY = "reasoning is mandatory"
+"""How OpenRouter says a model cannot have its reasoning switched off."""
+
+
 def request_body(call: ProviderCall) -> dict[str, Any]:
-    """The chat-completions body for one call. Only what the mode needs."""
+    """The chat-completions body for one call. Only what the mode needs, plus
+    the run's reasoning setting when one was chosen."""
     model = call.ref.model
     breakpoints = model.casefold().startswith(CACHE_BREAKPOINTS)
     messages: list[dict[str, Any]] = []
@@ -219,6 +240,8 @@ def request_body(call: ProviderCall) -> dict[str, Any]:
         body["response_format"] = {"type": "json_object"}
     if call.mode != "prompt":
         body["provider"] = {"require_parameters": True}
+    if call.reasoning != "default":
+        body["reasoning"] = dict(REASONING[call.reasoning])
     return body
 
 
@@ -271,6 +294,10 @@ def _status_error(status: int, body: object) -> ProviderError:
     text = json.dumps(body)[:300] if not isinstance(body, str) else body[:300]
     if status in (401, 402, 403):
         return OperatorError(f"OpenRouter {status}: {text}", status=status, body=body)
+    if status == 400 and MANDATORY in text.casefold():
+        return ReasoningRequired(
+            f"OpenRouter {status}: {text}", status=status, body=body
+        )
     if 400 <= status < 500 and status != 429:
         folded = text.casefold()
         if any(word in folded for word in PARAMETER_WORDS):
@@ -306,7 +333,9 @@ class OpenRouterProvider:
             headers["Authorization"] = f"Bearer {self._api_key}"
         try:
             response = await self._client.post(
-                self._url, json=request_body(call), headers=headers
+                self._url,
+                json=request_body(call),
+                headers=headers,
             )
         except httpx.TimeoutException as exc:
             raise TransportError(f"timeout: {type(exc).__name__}") from exc
@@ -578,6 +607,7 @@ __all__ = [
     "Provider",
     "ProviderCall",
     "ProviderError",
+    "ReasoningRequired",
     "RecordingProvider",
     "Reply",
     "Routed",

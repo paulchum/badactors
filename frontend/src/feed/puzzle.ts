@@ -1,10 +1,11 @@
-// "Who is lying?": the landing game. A puzzle is one round table where three
+// WHO'S LYING?: the landing game. A puzzle is one round table where three
 // players accuse each other and exactly one of them is a traitor accusing one
-// of the Faithful, a claim it knew was false. The roles say who lied (as
-// castle/moments.py reads a knowing falsehood until the fact-checker rules);
-// the votes say how many at the table caught it.
+// of the Faithful. In a fact-checked game that accusation must be stamped
+// COLD-BLOODED LIE and the other two must not be; in one that wasn't, the roles
+// alone say who lied. The votes say how many at the table caught it.
 
 import type { Game } from "./load";
+import { worst } from "./stamps";
 import { type Table, tables } from "./story";
 import type { FeedEvent, GameSummary } from "./types";
 
@@ -17,6 +18,8 @@ export interface Suspect {
   /** Their vote at this table, if they cast one. */
   vote: string | null;
   traitor: boolean;
+  /** The claim that stamps their words, if the game was fact-checked. */
+  claim: string | null;
 }
 
 export interface Puzzle {
@@ -24,6 +27,8 @@ export interface Puzzle {
   day: number;
   table: Table;
   liar: string;
+  /** The lie's claim, if the game was fact-checked. */
+  claim: string | null;
   /** The suspects in the order they spoke. */
   suspects: Suspect[];
   /** The entries played as captions, in order. */
@@ -80,8 +85,14 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
       .find((e) => e !== undefined);
   const accusations = window.filter((e) => e.type === "accuse" && e.actor && e.quote);
   const faithful = (pid: string, seq: number) => !game.traitorAt(pid, seq);
+  const checked = game.feed.game.fact_checked;
+  const stamped = (e: FeedEvent) => worst(game.claimsAt(e.seq));
   const lies = accusations.filter(
-    (e) => game.traitorAt(e.actor!, e.seq) && e.payload.target && faithful(e.payload.target, e.seq),
+    (e) =>
+      game.traitorAt(e.actor!, e.seq) &&
+      e.payload.target &&
+      faithful(e.payload.target, e.seq) &&
+      (!checked || stamped(e)?.stamp === "COLD-BLOODED LIE"),
   );
   const votes = new Map(table.votes.map((vote) => [vote.voter, vote.target]));
   const votedAt = (pid: string) => window.find((e) => e.type === "vote" && e.actor === pid);
@@ -100,6 +111,7 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
       const pid = event.actor!;
       if (pid === liar || others.some((o) => o.actor === pid) || !faithful(pid, event.seq)) return;
       if ([lie, ...others].some((o) => o.quote === event.quote)) return;
+      if (checked && stamped(event)?.stamp === "COLD-BLOODED LIE") return;
       others.push(event);
     };
     take(said(accused, ["accuse", "defend"]));
@@ -116,6 +128,7 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
         line: hasLine(e) ? e.seq : hasLine(ballot) ? ballot!.seq : null,
         vote: votes.get(pid) ?? null,
         traitor: pid === liar,
+        claim: stamped(e)?.id ?? null,
       };
     });
     const denial = said(liar, ["defend"]);
@@ -141,6 +154,7 @@ function puzzleAt(game: Game, table: Table): Puzzle | null {
       day: table.day,
       table,
       liar,
+      claim: stamped(lie)?.id ?? null,
       suspects,
       captions,
       truth,
@@ -223,9 +237,9 @@ export function voteSquare(puzzle: Puzzle, voter: string): string {
 export function shareGrid(puzzle: Puzzle, result: Result, number: number, botGame: boolean): string {
   const table = puzzle.voters.map((voter) => voteSquare(puzzle, voter)).join("");
   return [
-    `Bad Actors · Who is lying? #${number}`,
+    `Bad Actors · WHO'S LYING? #${number}`,
     `${result.correct ? "🟩" : "🟥"} me: ${result.correct ? "caught the liar" : "fooled"}`,
     `${table} the table: ${result.caught} of ${result.of} caught it`,
-    ...(botGame ? ["Played by reference bots"] : []),
+    ...(botGame ? ["This one's bots"] : []),
   ].join("\n");
 }

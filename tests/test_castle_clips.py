@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -25,9 +26,10 @@ from badactors.castle.clips import (
     clip_ready,
     highlights,
     main,
+    receipt_card,
 )
 from badactors.castle.play import record
-from badactors.castle.show import Feed, audience_feed, load_feed, save_feed
+from badactors.castle.show import Feed, audience_feed, checked, load_feed, save_feed
 from badactors.castle.sweep import play_seed
 from castle_scenes import CAST, CASTLE
 
@@ -37,7 +39,14 @@ SEEDS = (34, 41, 44, 56)
 
 def _feed(seed: int) -> Feed:
     swept = play_seed(seed, check_leaks=False)
-    return audience_feed(record(CASTLE, swept.cast, swept.played))
+    stored = record(CASTLE, swept.cast, swept.played)
+    return audience_feed(stored, checked(stored))
+
+
+AUDIENCE_BANNED = re.compile(
+    r"\b(?:ledger|seq|entry|entries|scoped?|verdicts?)\b", re.I
+)
+"""Builders' words, which nothing the audience reads may use."""
 
 
 @pytest.fixture(scope="module")
@@ -168,8 +177,55 @@ def test_every_clip_ends_with_its_receipt(props: list[tuple[Feed, ClipProps]]) -
             moment.first_seq,
             moment.last_seq,
         )
-        assert clip.stamp.label == moment.label and not clip.stamp.verdict
-        assert clip.stamp.note == LEDGER_ONLY
+        ruling = moment.verdict
+        assert ruling is not None
+        claim = next(c for c in feed.claims if c.id == ruling.claim)
+        assert receipt.claim == claim.id and clip.stamp.verdict
+        assert (clip.stamp.label, clip.stamp.kind) == (claim.stamp, claim.label)
+        assert clip.stamp.moment == moment.label
+        named = claim.audience.why if claim.audience else None
+        assert clip.stamp.note == (named or claim.why)
+
+
+def test_the_rewind_shows_the_proof_in_plain_words(
+    props: list[tuple[Feed, ClipProps]],
+) -> None:
+    proved = 0
+    for _, clip in props:
+        assert len(clip.truth.proof) <= clips.PROOF_LIMIT
+        proved += bool(clip.truth.proof)
+        for proof in clip.truth.proof:
+            assert proof.text and not AUDIENCE_BANNED.search(proof.text)
+    assert proved
+
+
+def test_nothing_the_audience_reads_on_a_clip_uses_a_builders_word(
+    props: list[tuple[Feed, ClipProps]],
+) -> None:
+    for _, clip in props:
+        shown = [
+            clip.banner or "",
+            clip.claim.said,
+            clip.truth.text,
+            clip.line.kind,
+            clip.stamp.label,
+            clip.stamp.note,
+            clip.stamp.headline,
+        ]
+        for text in shown:
+            assert not AUDIENCE_BANNED.search(text), text
+
+
+def test_a_feed_that_was_not_fact_checked_stamps_the_moment_and_says_so(
+    feeds: list[Feed],
+) -> None:
+    swept = play_seed(SEEDS[0], check_leaks=False)
+    plain = audience_feed(record(CASTLE, swept.cast, swept.played))
+    moment = clip_ready(plain)[0]
+    clip = clip_props(plain, moment.id)
+    assert clip.stamp.label == moment.label and not clip.stamp.verdict
+    assert clip.stamp.note == LEDGER_ONLY and clip.receipt.claim is None
+    assert clip.truth.proof == []
 
 
 def test_a_moment_without_a_fitting_line_makes_no_clip(feeds: list[Feed]) -> None:
@@ -226,6 +282,7 @@ def test_the_composition_reads_the_props_python_writes() -> None:
         clips.Figure,
         clips.Witnessed,
         clips.LineBeat,
+        clips.Proof,
         clips.Stamp,
         clips.Receipt,
         clips.Speaker,
@@ -233,6 +290,29 @@ def test_the_composition_reads_the_props_python_writes() -> None:
     ):
         for field in model.model_fields:
             assert re.search(rf"\b{field}\??:", source), (model.__name__, field)
+
+
+# ----------------------------------------------------------------- share cards
+
+
+def test_a_share_card_holds_the_words_the_stamp_and_the_receipt(
+    feeds: list[Feed],
+) -> None:
+    feed = feeds[SEEDS.index(56)]
+    for claim in feed.claims:
+        card = receipt_card(feed, claim, names="character")
+        root = ElementTree.fromstring(card)
+        shown = " ".join(root.itertext())
+        assert root.get("width") == "1200" and root.get("height") == "630"
+        assert claim.stamp in shown and REFERENCE_BANNER in shown
+        assert (
+            f"seed 56 · day {claim.day}, tick {claim.tick} · claim {claim.id}" in shown
+        )
+        assert not AUDIENCE_BANNED.search(shown)
+    tricky = feed.claims[0].model_copy(update={"why": "<b> & “quotes”"})
+    assert "&lt;b&gt; &amp; “quotes”" in receipt_card(feed, tricky, names="character")
+    named = receipt_card(feed, feed.claims[0], names="model")
+    assert "Reference bot #" in named
 
 
 # ------------------------------------------------------------------ highlights
@@ -246,6 +326,11 @@ def test_highlights_call_out_the_twist_then_the_best_of_the_rest(
     lines = shown.splitlines()
     assert len(lines) <= HIGHLIGHT_LINES
     assert lines[0] == REFERENCE_BANNER
+    assert lines[1] == "EPISODE 56 · “End it now, while I'm still here.”"
+    assert lines[3] == "The killers win on day 4."
+    assert not AUDIENCE_BANNED.search(shown)
+    stamps = {claim.stamp for claim in feed.claims}
+    assert any(line.strip().split(". ")[0] in stamps for line in lines)
     twist = lines.index(next(line for line in lines if line.startswith("THE TWIST")))
     assert twist < lines.index("THE BEST MOMENTS")
     assert "still among them" in "\n".join(lines[twist : twist + 3])

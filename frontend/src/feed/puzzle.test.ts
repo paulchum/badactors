@@ -95,10 +95,10 @@ describe("puzzles", () => {
     const text = shareGrid(puzzle, score(puzzle, "bo"), 3, true);
     expect(text).toBe(
       [
-        "Bad Actors · Who is lying? #3",
+        "Bad Actors · WHO'S LYING? #3",
         "🟩 me: caught the liar",
         "🟩🟩🟥🟥 the table: 2 of 4 caught it",
-        "Played by reference bots",
+        "This one's bots",
       ].join("\n"),
     );
     for (const seat of game.feed.seats) expect(text).not.toContain(seat.character);
@@ -140,6 +140,11 @@ describe("the daily puzzle", () => {
       const puzzles = puzzlesFrom(game);
       expect(puzzles.length, summary.id).toBeGreaterThan(0);
       for (const puzzle of puzzles) {
+        // The fact-checker stamped the lie, and only the lie.
+        expect(game.claim(puzzle.claim)?.stamp).toBe("COLD-BLOODED LIE");
+        for (const s of puzzle.suspects.filter((x) => !x.traitor)) {
+          expect(game.claim(s.claim)?.stamp ?? "none").not.toBe("COLD-BLOODED LIE");
+        }
         expect(puzzle.suspects).toHaveLength(3);
         expect(puzzle.suspects.filter((s) => s.traitor)).toHaveLength(1);
         expect(game.traitorAt(puzzle.liar, puzzle.suspects.find((s) => s.traitor)!.words)).toBe(true);

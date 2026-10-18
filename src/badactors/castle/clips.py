@@ -8,12 +8,14 @@ lays out the beats SPEC §8 puts in order, one at a time:
 2. **the rewind** to what the ledger shows, in the room where it happened, drawn
    at that room's light: bright light names everyone there, dim light shows
    only their garments, the dark only shapes; beside it, what the witnesses
-   actually wrote down;
+   actually wrote down, and the entries that prove the verdict, in plain words;
 3. **the line**: the speaker's own private line, verbatim;
-4. **the stamp**: the fact-checker's verdict once there is one, until then the
-   moment's ledger-only label, which says so;
-5. **the receipt**: castle, game, seed and tick range, so every clip can be
-   checked against its game.
+4. **the stamp**: the claim's verdict as the show stamps it (COLD-BLOODED LIE,
+   GASLIT), in its ink (red when damning, amber, green, grey), with the
+   fact-checker's class in the data; a feed that wasn't fact-checked stamps the
+   moment's label instead, and says so;
+5. **the receipt**: castle, game, seed, tick range and claim, so every clip can
+   be checked against its game.
 
 Seats are named as audience media names them, by model, unless asked for
 characters; a seat a bot played is a "Reference bot", and a game no model played
@@ -36,6 +38,7 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
+from xml.sax.saxutils import escape
 
 from pydantic import Field
 
@@ -47,9 +50,10 @@ from badactors.castle.contracts import (
     Lighting,
 )
 from badactors.castle.episode import REFERENCE_BANNER
-from badactors.castle.moments import LineField
+from badactors.castle.moments import TONES, LineField, Tone, title_line
 from badactors.castle.show import (
     Feed,
+    FeedClaim,
     FeedEvent,
     FeedMoment,
     FeedSeat,
@@ -62,8 +66,19 @@ FPS = 30
 WIDTH = 1080
 HEIGHT = 1920
 
-LEDGER_ONLY = "What the ledger shows. Not yet fact-checked."
-FACT_CHECKED = "The fact-checker's verdict."
+LEDGER_ONLY = "Not fact-checked. This is just what the tape shows."
+PALETTE: dict[Tone, str] = {
+    "red": "#e0343c",
+    "amber": "#f2b134",
+    "green": "#4cc38a",
+    "grey": "#a59d90",
+}
+"""The ink for each tone of stamp, on the share cards and in the video."""
+PROOF_LIMIT = 3
+_ROUTINE = frozenset(
+    {"plan_formed", "plan_cut", "replan_capped", "wait", "phase_opened"}
+)
+"""Entries too routine to hold up as proof on screen."""
 
 _PHASES: dict[CastlePhase, str] = {
     "breakfast": "breakfast",
@@ -127,6 +142,15 @@ class Witnessed(Contract):
     text: str
 
 
+class Proof(Contract):
+    """One entry the verdict rests on, in plain words."""
+
+    day: int
+    phase: str
+    tick: int
+    text: str
+
+
 class TruthBeat(Contract):
     text: str
     """What the ledger records, as narration."""
@@ -140,6 +164,9 @@ class TruthBeat(Contract):
     figures: list[Figure]
     witnessed: list[Witnessed]
     """What the people there wrote down, light and all."""
+    proof: list[Proof] = Field(default_factory=list)
+    """What the verdict rests on: what really happened, then what the speaker
+    had seen for themselves."""
 
 
 class LineBeat(Contract):
@@ -150,9 +177,19 @@ class LineBeat(Contract):
 
 class Stamp(Contract):
     label: str
+    """The stamp: the claim's verdict as the show calls it, or, unchecked, the
+    moment's label."""
+    colour: str = Field(pattern=r"^#[0-9a-f]{6}$")
+    """The stamp's ink (``moments.TONES``, drawn from ``PALETTE``); a moment's
+    label, unchecked, is printed in red."""
     verdict: bool
-    """Whether a fact-checker gave it, rather than the ledger alone."""
+    """Whether the fact-checker gave it, rather than the ledger alone."""
+    kind: str | None = None
+    """The fact-checker's own class ("lie", "implanted"), for the Method page."""
+    moment: str
+    """What kind of moment it is ("INNOCENT", "GASLIT")."""
     note: str
+    """The verdict in a sentence, or that there was none."""
     headline: str
 
 
@@ -161,6 +198,8 @@ class Receipt(Contract):
     world_id: str
     seed: int
     moment: str
+    claim: str | None = None
+    """The claim's id, as the site's receipt links take it."""
     day: int
     first_tick: int
     last_tick: int
@@ -189,7 +228,7 @@ class ClipProps(Contract):
 
 class NotClipReady(ValueError):
     """The moment lacks a beat a clip needs, most often a private line that
-    fits. Choose another moment."""
+    fits, or a verdict on its claim to stamp. Choose another moment."""
 
 
 # ---------------------------------------------------------------- the props
@@ -200,12 +239,13 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
     moment = next((m for m in feed.moments if m.id == moment_id), None)
     if moment is None:
         raise KeyError(f"The feed has no moment {moment_id!r}.")
-    if moment.claim is None or moment.line is None or not moment.truth:
+    if not moment.clip_ready or moment.claim is None or moment.line is None:
         raise NotClipReady(
             f"Moment {moment_id!r} has no claim in words, no truth to rewind to, "
-            "or no private line in the speaker's own words."
+            "no private line in the speaker's own words, or no stamp."
         )
     view = _View(feed, names)
+    ruled = view.claim(moment)
     claim = view.event(moment.claim)
     truth = view.event(moment.truth[0])
     held = view.event(moment.line.seq)
@@ -231,6 +271,7 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         tick=truth.tick,
         figures=view.figures(truth, room, light),
         witnessed=view.witnessed(truth),
+        proof=view.proof(ruled, shown=truth.seq) if ruled is not None else [],
     )
     line_beat = LineBeat(
         speaker=speaker,
@@ -238,9 +279,12 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         text=view.private(held, moment.line.field),
     )
     stamp = Stamp(
-        label=moment.label,
-        verdict=moment.verdict is not None,
-        note=FACT_CHECKED if moment.verdict is not None else LEDGER_ONLY,
+        label=ruled.stamp if ruled is not None else moment.label,
+        colour=PALETTE[TONES[ruled.stamp] if ruled is not None else "red"],
+        verdict=ruled is not None,
+        kind=ruled.label if ruled is not None else None,
+        moment=moment.label,
+        note=view.why(ruled) if ruled is not None else LEDGER_ONLY,
         headline=view.headline(moment),
     )
     receipt = Receipt(
@@ -248,6 +292,7 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         world_id=feed.game.world_id,
         seed=feed.game.seed,
         moment=moment.id,
+        claim=ruled.id if ruled is not None else None,
         day=moment.day,
         first_tick=moment.first_tick,
         last_tick=moment.last_tick,
@@ -259,7 +304,10 @@ def clip_props(feed: Feed, moment_id: str, *, names: NameStyle = "model") -> Cli
         Beat(name="claim", frames=_reading(claim_beat.words, floor=120)),
         Beat(
             name="rewind",
-            frames=min(330, 150 + 30 * len(truth_beat.witnessed)),
+            frames=min(
+                390,
+                150 + 30 * len(truth_beat.witnessed) + 45 * len(truth_beat.proof),
+            ),
         ),
         Beat(name="line", frames=_reading(line_beat.text, floor=120)),
         Beat(name="stamp", frames=75),
@@ -297,6 +345,7 @@ class _View:
         self.seats = {seat.id: seat for seat in feed.seats}
         self.rooms = {room.id: room for room in feed.rooms}
         self.garments = {t.id: t.name for t in feed.things if t.kind == GARMENT}
+        self.claims = {claim.id: claim for claim in feed.claims}
 
     def event(self, seq: int) -> FeedEvent:
         return self.feed.events[seq - 1]
@@ -334,6 +383,18 @@ class _View:
         if self.by_model and named is not None and field in named.private:
             return named.private[field]
         return event.private[field]
+
+    def claim(self, moment: FeedMoment) -> FeedClaim | None:
+        """The claim a moment's stamp is for, if the fact-checker ruled on it."""
+        if moment.verdict is None:
+            return None
+        return self.claims.get(moment.verdict.claim)
+
+    def why(self, claim: FeedClaim) -> str:
+        named = claim.audience
+        if self.by_model and named is not None and named.why is not None:
+            return named.why
+        return claim.why
 
     def headline(self, moment: FeedMoment) -> str:
         named = moment.audience
@@ -427,6 +488,37 @@ class _View:
                 )
         return out
 
+    def proof(self, claim: FeedClaim, *, shown: int) -> list[Proof]:
+        """The entries a verdict rests on, as narration: what happened first,
+        then what the speaker had seen, then how a planted belief came. The
+        one the rewind already shows is left out."""
+        groups = [
+            [seq for seq in group if self.event(seq).type not in _ROUTINE]
+            for group in (claim.proof, claim.knew, claim.path)
+        ]
+        firsts = [group[0] for group in groups if group]
+        seqs = [
+            seq
+            for seq in dict.fromkeys([*firsts, *groups[0], *groups[1], *groups[2]])
+            if seq != shown
+        ]
+        out: list[Proof] = []
+        for seq in seqs[:PROOF_LIMIT]:
+            event = self.event(seq)
+            quote = textwrap.shorten(self.quote(event), 160, placeholder=" …")
+            text = self.narration(event)
+            if quote:
+                text = f"{text} “{quote}”"
+            out.append(
+                Proof(
+                    day=event.day,
+                    phase=_PHASES[event.phase],
+                    tick=event.tick,
+                    text=text,
+                )
+            )
+        return out
+
     def witnessed(self, event: FeedEvent) -> list[Witnessed]:
         records = [
             record
@@ -456,52 +548,84 @@ def highlights(
     feed: Feed, *, names: NameStyle = "character", lines: int = HIGHLIGHT_LINES
 ) -> str:
     """A game's best moments for a terminal, in about ``lines`` lines: the
-    twist ending called out first, then the rest by rank."""
+    episode's title, the twist ending called out first, then the rest by rank,
+    each claim with its stamp."""
     view = _View(feed, names)
     game = feed.game
     out: list[str] = []
     if game.reference_bots:
         out.append(REFERENCE_BANNER)
-    out.append(f"{game.castle.upper()} · seed {game.seed} · {_result(feed)}")
-    traitors = view.names(game.starting_traitors)
-    recruits = [seat.id for seat in feed.seats if seat.recruited_by is not None]
-    joined = f"; recruited: {view.names(recruits)}" if recruits else ""
-    out.append(f"{len(feed.seats)} guests. The traitors: {traitors}{joined}.")
+    out.append(_title(view))
+    out.append(_cast(view))
+    out.append(_result(feed))
     twist = next((m for m in feed.moments if m.kind == "twist_ending"), None)
     if twist is not None:
         out.extend(["", *_block(view, twist, "THE TWIST")])
     out.extend(["", "THE BEST MOMENTS"])
     shown: Counter[str] = Counter()
+    said = {twist.claim} if twist is not None else set()
     footer = 2
     for moment in feed.moments:
-        if moment is twist or shown[moment.kind] >= PER_KIND:
+        if (
+            moment is twist
+            or shown[moment.kind] >= PER_KIND
+            or (moment.claim is not None and moment.claim in said)
+        ):
             continue
         block = _block(view, moment, f"{sum(shown.values()) + 1}. {moment.label}")
         if len(out) + len(block) + footer > lines:
             break
         out.extend(block)
         shown[moment.kind] += 1
+        said.add(moment.claim)
+    checked = "" if game.fact_checked else " None of it is fact-checked yet."
     out.extend(
         [
             "",
-            f"{len(feed.moments)} moments in all. castle-clips makes a clip of "
-            "the first one a private line fits.",
+            f"{len(feed.moments)} moments in all.{checked} castle-clips turns the "
+            "best of them into a clip.",
         ]
     )
     return "\n".join(out)
 
 
+def _title(view: _View) -> str:
+    """ "EPISODE 56 · “End it now, while I'm still here.”", by the diary line
+    on the moment the show leads with."""
+    best = title_line(view.feed.moments)
+    seed = view.feed.game.seed
+    if best is None:
+        return f"EPISODE {seed}"
+    line = best[1]
+    return f"EPISODE {seed} · “{view.private(view.event(line.seq), line.field)}”"
+
+
+def _cast(view: _View) -> str:
+    feed = view.feed
+    starting = feed.game.starting_traitors
+    count = "Two" if len(starting) == 2 else str(len(starting))
+    later = "".join(
+        f" {view.name(seat.id)} joined them on day {view.event(seat.traitor_from).day}."
+        for seat in feed.seats
+        if seat.recruited_by is not None and seat.traitor_from is not None
+    )
+    return (
+        f"{feed.game.castle}. {len(feed.seats)} guests. {count} are killers: "
+        f"{view.names(starting)}.{later}"
+    )
+
+
 def _result(feed: Feed) -> str:
     game = feed.game
     if game.winner is None:
-        return f"unfinished after day {game.days}"
-    side = "the Faithful" if game.winner == "faithful" else "the traitors"
-    return f"{side} win on day {game.days}"
+        return f"Nobody wins. It stopped after day {game.days}."
+    side = "The Faithful" if game.winner == "faithful" else "The killers"
+    return f"{side} win on day {game.days}."
 
 
 def _block(view: _View, moment: FeedMoment, title: str) -> list[str]:
-    """One moment: its title and when, its headline, and its claim and private
-    line when it has them."""
+    """One moment: its title and when, its headline, and its claim, the claim's
+    stamp and the private line when it has them."""
     indent = " " * 4
     ticks = (
         f"tick {moment.first_tick}"
@@ -519,6 +643,9 @@ def _block(view: _View, moment: FeedMoment, title: str) -> list[str]:
         words = view.private(held, moment.line.field)
         who = view.name(held.actor or "")
         lines.extend(_wrapped(f"⟨{who}, privately: {words}⟩", indent, 2))
+    ruled = view.claim(moment)
+    if ruled is not None:
+        lines.extend(_wrapped(f"{ruled.stamp}. {view.why(ruled)}", indent, 1))
     return lines
 
 
@@ -531,6 +658,69 @@ def _wrapped(text: str, indent: str, most: int) -> list[str]:
         max_lines=most,
         placeholder=" …",
     )
+
+
+# ------------------------------------------------------------- share cards
+
+CARD_WIDTH = 1200
+CARD_HEIGHT = 630
+
+
+def receipt_card(feed: Feed, claim: FeedClaim, *, names: NameStyle) -> str:
+    """A static share card for one claim, as SVG: who said it, the words, the
+    stamp, why, and the receipt line. Bot games say so on the card."""
+    view = _View(feed, names)
+    game = feed.game
+    event = view.event(claim.seq)
+    quote = view.quote(event) or claim.said
+    lines = textwrap.wrap(f"“{quote}”", width=46, max_lines=3, placeholder=" …”")
+    why = textwrap.wrap(view.why(claim), width=70, max_lines=2, placeholder=" …")
+    colour = PALETTE[TONES[claim.stamp]]
+    size = 60 if len(claim.stamp) <= 10 else 44
+    receipt = (
+        f"{game.castle} · seed {game.seed} · day {claim.day}, tick {claim.tick} · "
+        f"claim {claim.id}"
+    )
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{CARD_WIDTH}" '
+        f'height="{CARD_HEIGHT}" viewBox="0 0 {CARD_WIDTH} {CARD_HEIGHT}">',
+        f'<rect width="{CARD_WIDTH}" height="{CARD_HEIGHT}" fill="#0b0d10"/>',
+        '<g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">',
+        '<text x="60" y="80" fill="#e0343c" font-size="30" font-weight="900" '
+        'letter-spacing="6">BAD ACTORS</text>',
+    ]
+    if game.reference_bots:
+        out.append(
+            '<text x="1140" y="80" text-anchor="end" fill="#e8c547" font-size="22" '
+            f'font-weight="700">{escape(REFERENCE_BANNER)}</text>'
+        )
+    out.append(
+        f'<text x="60" y="140" fill="#f4ede0" font-size="34" font-weight="800">'
+        f"{escape(view.name(claim.speaker))}</text>"
+    )
+    for index, line in enumerate(lines):
+        out.append(
+            f'<text x="60" y="{205 + index * 52}" fill="#f4ede0" font-size="40" '
+            f'font-family="Georgia, Times New Roman, serif">{escape(line)}</text>'
+        )
+    out.append(
+        f'<g transform="translate(360 430) rotate(-4)"><rect x="-300" y="-48" '
+        f'width="600" height="96" rx="14" fill="none" stroke="{colour}" '
+        f'stroke-width="10"/><text x="0" y="{size // 3}" text-anchor="middle" '
+        f'fill="{colour}" font-size="{size}" font-weight="900" letter-spacing="4">'
+        f"{escape(claim.stamp)}</text></g>"
+    )
+    for index, line in enumerate(why):
+        out.append(
+            f'<text x="60" y="{548 + index * 32}" fill="#d8d1c4" font-size="27" '
+            f'font-weight="700">{escape(line)}</text>'
+        )
+    out.append(
+        f'<text x="60" y="614" fill="#a59d90" font-size="20" '
+        f'font-family="Menlo, monospace">{escape(receipt)}</text>'
+    )
+    out.extend(["</g>", "</svg>"])
+    return "\n".join(out) + "\n"
 
 
 # ----------------------------------------------------------------------- CLI
@@ -595,6 +785,8 @@ __all__ = [
     "HEIGHT",
     "HIGHLIGHT_LINES",
     "LEDGER_ONLY",
+    "PALETTE",
+    "PROOF_LIMIT",
     "REFERENCE_BANNER",
     "WIDTH",
     "Beat",
@@ -603,6 +795,7 @@ __all__ = [
     "Figure",
     "LineBeat",
     "NotClipReady",
+    "Proof",
     "Receipt",
     "Speaker",
     "Stamp",
@@ -612,5 +805,6 @@ __all__ = [
     "clip_ready",
     "highlights",
     "main",
+    "receipt_card",
     "write_props",
 ]
