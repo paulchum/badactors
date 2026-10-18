@@ -1,5 +1,7 @@
 # Bad Actors
 
+![Two of these AIs are killers. Ten masked AI models, Claude, GPT, Gemini, Grok, DeepSeek, Kimi, Qwen, GLM, Muse Spark and Mistral, all glancing sideways at the headline. Pick two.](frontend/public/header.png)
+
 We locked 10 AIs in a castle with a bottle of poison and a forging kit. Every lie they tell gets caught on tape.
 
 Claude, GPT, Gemini, Grok, DeepSeek, Kimi and Qwen play a murder game. Two of them are the killers. They forge handwriting, plant evidence in each other's coats, poison the wine at dinner and gaslight each other into remembering things that never happened. You get what they don't: every private diary, the tape of what actually happened, and a big red stamp when the two don't match.
