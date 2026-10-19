@@ -15,6 +15,11 @@ argued with:
   included, in the same words for every request; a second bad answer fails the
   turn as ``empty``, ``unparseable`` or ``invalid``.
 
+The one leniency: a decision sent as a JSON string that holds the whole answer
+is decoded and read as that answer, and the harness log says so
+(``lenient_parse``). A string that does not hold a complete answer is a bad
+answer like any other; nothing is ever repaired or filled in.
+
 Nothing is ever substituted for a failed answer: the character hesitates and
 does nothing, labelled as a failure.
 
@@ -332,10 +337,15 @@ class ModelPlayer:
         if isinstance(value, dict) and ROOT not in value and "kind" in value:
             value = {ROOT: value}
         errors = validate(question.schema, value)
-        if errors:
+        unquoted = _unquoted(value) if errors else None
+        if unquoted is not None and not validate(question.schema, unquoted[0]):
+            value, how = unquoted
+            self.log.write("lenient_parse", ref=_ref(question.ref), mode=mode, how=how)
+        elif errors:
             self.modes.answered(self.model, mode, schema_valid=False)
             raise BadAnswer("; ".join(errors[:3]), "invalid")
-        self.modes.answered(self.model, mode, schema_valid=True)
+        else:
+            self.modes.answered(self.model, mode, schema_valid=True)
         try:
             decision = DECISION.validate_json(json.dumps(value[ROOT]))
         except ValidationError as exc:
@@ -345,6 +355,31 @@ class ModelPlayer:
         except IllegalDecision as exc:
             raise BadAnswer(str(exc), "invalid") from exc
         return decision
+
+
+def _unquoted(value: Any) -> tuple[dict[str, Any], str] | None:
+    """``{"decision": "<JSON>"}`` with the string decoded, when it holds one
+    JSON object, and how it was sent. Some providers hand a model's nested
+    object back as a string, and Qwen's came with the root's own closing brace
+    inside it, after the object; that one brace is allowed, nothing else. The
+    object is the model's own answer, word for word: nothing is added to it or
+    taken from it, and whether it is a complete one is for the schema to say."""
+    if not isinstance(value, dict) or set(value) != {ROOT}:
+        return None
+    inner = value[ROOT]
+    if not isinstance(inner, str):
+        return None
+    try:
+        decoded, end = json.JSONDecoder().raw_decode(inner.strip())
+    except json.JSONDecodeError:
+        return None
+    rest = inner.strip()[end:].strip()
+    if not isinstance(decoded, dict) or rest not in ("", "}"):
+        return None
+    how = f"{ROOT} arrived as a JSON string holding a complete answer"
+    if rest:
+        how += ", with the root's closing brace inside the string"
+    return {ROOT: decoded}, how
 
 
 def _json(text: str) -> tuple[Any, str | None]:

@@ -8,6 +8,7 @@ ledger the bot game with the same seed writes.
 
 from __future__ import annotations
 
+import json
 import random
 from typing import Any
 
@@ -16,9 +17,10 @@ from hypothesis import strategies as st
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.budget import Limits
+from badactors.castle.contract_schema import ROOT
 from badactors.castle.contracts import Plan, Whisper
 from badactors.castle.decisions import Decision, PlanChoice
-from badactors.castle.harness import LiveGame, play_live
+from badactors.castle.harness import LiveGame, _unquoted, play_live
 from badactors.castle.interview import ExitObservation
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.observe import GameObservation
@@ -212,3 +214,18 @@ def test_a_defused_forgery_is_logged_for_the_audience_and_replays() -> None:
     logged = sum(len(d.defused) for d in stored.decisions)
     assert logged == len(defused)
     assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
+
+
+def test_only_a_whole_object_in_a_decision_string_is_unquoted() -> None:
+    whole = {"kind": "plan", "plan": {"goal": "", "steps": []}}
+    text = json.dumps(whole)
+    assert _unquoted({ROOT: text}) == (
+        {ROOT: whole},
+        f"{ROOT} arrived as a JSON string holding a complete answer",
+    )
+    braced = _unquoted({ROOT: text + "}"})
+    assert braced is not None and braced[0] == {ROOT: whole}
+    for refused in (text + "}}", text + " and more", "[1, 2]", "plan", text[:-1]):
+        assert _unquoted({ROOT: refused}) is None
+    assert _unquoted({ROOT: text, "extra": 1}) is None
+    assert _unquoted({ROOT: whole}) is None

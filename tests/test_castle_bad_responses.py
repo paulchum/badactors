@@ -101,6 +101,7 @@ CASES = [
     ("empty", "empty", 2),
     ("malformed", "unparseable", 2),
     ("over_length", "invalid", 2),
+    ("partial_string_decision", "invalid", 2),
     ("refusal", "refusal", 1),
     ("timeout", "transport", 1),
     ("content_filter", "content_filter", 1),
@@ -194,6 +195,37 @@ def test_a_retry_for_an_answer_over_a_cap_quotes_the_cap_and_the_length() -> Non
     ) in retry
     tool = sent[0]["tools"][0]["function"]["parameters"]
     assert tool["properties"]["decision"]["properties"]["diary"]["maxLength"] == 600
+
+
+def test_a_whole_answer_sent_as_a_json_string_is_read_and_logged_as_lenient() -> None:
+    # Qwen 3.8's first answer in the seed-7 game of 2026-10-17, word for word.
+    live, sent = play("string_decision")
+    arguments = fixture("string_decision")["body"]["choices"][0]["message"][
+        "tool_calls"
+    ][0]["function"]["arguments"]
+    sent_as = json.loads(arguments)["decision"]
+    assert sent_as.endswith("}}}")  # the root's own brace, inside the string
+    meant = json.loads(sent_as[:-1])
+    assert len(sent) == 1
+    (first,) = first_question(live)
+    assert first.decision is not None and first.reason is None
+    assert first.decision.model_dump(mode="json") == {
+        **first.decision.model_dump(mode="json"),
+        **meant,
+    }
+    (lenient,) = live.harness.of("lenient_parse")
+    assert lenient["ref"]["seat"] == SEAT and lenient["ref"]["ordinal"] == 0
+    assert "closing brace inside the string" in lenient["how"]
+    assert not live.harness.of("bad_answer")
+
+
+def test_a_partial_answer_in_a_json_string_is_refused_not_completed() -> None:
+    live, sent = play("partial_string_decision")
+    assert len(sent) == 2
+    assert not live.harness.of("lenient_parse")
+    attempts = first_question(live)
+    assert all(entry.decision is None for entry in attempts)
+    assert "expected object, got string" in (attempts[0].error or "")
 
 
 def test_a_402_aborts_the_run_and_charges_no_model() -> None:
