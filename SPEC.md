@@ -173,7 +173,7 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
 - **Failed turns.** A turn fails when no schema-valid action arrives after one corrective retry: a transport error, refusal, empty output, unparseable or invalid output.
   - A provider's content filter, a refusal in the model's own words and a transport error fail the turn at once: they are results, not mistakes to correct. An empty, unparseable or invalid answer gets the one retry, which names the exact error and restates every legal answer, passing and silence included, in the same words for every request. Nothing in it presses for any answer.
   - It's recorded as a visible `TurnFailed` event, which keeps its reason class: `transport`, `content_filter`, `refusal`, `empty`, `unparseable` or `invalid`.
-  - A 401, 402 or 403 is the operator's, not the model's: the run aborts, unrated, and no model is charged with a failure.
+  - A 401, 402 or 403 is the operator's, not the model's: the run aborts, unrated, and no model is charged with a failure. The exception is a 402 naming OpenRouter's `in_flight_budget_exhausted`: the question is sent again after a bounded backoff (2, 4, 8, 16 and 30 s), each send its own budgeted, numbered attempt and receipt, each wait logged as `provider_wait`; a budget still full after the last wait aborts the run.
   - In the world, the character hesitates and does nothing, and it is labeled as a failure everywhere; it's never presented as the model's choice.
   - `stay_silent` (§2) is not a failure.
 - **Channel integrity.**

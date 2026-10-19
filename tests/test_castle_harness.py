@@ -8,23 +8,43 @@ ledger the bot game with the same seed writes.
 
 from __future__ import annotations
 
+import json
 import random
+from dataclasses import replace
 from typing import Any
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from badactors.castle.bots import HeuristicBot
-from badactors.castle.budget import Limits
+from badactors.castle.budget import Limits, OutputLimit
+from badactors.castle.contract_schema import ROOT
 from badactors.castle.contracts import Plan, Whisper
 from badactors.castle.decisions import Decision, PlanChoice
-from badactors.castle.harness import LiveGame, play_live
+from badactors.castle.harness import LiveGame, _unquoted, play_live
 from badactors.castle.interview import ExitObservation
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.observe import GameObservation
-from badactors.castle.play import Played, is_model, replay, run_game, start_game
-from badactors.castle.provider import CallRef, Mode, ModelInfo
+from badactors.castle.play import (
+    GameRecord,
+    ModelSettings,
+    Played,
+    is_model,
+    replay,
+    run_game,
+    start_game,
+)
+from badactors.castle.provider import (
+    CallRef,
+    Mode,
+    ModelInfo,
+    ProviderCall,
+    ReasoningRequired,
+    Reply,
+)
 from badactors.castle.rules import GameConfig
+from badactors.castle.verify import make_bundle, parts, verify
 from castle_scenes import CAST, CASTLE, MODELS
 
 FREE = Limits(100_000, 10**10, 1_000.0)
@@ -212,3 +232,128 @@ def test_a_defused_forgery_is_logged_for_the_audience_and_replays() -> None:
     logged = sum(len(d.defused) for d in stored.decisions)
     assert logged == len(defused)
     assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
+
+
+def test_only_a_whole_object_in_a_decision_string_is_unquoted() -> None:
+    whole = {"kind": "plan", "plan": {"goal": "", "steps": []}}
+    text = json.dumps(whole)
+    assert _unquoted({ROOT: text}) == (
+        {ROOT: whole},
+        f"{ROOT} arrived as a JSON string holding a complete answer",
+    )
+    braced = _unquoted({ROOT: text + "}"})
+    assert braced is not None and braced[0] == {ROOT: whole}
+    for refused in (text + "}}", text + " and more", "[1, 2]", "plan", text[:-1]):
+        assert _unquoted({ROOT: refused}) is None
+    assert _unquoted({ROOT: text, "extra": 1}) is None
+    assert _unquoted({ROOT: whole}) is None
+
+
+class Sizes:
+    """The mock provider, noting what each call asks for at most, and
+    claiming ``extra`` more completion tokens than the bot used."""
+
+    def __init__(self, inner: BotProvider, extra: int = 0) -> None:
+        self.inner = inner
+        self.extra = extra
+        self.asked: dict[str, set[int]] = {}
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        self.asked.setdefault(call.ref.model, set()).add(call.max_tokens)
+        reply = await self.inner.complete(call)
+        usage = replace(
+            reply.usage, completion_tokens=reply.usage.completion_tokens + self.extra
+        )
+        return replace(reply, usage=usage)
+
+
+def test_each_model_is_asked_for_its_own_output_limit_and_reserves_it() -> None:
+    models = sorted(set(CAST.models().values()))
+    outputs = {
+        model: OutputLimit(1_000 + index, 5_000) for index, model in enumerate(models)
+    }
+    sizes = Sizes(BotProvider(HeuristicBot(seed=3)))
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=sizes,
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs=outputs,
+    )
+    assert sizes.asked == {model: {outputs[model].max_tokens} for model in models}
+    assert {
+        event["model"]: (event["max_tokens"], event["reserve"])
+        for event in live.harness.of("output_limit")
+    } == {model: (limit.max_tokens, limit.reserve) for model, limit in outputs.items()}
+    assert not live.harness.of("over_reserve")
+
+
+def test_an_answer_longer_than_its_reservation_is_logged() -> None:
+    outputs = {model: OutputLimit(10, 10) for model in set(CAST.models().values())}
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=Sizes(BotProvider(HeuristicBot(seed=3)), extra=11),
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs=outputs,
+    )
+    over = live.harness.of("over_reserve")
+    assert over and len(over) == len(live.harness.of("call"))
+    assert all(event["completion_tokens"] > event["reserved"] == 10 for event in over)
+
+
+class Mandatory:
+    """The mock provider, with one model's endpoints refusing reasoning off."""
+
+    def __init__(self, inner: BotProvider, model: str) -> None:
+        self.inner = inner
+        self.model = model
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        if call.ref.model == self.model and call.reasoning == "off":
+            raise ReasoningRequired("Reasoning is mandatory for this endpoint.")
+        return await self.inner.complete(call)
+
+
+def test_the_record_keeps_each_models_reasoning_and_output_limit() -> None:
+    models = sorted(set(CAST.models().values()))
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=Mandatory(BotProvider(HeuristicBot(seed=3)), models[0]),
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs={model: OutputLimit(2_000, 2_000) for model in models},
+        reasoning="least",
+    )
+    assert live.harness.of("reasoning_fallback")
+    settings = live.record.settings
+    assert settings is not None and settings.reasoning == "least"
+    assert settings.models == {
+        model: ModelSettings(
+            reasoning="minimal" if model == models[0] else "off", max_tokens=2_000
+        )
+        for model in models
+    }
+    assert settings.label == f"least (minimal 1, off {len(models) - 1})"
+    stored = GameRecord.model_validate_json(live.record.model_dump_json())
+    assert stored.settings == settings
+    bundle = make_bundle(live.record, live.harness.events)
+    assert verify(bundle) == []
+    header = parts(live.record, bundle.exchanges)[0][1]
+    assert header["settings"]["models"][models[0]]["reasoning"] == "minimal"
+    unset = live.record.model_copy(update={"settings": None})
+    assert "settings" not in parts(unset, [])[0][1]
+
+
+def test_least_is_a_run_setting_never_a_models() -> None:
+    with pytest.raises(ValueError, match="run setting"):
+        ModelSettings(reasoning="least", max_tokens=1)

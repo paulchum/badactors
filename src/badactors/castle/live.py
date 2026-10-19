@@ -25,7 +25,9 @@ recorded as ``mock:<id>``, never as the model, and it is never rated.
 
 The saved record names ``model:<id>`` for every seat, replays to the identical
 ledger, and says how the game ended. A game stopped by its budget, or aborted
-by a 401, 402 or 403, is saved as far as it got and is never rated.
+by a 401, 402 or 403, is saved as far as it got and is never rated. A 402 for
+OpenRouter's in-flight budget is waited out and the call sent again (logged as
+``provider_wait``); only one that outlasts every wait aborts the game.
 
 Beside the record go the harness log (``.harness.jsonl``: every call's tokens
 and cost, mode changes, stops) and the game's verify bundle
@@ -47,7 +49,13 @@ from pathlib import Path
 
 from badactors.castle.balance import load_balance
 from badactors.castle.bots import HeuristicBot
-from badactors.castle.budget import Limits, preflight
+from badactors.castle.budget import (
+    Limits,
+    output_line,
+    output_options,
+    preflight,
+    resolve_outputs,
+)
 from badactors.castle.cast import Cast, load_cast_file
 from badactors.castle.configs import CAST, MAP
 from badactors.castle.harness import LiveGame, play_live
@@ -96,21 +104,7 @@ def parser() -> argparse.ArgumentParser:
     budget.add_argument("--max-requests", type=int)
     budget.add_argument("--max-tokens", type=int)
     budget.add_argument("--max-dollars", type=float)
-    parser.add_argument(
-        "--max-output-tokens",
-        type=int,
-        default=4096,
-        help="The most one answer may generate; each call reserves this.",
-    )
-    parser.add_argument(
-        "--reasoning",
-        choices=("default", "least", "off", "minimal", "low", "medium", "high"),
-        default="default",
-        help=(
-            "OpenRouter's reasoning setting for every seat. default sends none; "
-            "least is off, or minimal where a model's reasoning is mandatory."
-        ),
-    )
+    output_options(parser)
     parser.add_argument(
         "--concurrency", type=int, default=4, help="Calls in flight per model."
     )
@@ -186,15 +180,18 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     models = _models(cast, args)
-    estimate = preflight(
-        castle,
-        cast,
+    outputs = resolve_outputs(
         models,
-        seed=seed,
-        config=config,
-        max_tokens=args.max_output_tokens,
+        max_output_tokens=args.max_output_tokens,
+        reasoning=args.reasoning,
+        outputs=args.outputs,
+    )
+    estimate = preflight(
+        castle, cast, models, seed=seed, config=config, outputs=outputs
     )
     print(estimate.summary())
+    for model, limit in sorted(outputs.items()):
+        print(output_line(model, limit))
     if args.dry_run:
         return
     if not estimate.fits(limits) and not args.allow_partial:
@@ -237,7 +234,7 @@ def main(argv: list[str] | None = None) -> None:
         provider=provider,
         models=models,
         limits=limits,
-        max_tokens=args.max_output_tokens,
+        outputs=outputs,
         concurrency=args.concurrency,
         reasoning=args.reasoning,
         harness=harness,
@@ -309,6 +306,7 @@ def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     spent = live.budget.spent
     lines = [
         *([f"Arm: {stored.arm}, {stored.world_id}."] if stored.arm else []),
+        *([f"Reasoning: {stored.settings.label}."] if stored.settings else []),
         f"Outcome: {stored.outcome}"
         + (f" ({live.referee.stopped_by})" if live.referee.stopped_by else "")
         + (f"; winner: {stored.winner}" if stored.winner else ""),
@@ -318,6 +316,13 @@ def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     ]
     for (seat, reason), count in sorted(failures.items(), key=str):
         lines.append(f"Failed turns: {seat} {reason} x{count}")
+    waits = live.harness.of("provider_wait")
+    if waits:
+        seconds = sum(float(wait["seconds"]) for wait in waits)
+        lines.append(
+            f"Waited out OpenRouter's in-flight budget {len(waits)} times "
+            f"({seconds:.0f} s in all)."
+        )
     for change in live.harness.of("mode_downgrade"):
         lines.append(
             f"Mode: {change['model']} moved from {change['old']} to {change['new']} "

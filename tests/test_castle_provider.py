@@ -14,9 +14,11 @@ import pytest
 
 from badactors.castle.prompt import SYSTEM, Message, Part
 from badactors.castle.provider import (
+    IN_FLIGHT,
     CallRef,
     FixtureProvider,
     HarnessLog,
+    InFlightFull,
     Mode,
     ModeBook,
     OpenRouterProvider,
@@ -192,6 +194,16 @@ def test_one_call_is_one_request_with_no_retries() -> None:
     [
         (401, {"error": {"message": "No auth credentials found"}}, OperatorError),
         (402, {"error": {"message": "Insufficient credits"}}, OperatorError),
+        (
+            402,
+            {
+                "error": {
+                    "code": 402,
+                    "metadata": {"reason": "in_flight_budget_exhausted"},
+                }
+            },
+            InFlightFull,
+        ),
         (403, {"error": {"message": "Key disabled"}}, OperatorError),
         (
             400,
@@ -282,7 +294,12 @@ LISTING = {
             "supported_parameters": ["response_format"],
             "pricing": {"prompt": "0", "completion": "0"},
         },
-        {"id": "d/plain", "supported_parameters": [], "pricing": {}},
+        {
+            "id": "d/plain",
+            "supported_parameters": [],
+            "pricing": {},
+            "top_provider": {"max_completion_tokens": 8_000},
+        },
     ]
 }
 
@@ -299,6 +316,8 @@ def test_capabilities_pick_the_best_mode_and_read_prices() -> None:
     ]
     assert models["a/tools"].prompt_price == 3e-6
     assert models["a/tools"].worst_case(1000, 100) == pytest.approx(0.0045)
+    assert models["d/plain"].max_completion_tokens == 8_000
+    assert models["a/tools"].max_completion_tokens is None
 
 
 def test_capabilities_are_cached_for_their_ttl(tmp_path: Path) -> None:
@@ -370,3 +389,14 @@ def test_recordings_keep_bodies_never_keys_and_play_back(tmp_path: Path) -> None
     assert run(replayed.complete(call("tools"))).raw == first.raw
     with pytest.raises(OperatorError):
         run(replayed.complete(second))
+
+
+def test_an_in_flight_402_reads_its_suggested_wait() -> None:
+    body = {
+        "error": {"metadata": {"reason": IN_FLIGHT, "headers": {"Retry-After": "120"}}}
+    }
+    failing = provider(lambda r: httpx.Response(402, json=body))
+    with pytest.raises(InFlightFull) as raised:
+        run(failing.complete(call("tools")))
+    assert raised.value.retry_after == 120.0
+    assert InFlightFull("busy", status=402, body="busy").retry_after is None

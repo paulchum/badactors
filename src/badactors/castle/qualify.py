@@ -28,6 +28,11 @@ Rebuild it only on purpose; results from two suites are not comparable.
         --max-tokens 12000000 --max-dollars 1
     uv run castle-qualify --build
 
+A model is asked as ``castle-live`` would ask it: ``--reasoning``,
+``--max-output-tokens`` and ``--outputs`` mean the same there and here, its
+output limit is resolved by the same function and reserved at its real worst
+case, and the result records the setting and the limit it qualified under.
+
 A ``--mock`` run puts the seeded bot behind the mock provider: it exercises
 the whole harness and qualifies nobody.
 """
@@ -54,14 +59,17 @@ from badactors.castle.budget import (
     Budget,
     BudgetExhausted,
     Limits,
+    OutputLimit,
+    output_options,
     prompt_tokens,
+    resolve_outputs,
 )
 from badactors.castle.cast import Cast, load_cast_file
 from badactors.castle.configs import CAST, MAP, SUITE
 from badactors.castle.contract_schema import compile_schema
 from badactors.castle.contracts import CastleMap, Contract
 from badactors.castle.decisions import Decision, ExitAnswer
-from badactors.castle.harness import ModelPlayer
+from badactors.castle.harness import ModelPlayer, ReasoningBook
 from badactors.castle.interview import ExitObservation
 from badactors.castle.mapfile import load_map
 from badactors.castle.mock_provider import BotProvider, mock_models
@@ -72,7 +80,9 @@ from badactors.castle.play import (
     RELIABILITY_GATE,
     BadAnswer,
     FailureReason,
+    ModelSettings,
     Outcome,
+    Reasoning,
     TurnFailure,
     run_game,
     start_game,
@@ -271,6 +281,13 @@ class Qualification(Contract):
     by_stratum: dict[str, dict[str, int]]
     spent: dict[str, int | float]
     """Requests, tokens and dollars."""
+    reasoning: Reasoning | None = None
+    """The run's ``--reasoning`` setting; ``None`` for results older than the
+    field."""
+    settings: ModelSettings | None = None
+    """How the model was asked: its effective reasoning setting ("least"
+    becomes "off", or "minimal" where reasoning is mandatory) and the most one
+    answer was asked to generate. ``None`` for results older than the field."""
 
     def summary(self) -> str:
         failed = ", ".join(f"{n} {why}" for why, n in sorted(self.failed.items()))
@@ -292,6 +309,15 @@ class Qualification(Contract):
             f"  Failed turns: {failed or 'none'}. Refusals {self.refusals} and "
             f"content filters {self.content_filters} are results and count apart. "
             f"{self.retried} turns needed the retry.",
+            *(
+                [
+                    f"  Reasoning {self.reasoning}, played at "
+                    f"{self.settings.reasoning}; answers up to "
+                    f"{self.settings.max_tokens:,} tokens."
+                ]
+                if self.reasoning is not None and self.settings is not None
+                else []
+            ),
             f"  Suite v{self.suite_version} {self.suite_digest[:16]}. Spent "
             f"{int(self.spent['requests'])} requests, "
             f"{int(self.spent['tokens']):,} tokens, ${self.spent['dollars']:.4f}.",
@@ -308,6 +334,8 @@ def tally(
     mock: bool,
     outcome: Outcome,
     budget: Budget,
+    reasoning: Reasoning | None = None,
+    settings: ModelSettings | None = None,
 ) -> Qualification:
     failed = Counter(turn.failure for turn in turns if turn.failure is not None)
     broken = sum(failed[reason] for reason in RELIABILITY_FAILURES)
@@ -351,6 +379,8 @@ def tally(
             "tokens": spent.tokens,
             "dollars": round(spent.dollars, 6),
         },
+        reasoning=reasoning,
+        settings=settings,
     )
 
 
@@ -392,15 +422,19 @@ def qualify(
     *,
     limits: Limits,
     provider_name: str,
+    output: OutputLimit,
     mock: bool = False,
-    max_tokens: int = 4096,
+    reasoning: Reasoning = "default",
     concurrency: int = 4,
     log: HarnessLog | None = None,
     closers: Sequence[Callable[[], Awaitable[None]]] = (),
 ) -> Qualification:
-    """Put every question of the suite to one model, and read the gate."""
+    """Put every question of the suite to one model, asked as a game would ask
+    it (its ``output`` limit, reserved at its real worst case, and the run's
+    ``reasoning`` setting), and read the gate."""
     harness = log if log is not None else HarnessLog()
     budget = Budget(limits)
+    thinking = ReasoningBook(reasoning)
     player = ModelPlayer(
         seat="qualify",
         model=model,
@@ -409,7 +443,16 @@ def qualify(
         modes=ModeBook.starting({model: info}, harness),
         budget=budget,
         log=harness,
-        max_tokens=max_tokens,
+        max_tokens=output.max_tokens,
+        reserve_tokens=output.reserve,
+        reasoning=thinking,
+    )
+    harness.write("reasoning", setting=reasoning)
+    harness.write(
+        "output_limit",
+        model=model,
+        max_tokens=output.max_tokens,
+        reserve=output.reserve,
     )
     game = f"qualify-{suite.digest[:12]}"
     outcome: Outcome = "finished"
@@ -454,6 +497,10 @@ def qualify(
         mock=mock,
         outcome=outcome,
         budget=budget,
+        reasoning=reasoning,
+        settings=ModelSettings.model_validate(
+            {"reasoning": thinking.for_model(model), "max_tokens": output.max_tokens}
+        ),
     )
     harness.write(
         "qualified",
@@ -497,7 +544,7 @@ def estimate(
     model: str,
     info: ModelInfo,
     *,
-    max_tokens: int,
+    output: OutputLimit,
     answer_tokens: int = 400,
 ) -> Estimate:
     prompt = dollars = worst = 0.0
@@ -508,7 +555,7 @@ def estimate(
         )
         prompt += tokens
         dollars += info.worst_case(tokens, answer_tokens)
-        worst += 2 * info.worst_case(tokens, max_tokens)
+        worst += 2 * info.worst_case(tokens, output.reserve)
     count = len(suite.items)
     return Estimate(count, int(prompt), count * answer_tokens, dollars, worst)
 
@@ -539,7 +586,7 @@ def parser() -> argparse.ArgumentParser:
     budget.add_argument("--max-requests", type=int)
     budget.add_argument("--max-tokens", type=int)
     budget.add_argument("--max-dollars", type=float)
-    parser.add_argument("--max-output-tokens", type=int, default=4096)
+    output_options(parser)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--out", default="out/qualify")
@@ -580,8 +627,18 @@ def main(argv: list[str] | None = None) -> None:
     limits = Limits(args.max_requests, args.max_tokens, args.max_dollars)
     suite = load_suite(args.suite)
     info = _info(args)
-    found = estimate(suite, args.model, info, max_tokens=args.max_output_tokens)
+    output = resolve_outputs(
+        {args.model: info},
+        max_output_tokens=args.max_output_tokens,
+        reasoning=args.reasoning,
+        outputs=args.outputs,
+    )[args.model]
+    found = estimate(suite, args.model, info, output=output)
     print(found.summary())
+    reserve = (
+        f", reserving {output.reserve:,}" if output.reserve > output.max_tokens else ""
+    )
+    print(f"Output limit: {args.model} {output.max_tokens:,} tokens{reserve}.")
     if args.dry_run:
         return
     if not found.fits(limits) and not args.allow_partial:
@@ -612,7 +669,8 @@ def main(argv: list[str] | None = None) -> None:
         limits=limits,
         provider_name=name,
         mock=args.mock,
-        max_tokens=args.max_output_tokens,
+        output=output,
+        reasoning=args.reasoning,
         concurrency=args.concurrency,
         log=log,
         closers=closers,

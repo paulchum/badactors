@@ -5,8 +5,10 @@ first question goes over HTTP to the real OpenRouter provider, whose transport
 serves one recorded response (``fixtures/openrouter``, in the format
 ``RecordingProvider`` writes). Each bad response must fail the turn with the
 right reason class and log no decision as Sol's choice — never a pass, never a
-silence — except a 402, which is the run's problem and aborts it. The game's
-verify bundle keeps each bad call's reason in its hashed receipt.
+silence — except a 402, which is the run's problem and aborts it, and a 402 for
+OpenRouter's in-flight budget, which is nobody's: the call is sent again after
+a wait. The game's verify bundle keeps each bad call's reason, and each wait,
+in its hashed receipt.
 """
 
 from __future__ import annotations
@@ -23,9 +25,18 @@ from badactors.castle.budget import Limits
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.play import replay
-from badactors.castle.provider import HarnessLog, OpenRouterProvider, Routed
+from badactors.castle.provider import (
+    CallRef,
+    HarnessLog,
+    OpenRouterProvider,
+    Provider,
+    ProviderCall,
+    Reply,
+    Routed,
+    replay_fixture,
+)
 from badactors.castle.rules import GameConfig
-from badactors.castle.verify import HashingProvider, make_bundle, verify
+from badactors.castle.verify import HashingProvider, make_bundle, parts, verify
 from castle_scenes import CAST, CASTLE
 
 FIXTURES = Path(__file__).parent / "fixtures" / "openrouter"
@@ -89,6 +100,8 @@ CASES = [
     ("json_schema_400", "transport", 1),
     ("empty", "empty", 2),
     ("malformed", "unparseable", 2),
+    ("over_length", "invalid", 2),
+    ("partial_string_decision", "invalid", 2),
     ("refusal", "refusal", 1),
     ("timeout", "transport", 1),
     ("content_filter", "content_filter", 1),
@@ -168,6 +181,53 @@ def test_a_retry_names_the_error_and_restates_the_legal_answers() -> None:
     assert [w.player_id for w in refused[0].witnesses] == [SEAT]
 
 
+def test_a_retry_for_an_answer_over_a_cap_quotes_the_cap_and_the_length() -> None:
+    _, sent = play("over_length")
+    diary = json.loads(
+        fixture("over_length")["body"]["choices"][0]["message"]["tool_calls"][0][
+            "function"
+        ]["arguments"]
+    )["decision"]["diary"]
+    retry = sent[1]["messages"][-1]["content"]
+    assert (
+        f"{len(diary)} characters, over the cap of 600; say it in 600 characters "
+        "or fewer"
+    ) in retry
+    tool = sent[0]["tools"][0]["function"]["parameters"]
+    assert tool["properties"]["decision"]["properties"]["diary"]["maxLength"] == 600
+
+
+def test_a_whole_answer_sent_as_a_json_string_is_read_and_logged_as_lenient() -> None:
+    # Qwen 3.8's first answer in the seed-7 game of 2026-10-17, word for word.
+    live, sent = play("string_decision")
+    arguments = fixture("string_decision")["body"]["choices"][0]["message"][
+        "tool_calls"
+    ][0]["function"]["arguments"]
+    sent_as = json.loads(arguments)["decision"]
+    assert sent_as.endswith("}}}")  # the root's own brace, inside the string
+    meant = json.loads(sent_as[:-1])
+    assert len(sent) == 1
+    (first,) = first_question(live)
+    assert first.decision is not None and first.reason is None
+    assert first.decision.model_dump(mode="json") == {
+        **first.decision.model_dump(mode="json"),
+        **meant,
+    }
+    (lenient,) = live.harness.of("lenient_parse")
+    assert lenient["ref"]["seat"] == SEAT and lenient["ref"]["ordinal"] == 0
+    assert "closing brace inside the string" in lenient["how"]
+    assert not live.harness.of("bad_answer")
+
+
+def test_a_partial_answer_in_a_json_string_is_refused_not_completed() -> None:
+    live, sent = play("partial_string_decision")
+    assert len(sent) == 2
+    assert not live.harness.of("lenient_parse")
+    attempts = first_question(live)
+    assert all(entry.decision is None for entry in attempts)
+    assert "expected object, got string" in (attempts[0].error or "")
+
+
 def test_a_402_aborts_the_run_and_charges_no_model() -> None:
     live, sent = play("payment_402")
     stored = live.record
@@ -182,6 +242,109 @@ def test_a_402_aborts_the_run_and_charges_no_model() -> None:
     assert verify(bundle) == []
     (paid,) = [call for call in bundle.exchanges if call.status == 402]
     assert paid.seat == SEAT and paid.failure is None
+
+
+class Busy:
+    """OpenRouter's recorded in-flight 402 for Sol's first question, ``times``
+    times, then the bot behind the mock provider answers it."""
+
+    def __init__(self, inner: Provider, times: int) -> None:
+        self.inner = inner
+        self.times = times
+        self.sent: list[CallRef] = []
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        if (call.ref.seat, call.ref.ordinal) == (SEAT, 0):
+            self.sent.append(call.ref)
+            if len(self.sent) <= self.times:
+                return replay_fixture(fixture("in_flight_402"))
+        return await self.inner.complete(call)
+
+
+def busy_game(times: int) -> tuple[LiveGame, Busy, list[float]]:
+    pauses: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        pauses.append(seconds)
+
+    log = HarnessLog()
+    busy = Busy(BotProvider(HeuristicBot(seed=SEED)), times)
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=SEED,
+        config=GameConfig.shipped(max_days=2),
+        provider=HashingProvider(busy, log, "openrouter"),
+        models=mock_models(CAST.models().values()),
+        limits=Limits(10_000, 10**9, 100.0),
+        harness=log,
+        sleep=sleep,
+    )
+    return live, busy, pauses
+
+
+def test_an_in_flight_402_waits_and_sends_the_same_call_again() -> None:
+    live, busy, pauses = busy_game(times=2)
+    stored = live.record
+    assert stored.outcome == "finished"
+    assert [ref.attempt for ref in busy.sent] == [1, 2, 3]
+    assert len({(ref.seat, ref.ordinal, ref.kind) for ref in busy.sent}) == 1
+    assert pauses == [2.0, 4.0]
+    waits = live.harness.of("provider_wait")
+    assert [(w["ref"]["seat"], w["tries"], w["seconds"]) for w in waits] == [
+        (SEAT, 1, 2.0),
+        (SEAT, 2, 4.0),
+    ]
+    assert waits[0]["retry_after"] == 120.0 and waits[0]["status"] == 402
+    first = first_question(live)
+    assert len(first) == 1 and first[0].decision is not None
+    assert first[0].reason is None and not first[0].refused
+    assert not [e for e in stored.ledger if e.type == "turn_failed"]
+    sent = len(live.harness.of("call")) + len(live.harness.of("provider_wait"))
+    assert live.budget.spent.requests == sent and live.budget.held.requests == 0
+    bundle = make_bundle(stored, live.harness.events)
+    assert verify(bundle) == []
+    mine = [call for call in bundle.exchanges if call.seat == SEAT][:3]
+    assert [c.attempt for c in mine] == [1, 2, 3]
+    assert [(c.status, c.wait, c.failure) for c in mine] == [
+        (402, 2.0, None),
+        (402, 4.0, None),
+        (None, None, None),
+    ]
+
+
+def test_the_same_game_without_the_402s_writes_the_same_ledger() -> None:
+    waited, _, _ = busy_game(times=3)
+    plain, _, _ = busy_game(times=0)
+    assert _dumped(waited.record.ledger) == _dumped(plain.record.ledger)
+
+
+def test_an_in_flight_budget_that_stays_full_aborts_after_the_last_wait() -> None:
+    live, busy, pauses = busy_game(times=100)
+    stored = live.record
+    assert pauses == [2.0, 4.0, 8.0, 16.0, 30.0]
+    assert [ref.attempt for ref in busy.sent] == [1, 2, 3, 4, 5, 6]
+    assert stored.outcome == "aborted:operator" and not stored.rated
+    assert "in-flight budget was still full" in (live.referee.stopped_by or "")
+    assert not [e for e in stored.ledger if e.type == "turn_failed"]
+    assert not [entry for entry in stored.decisions if entry.player_id == SEAT]
+    assert _dumped(replay(stored).world.ledger) == _dumped(stored.ledger)
+    bundle = make_bundle(stored, live.harness.events)
+    assert verify(bundle) == []
+    mine = [call for call in bundle.exchanges if call.seat == SEAT]
+    assert [c.wait for c in mine] == [2.0, 4.0, 8.0, 16.0, 30.0, None]
+    assert all(c.status == 402 and c.failure is None for c in mine)
+
+
+def test_a_bundle_without_waits_hashes_as_before_the_field() -> None:
+    live, _ = play("empty")
+    bundle = make_bundle(live.record, live.harness.events)
+    assert all(call.wait is None for call in bundle.exchanges)
+    assert all(
+        "wait" not in part
+        for kind, part in parts(live.record, bundle.exchanges)
+        if kind == "exchange"
+    )
 
 
 def _dumped(entries: Any) -> list[Any]:

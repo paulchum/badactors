@@ -16,6 +16,11 @@ What the model answers is read, never argued with:
   included, in the same words for every request; a second bad answer fails the
   turn as ``empty``, ``unparseable`` or ``invalid``.
 
+The one leniency: a decision sent as a JSON string that holds the whole answer
+is decoded and read as that answer, and the harness log says so
+(``lenient_parse``). A string that does not hold a complete answer is a bad
+answer like any other; nothing is ever repaired or filled in.
+
 Nothing is ever substituted for a failed answer: the character hesitates and
 does nothing, labelled as a failure.
 
@@ -30,6 +35,12 @@ answer was given to, so the ledger is exactly the one a one-at-a-time game
 would have written, whatever order the replies arrived in. Table speech,
 votes, doses, offers, nominations and interviews are asked one at a time.
 
+A 402 for OpenRouter's in-flight budget is no answer and nobody's fault: the
+question is sent again after a wait, a few times with a growing pause, each
+wait logged as a ``provider_wait`` and each send its own budgeted, receipted
+attempt. The model is not charged and its turn goes on; if the budget is still
+full after the last wait, the run stops as if the credit were gone.
+
 When the budget cannot cover the next call the game stops there, marked
 ``stopped:budget``; a 401, 402 or 403 aborts it as ``aborted:operator``. Either
 way the partial record replays to the same point, and is never rated.
@@ -40,7 +51,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
@@ -50,6 +61,7 @@ from badactors.castle.budget import (
     Budget,
     BudgetExhausted,
     Limits,
+    OutputLimit,
     Reservation,
     prompt_tokens,
 )
@@ -88,7 +100,9 @@ from badactors.castle.play import (
     Outcome,
     Played,
     Player,
+    Reasoning,
     Referee,
+    RunSettings,
     TurnFailure,
     plan_request,
     record,
@@ -100,6 +114,7 @@ from badactors.castle.provider import (
     CallRef,
     Closer,
     HarnessLog,
+    InFlightFull,
     Mode,
     ModeBook,
     ModelInfo,
@@ -129,6 +144,12 @@ _REFUSAL = re.compile(
 character ("I can't believe Mara...") are not one."""
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
+WAITS: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0, 30.0)
+"""Seconds to wait before each resend of a call OpenRouter turned away because
+its in-flight budget was full."""
+
+type Sleep = Callable[[float], Awaitable[None]]
+
 
 @dataclass(frozen=True)
 class Question:
@@ -137,8 +158,15 @@ class Question:
     ref: CallRef
     rendered: Rendered
     schema: Schema
+    """The plain schema: sent in tools mode, JSON mode and the prompt, and the
+    one every answer is checked against."""
+    strict: Schema
+    """The strict schema, sent in ``json_schema`` mode."""
     request: Request
     source: GameObservation | ExitObservation
+
+    def sent(self, mode: Mode) -> Schema:
+        return self.strict if mode == "json_schema" else self.schema
 
 
 @dataclass
@@ -178,11 +206,17 @@ class ModelPlayer:
     budget: Budget
     log: HarnessLog
     max_tokens: int = 4096
+    """The most one answer may generate, as the request asks."""
+    reserve_tokens: int | None = None
+    """What each call reserves for the answer, when the model may generate
+    past ``max_tokens``; ``max_tokens`` otherwise."""
     slots: asyncio.Semaphore | None = None
     """Shared by every seat of the same model: how many of its calls may be in
     flight at once."""
     mock: bool = False
     """The provider is the mock one: the seeded bot answers for the model."""
+    waits: Sequence[float] = WAITS
+    sleep: Sleep = asyncio.sleep
     reasoning: ReasoningBook = field(default_factory=ReasoningBook)
     attempts: dict[int, int] = field(default_factory=dict, init=False, repr=False)
 
@@ -200,6 +234,7 @@ class ModelPlayer:
             ref=ref,
             rendered=render(observation, recipient=self.model),
             schema=compile_schema(observation),
+            strict=compile_schema(observation, strict=True),
             request=observation.request,
             source=observation,
         )
@@ -209,14 +244,16 @@ class ModelPlayer:
             ref=ref,
             rendered=render_exit(departing, recipient=self.model),
             schema=compile_exit_schema(departing),
+            strict=compile_exit_schema(departing, strict=True),
             request=departing.request,
             source=departing,
         )
 
     def reserve(self, question: Question) -> Reservation:
-        schema = len(json.dumps(question.schema))
+        schema = max(len(json.dumps(question.schema)), len(json.dumps(question.strict)))
         prompt = prompt_tokens(question.rendered, schema)
-        return self.budget.reserve(self.info, prompt, self.max_tokens)
+        answer = max(self.max_tokens, self.reserve_tokens or 0)
+        return self.budget.reserve(self.info, prompt, answer)
 
     # -------------------------------------------------------------- asking
 
@@ -228,6 +265,7 @@ class ModelPlayer:
         for an answer that cannot be used, ``BudgetExhausted`` before a call
         that would not fit, and ``OperatorError`` for the run's own failures."""
         mode = self.modes.mode(self.model)
+        waited = 0
         while True:
             held = held if held is not None else self.reserve(question)
             ordinal = question.ref.ordinal
@@ -236,7 +274,7 @@ class ModelPlayer:
             call = ProviderCall(
                 ref=replace(question.ref, attempt=attempt),
                 messages=question.rendered.messages,
-                schema=question.schema,
+                schema=question.sent(mode),
                 mode=mode,
                 max_tokens=self.max_tokens,
                 source=question.source,
@@ -244,6 +282,32 @@ class ModelPlayer:
             )
             try:
                 reply = await self._call(call)
+            except InFlightFull as exc:
+                if waited == len(self.waits):
+                    self.budget.release(held)
+                    self.log.write(
+                        "operator_error", ref=_ref(call.ref), status=exc.status
+                    )
+                    raise OperatorError(
+                        "OpenRouter's in-flight budget was still full after "
+                        f"{waited} waits: {exc}",
+                        status=exc.status,
+                        body=exc.body,
+                    ) from exc
+                self.budget.settle(held, self.info, Usage())
+                pause = self.waits[waited]
+                waited += 1
+                self.log.write(
+                    "provider_wait",
+                    ref=_ref(call.ref),
+                    status=exc.status,
+                    tries=waited,
+                    seconds=pause,
+                    retry_after=exc.retry_after,
+                )
+                await self.sleep(pause)
+                held = None
+                continue
             except ReasoningRequired as exc:
                 self.budget.settle(held, self.info, Usage())
                 if not self.reasoning.fallback(self.model, call.reasoning):
@@ -272,6 +336,14 @@ class ModelPlayer:
                 self._failed(call, "transport", str(exc))
                 raise TurnFailure(str(exc), "transport") from exc
             cost = self.budget.settle(held, self.info, reply.usage)
+            reserved = max(self.max_tokens, self.reserve_tokens or 0)
+            if reply.usage.completion_tokens > reserved:
+                self.log.write(
+                    "over_reserve",
+                    ref=_ref(call.ref),
+                    completion_tokens=reply.usage.completion_tokens,
+                    reserved=reserved,
+                )
             self.log.write(
                 "call",
                 ref=_ref(call.ref),
@@ -331,10 +403,15 @@ class ModelPlayer:
         if isinstance(value, dict) and ROOT not in value and "kind" in value:
             value = {ROOT: value}
         errors = validate(question.schema, value)
-        if errors:
+        unquoted = _unquoted(value) if errors else None
+        if unquoted is not None and not validate(question.schema, unquoted[0]):
+            value, how = unquoted
+            self.log.write("lenient_parse", ref=_ref(question.ref), mode=mode, how=how)
+        elif errors:
             self.modes.answered(self.model, mode, schema_valid=False)
             raise BadAnswer("; ".join(errors[:3]), "invalid")
-        self.modes.answered(self.model, mode, schema_valid=True)
+        else:
+            self.modes.answered(self.model, mode, schema_valid=True)
         try:
             decision = DECISION.validate_json(json.dumps(value[ROOT]))
         except ValidationError as exc:
@@ -344,6 +421,31 @@ class ModelPlayer:
         except IllegalDecision as exc:
             raise BadAnswer(str(exc), "invalid") from exc
         return decision
+
+
+def _unquoted(value: Any) -> tuple[dict[str, Any], str] | None:
+    """``{"decision": "<JSON>"}`` with the string decoded, when it holds one
+    JSON object, and how it was sent. Some providers hand a model's nested
+    object back as a string, and Qwen's came with the root's own closing brace
+    inside it, after the object; that one brace is allowed, nothing else. The
+    object is the model's own answer, word for word: nothing is added to it or
+    taken from it, and whether it is a complete one is for the schema to say."""
+    if not isinstance(value, dict) or set(value) != {ROOT}:
+        return None
+    inner = value[ROOT]
+    if not isinstance(inner, str):
+        return None
+    try:
+        decoded, end = json.JSONDecoder().raw_decode(inner.strip())
+    except json.JSONDecodeError:
+        return None
+    rest = inner.strip()[end:].strip()
+    if not isinstance(decoded, dict) or rest not in ("", "}"):
+        return None
+    how = f"{ROOT} arrived as a JSON string holding a complete answer"
+    if rest:
+        how += ", with the root's closing brace inside the string"
+    return {ROOT: decoded}, how
 
 
 def _json(text: str) -> tuple[Any, str | None]:
@@ -367,9 +469,24 @@ def _json(text: str) -> tuple[Any, str | None]:
 
 def _errors(exc: ValidationError) -> str:
     return "; ".join(
-        f"{ROOT}." + ".".join(str(part) for part in error["loc"]) + f": {error['msg']}"
+        f"{ROOT}." + ".".join(str(part) for part in error["loc"]) + f": {_said(error)}"
         for error in exc.errors()[:3]
     )
+
+
+def _said(error: Any) -> str:
+    """What was wrong, with the cap and the length given when it was too
+    long, so the retry can be the right length."""
+    cap = (error.get("ctx") or {}).get("max_length")
+    given = error.get("input")
+    if error["type"] == "string_too_long" and isinstance(given, str):
+        return (
+            f"{len(given)} characters, over the cap of {cap}; "
+            f"say it in {cap} characters or fewer"
+        )
+    if error["type"] == "too_long" and isinstance(given, list):
+        return f"{len(given)} items, over the cap of {cap}"
+    return str(error["msg"])
 
 
 def _ref(ref: CallRef) -> dict[str, object]:
@@ -572,10 +689,11 @@ def play_live(
     models: Mapping[str, ModelInfo],
     limits: Limits,
     max_tokens: int = 4096,
+    outputs: Mapping[str, OutputLimit] | None = None,
     concurrency: int = 4,
     harness: HarnessLog | None = None,
     modes: ModeBook | None = None,
-    reasoning: str = "default",
+    reasoning: Reasoning = "default",
     scope: ContentScope | None = None,
     check_leaks: bool = True,
     concurrent: bool = True,
@@ -585,12 +703,18 @@ def play_live(
     mock: bool = False,
     world_id: str = "castle-game",
     arm: ArmKind | None = None,
+    waits: Sequence[float] = WAITS,
+    sleep: Sleep = asyncio.sleep,
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
-    the seats they name, and return its record. With ``mock``, the provider is
-    the mock one: its seats are recorded as ``mock:<id>`` and never rated. A
-    game played from a schedule passes its ``world_id`` and ``arm``, which the
-    record keeps; a game of an arm that is never rated is not."""
+    the seats they name, and return its record. Each model generates at most
+    ``max_tokens`` per answer, or its own limit in ``outputs``. With ``mock``,
+    the provider is the mock one: its seats are recorded as ``mock:<id>`` and
+    never rated. A game played from a schedule passes its ``world_id`` and
+    ``arm``, which the record keeps; a game of an arm that is never rated is
+    not. The record also keeps the run's ``reasoning`` setting, each model's
+    effective one ("off", or "minimal" for a model that fell back to it under
+    "least") and each model's output limit."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -617,9 +741,12 @@ def play_live(
             modes=book,
             budget=budget,
             log=log,
-            max_tokens=max_tokens,
+            max_tokens=outputs[model].max_tokens if outputs else max_tokens,
+            reserve_tokens=outputs[model].reserve if outputs else None,
             slots=slots[model],
             mock=mock,
+            waits=waits,
+            sleep=sleep,
             reasoning=thinking,
         )
         for seat, model in seat_models.items()
@@ -640,6 +767,13 @@ def play_live(
     for model, mode in sorted(book.modes.items()):
         log.write("mode", model=model, mode=mode)
     log.write("reasoning", setting=reasoning)
+    for model, limit in sorted((outputs or {}).items()):
+        log.write(
+            "output_limit",
+            model=model,
+            max_tokens=limit.max_tokens,
+            reserve=limit.reserve,
+        )
     try:
         referee.run()
     finally:
@@ -654,6 +788,14 @@ def play_live(
         castle,
         cast,
         played,
+        settings=settings(
+            thinking,
+            {
+                seat.model: seat
+                for seat in seated.values()
+                if isinstance(seat, ModelPlayer)
+            },
+        ),
         outcome=referee.outcome,
         rated=(
             referee.outcome == "finished"
@@ -673,7 +815,27 @@ def play_live(
     return LiveGame(record=stored, referee=referee, budget=budget, harness=log)
 
 
+def settings(
+    reasoning: ReasoningBook, players: Mapping[str, ModelPlayer]
+) -> RunSettings:
+    """How each model was asked: its effective reasoning setting ("minimal"
+    for one that fell back to it under "least") and its output limit."""
+    return RunSettings.model_validate(
+        {
+            "reasoning": reasoning.setting,
+            "models": {
+                model: {
+                    "reasoning": reasoning.for_model(model),
+                    "max_tokens": player.max_tokens,
+                }
+                for model, player in sorted(players.items())
+            },
+        }
+    )
+
+
 __all__ = [
+    "WAITS",
     "LiveGame",
     "LiveReferee",
     "ModelPlayer",

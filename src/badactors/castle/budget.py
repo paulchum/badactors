@@ -8,6 +8,14 @@ cleanly, marked ``stopped:budget`` and unrated, with a partial record that
 replays to the same point. When the reply comes back the reservation is
 settled at what it actually cost, from the usage the provider reports.
 
+**Output limits.** How many tokens a model may generate for one answer is its
+:class:`OutputLimit`: ``--max-output-tokens`` for every model, except that in a
+game where models think (any ``--reasoning`` but ``least``, ``off`` and
+``minimal``) a model that reasons gets room to, from the shipped table
+(``configs/outputs.json``), and never more than its endpoint will generate. A
+model that has been seen to generate past the ``max_tokens`` it was sent
+reserves what the table says it may really take.
+
 :func:`preflight` estimates a whole game before anything is spent, by playing
 it once with the seeded bot in every seat and rendering every question each
 seat would have been asked, through the same renderer the models read.
@@ -15,20 +23,26 @@ seat would have been asked, through the same renderer the models read.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import get_args
+
+from pydantic import Field
 
 from badactors.castle.bots import HeuristicBot
 from badactors.castle.cast import Cast
+from badactors.castle.configs import OUTPUTS
 from badactors.castle.contract_schema import compile_exit_schema, compile_schema
-from badactors.castle.contracts import CastleMap
+from badactors.castle.contracts import CastleMap, Contract
 from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
-from badactors.castle.play import run_game, start_game
+from badactors.castle.play import Reasoning, run_game, start_game
 from badactors.castle.prompt import Rendered, render, render_exit
 from badactors.castle.provider import ModelInfo, Usage
 from badactors.castle.rules import GameConfig
@@ -42,6 +56,113 @@ the prompt, which is the safe direction for a reservation."""
 def prompt_tokens(rendered: Rendered, schema_chars: int = 0) -> int:
     """A generous estimate of a prompt's tokens, schema included."""
     return math.ceil((len(rendered.text) + schema_chars) / CHARS_PER_TOKEN) + 16
+
+
+# ------------------------------------------------------------ output limits
+
+THINKLESS = frozenset({"least", "off", "minimal"})
+"""Reasoning settings under which no model needs room to think."""
+
+
+class ModelOutputs(Contract):
+    thinking: int | None = Field(default=None, ge=1)
+    """``max_tokens`` for this model when it thinks; the table's default if
+    unset."""
+    reserve: int | None = Field(default=None, ge=1)
+    """Tokens to reserve for each of its answers, for a model that generates
+    past the ``max_tokens`` it is sent."""
+    why: str = ""
+
+
+class OutputTable(Contract):
+    thinking: int = Field(ge=1)
+    """``max_tokens`` for a model that reasons, in a game where models think."""
+    models: dict[str, ModelOutputs] = Field(default_factory=dict)
+
+
+def load_outputs(path: str | Path = OUTPUTS) -> OutputTable:
+    return OutputTable.model_validate(json.loads(Path(path).read_text()))
+
+
+@dataclass(frozen=True)
+class OutputLimit:
+    max_tokens: int
+    """What the request asks for at most."""
+    reserve: int
+    """What each call reserves: at least ``max_tokens``."""
+
+
+def output_limits(
+    models: Mapping[str, ModelInfo],
+    *,
+    base: int,
+    reasoning: str,
+    table: OutputTable,
+) -> dict[str, OutputLimit]:
+    """Each model's output limit for a game at this reasoning setting."""
+    limits = {}
+    for model, info in models.items():
+        entry = table.models.get(model, ModelOutputs())
+        sent = base
+        if reasoning not in THINKLESS and info.reasons:
+            sent = max(base, entry.thinking or table.thinking)
+        if info.max_completion_tokens is not None:
+            sent = min(sent, info.max_completion_tokens)
+        limits[model] = OutputLimit(sent, max(sent, entry.reserve or 0))
+    return limits
+
+
+REASONING_CHOICES: tuple[Reasoning, ...] = get_args(Reasoning)
+
+
+def output_options(parser: argparse.ArgumentParser) -> None:
+    """The flags that set how much each model may generate, and how hard it
+    thinks: the same for every command that asks models."""
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=4096,
+        help=(
+            "The most one answer may generate; each call reserves this. Where "
+            "models think, a model that reasons gets the room --outputs gives it."
+        ),
+    )
+    parser.add_argument(
+        "--outputs",
+        default=str(OUTPUTS),
+        help="Per-model output limits for games where models think.",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=REASONING_CHOICES,
+        default="default",
+        help=(
+            "OpenRouter's reasoning setting for every model. default sends none; "
+            "least is off, or minimal where a model's reasoning is mandatory."
+        ),
+    )
+
+
+def resolve_outputs(
+    models: Mapping[str, ModelInfo],
+    *,
+    max_output_tokens: int,
+    reasoning: str,
+    outputs: str | Path = OUTPUTS,
+) -> dict[str, OutputLimit]:
+    """Each model's output limit, as every command that asks models resolves
+    it from :func:`output_options`."""
+    return output_limits(
+        models, base=max_output_tokens, reasoning=reasoning, table=load_outputs(outputs)
+    )
+
+
+def output_line(model: str, limit: OutputLimit) -> str:
+    """One model's output limit, as the commands print it."""
+    reserve = (
+        f", reserving {limit.reserve:,}" if limit.reserve > limit.max_tokens else ""
+    )
+    return f"Output limit: {model} {limit.max_tokens:,} tokens{reserve}."
 
 
 class BudgetExhausted(Exception):
@@ -184,7 +305,7 @@ def preflight(
     *,
     seed: int,
     config: GameConfig,
-    max_tokens: int,
+    outputs: Mapping[str, OutputLimit],
     answer_tokens: int = 400,
 ) -> Estimate:
     """Estimate a game's cost by playing it with the bot in every seat and
@@ -204,7 +325,7 @@ def preflight(
         kinds[kind] += 1
         prompt += tokens
         dollars += info.worst_case(tokens, answer_tokens)
-        worst += info.worst_case(tokens, max_tokens)
+        worst += info.worst_case(tokens, outputs[info.id].reserve)
 
     class Rehearsal:
         agent = "bot:heuristic"
@@ -238,12 +359,21 @@ def preflight(
 
 __all__ = [
     "CHARS_PER_TOKEN",
+    "REASONING_CHOICES",
     "Budget",
     "BudgetExhausted",
     "Estimate",
     "Limits",
+    "ModelOutputs",
+    "OutputLimit",
+    "OutputTable",
     "Reservation",
     "Spend",
+    "load_outputs",
+    "output_limits",
+    "output_line",
+    "output_options",
     "preflight",
     "prompt_tokens",
+    "resolve_outputs",
 ]

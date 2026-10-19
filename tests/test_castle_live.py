@@ -15,6 +15,7 @@ import pytest
 
 from badactors.bench.leaderboard import Finished, board
 from badactors.castle import configs, verify
+from badactors.castle.budget import load_outputs
 from badactors.castle.live import main
 from badactors.castle.play import is_mock, is_model, load_record, replay
 from badactors.castle.rules import GameConfig
@@ -57,13 +58,16 @@ def test_a_mock_game_runs_the_harness_end_to_end(
     out = capsys.readouterr().out
     assert out.startswith("Preflight")
     assert "Outcome: finished" in out
+    assert "Reasoning: least (off 10)." in out
     stored = load_record(save)
     assert stored.outcome == "finished"
+    assert stored.settings is not None and stored.settings.reasoning == "least"
+    assert set(stored.settings.models) == set(MODELS)
     again = replay(stored)
     assert len(again.world.ledger) == len(stored.ledger)
     harness = save.with_suffix(".harness.jsonl").read_text().splitlines()
     events = {json.loads(line)["event"] for line in harness}
-    assert {"mode", "call", "exchange", "prefetch", "spent"} <= events
+    assert {"mode", "call", "exchange", "prefetch", "spent", "output_limit"} <= events
     assert [
         json.loads(line)["setting"]
         for line in harness
@@ -121,14 +125,20 @@ def test_a_dry_run_estimates_and_spends_nothing(
     assert not save.exists()
 
 
-def _cache(tmp_path: Path, models: list[str], price: str = "0.000002") -> Path:
+def _cache(
+    tmp_path: Path,
+    models: list[str],
+    price: str = "0.000002",
+    supported: tuple[str, ...] = ("tools", "structured_outputs"),
+) -> Path:
     cache = tmp_path / "models.json"
     listing = {
         "data": [
             {
                 "id": model,
-                "supported_parameters": ["tools", "structured_outputs"],
+                "supported_parameters": list(supported),
                 "pricing": {"prompt": price, "completion": "0.00001"},
+                "top_provider": {"max_completion_tokens": 65_536},
             }
             for model in models
         ]
@@ -155,6 +165,37 @@ def test_an_estimate_over_budget_stops_before_any_call(
     with pytest.raises(SystemExit) as stopped:
         main(["--max-days", "2", *BUDGET, "--models-cache", str(cache)])
     assert "does not fit the budget" in str(stopped.value.code)
+
+
+@pytest.mark.parametrize(
+    ("reasoning", "thinking"), [("default", True), ("high", True), ("least", False)]
+)
+def test_a_dry_run_prints_each_models_output_limit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    reasoning: str,
+    thinking: bool,
+) -> None:
+    cache = _cache(tmp_path, MODELS, supported=("tools", "reasoning"))
+    main(
+        [
+            "--dry-run",
+            *BUDGET,
+            "--models-cache",
+            str(cache),
+            "--reasoning",
+            reasoning,
+        ]
+    )
+    out = capsys.readouterr().out
+    table = load_outputs()
+    for model in MODELS:
+        entry = table.models.get(model)
+        room = (entry.thinking if entry else None) or table.thinking
+        tokens = room if thinking else 4_096
+        assert f"Output limit: {model} {tokens:,} tokens" in out
+    grok = next(line for line in out.splitlines() if "x-ai/grok-4.7" in line)
+    assert grok.endswith("reserving 32,768.")
 
 
 def test_a_cast_model_openrouter_does_not_list_is_refused(

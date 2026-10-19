@@ -92,11 +92,11 @@ def test_a_record_from_before_the_arm_field_replays_and_hashes_as_it_did(
     tmp_path: Path, stored: GameRecord
 ) -> None:
     dumped = json.loads(stored.model_dump_json())
-    del dumped["arm"]
+    del dumped["arm"], dumped["settings"]
     old = tmp_path / "old.json"
     old.write_text(json.dumps(dumped))
     loaded = load_record(old)
-    assert loaded.arm is None and loaded == stored
+    assert loaded.arm is None and loaded.settings is None and loaded == stored
     assert replay(loaded).world.ledger == stored.ledger
     (kind, header), *_ = parts(loaded, [])
     assert kind == "game" and header == {

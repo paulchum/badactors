@@ -72,7 +72,10 @@ rooms, objects and records by the ids written here: "mara", "great_hall",
   you are), take, drop, use, wear, talk, whisper, wait, remember (keep one of
   your own records in your notebook; it takes no time), or a tool from your kit.
   You are asked for a new plan when something interrupts the old one.
-- Speech and whispers are at most 400 characters."""
+- Lengths count characters, and an answer over a cap is refused: speech,
+  whispers and writing at most 400; a diary at most 600; the reason for
+  stay_silent or pass at most 300; a plan's goal and a wait's reason at most
+  200."""
 """The answer contract every seat reads, whatever its role."""
 
 PLANNING: frozenset[str] = frozenset({"plan"})

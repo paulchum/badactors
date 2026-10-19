@@ -295,6 +295,12 @@ def summary(rated: Board) -> str:
         else "MODELS"
     )
     lines = [f"{title}: {len(rated.games)} games rated, {len(rated.refused)} refused."]
+    if rated.mixed_settings:
+        lines.append(
+            "  These ratings pool games played under different settings: "
+            + "; ".join(rated.differences())
+            + "."
+        )
     for row in rated.ranked():
         lines.append(
             f"  {row.label:34} deception {row.deception.mu:5.1f} "
@@ -302,6 +308,7 @@ def summary(rated: Board) -> str:
             f"{row.detection.mu:5.1f} [{row.detection.low:5.1f}, "
             f"{row.detection.high:5.1f}]  failed {row.reliability_rate:.1%}, "
             f"refused {row.refusal_rate:.1%}"
+            + (f"  asked {row.asked()}" if len(row.played) > 1 else "")
         )
     reasons: dict[str, int] = {}
     for item in rated.refused:

@@ -6,7 +6,8 @@ the game was played with, every recorded decision, and the ledger the game
 published. A model game adds one **exchange** per provider call the harness
 made: its question (seat, model id, kind, attempt), the provider, the mode, a
 SHA-256 of the request body and of the response body, the HTTP status of an
-error, and the reason class when the answer could not be used. Exchanges hold
+error, the reason class when the answer could not be used, and the wait before
+the call was sent again when OpenRouter's in-flight budget was full. Exchanges hold
 hashes, never words, keys or headers; the request body never holds a key, which
 travels only in a header.
 
@@ -115,6 +116,9 @@ class Exchange(Contract):
     """The HTTP status of an error; ``None`` for an answer, or no response."""
     failure: FailureReason | None = None
     """Why the harness could not use what came back, if it could not."""
+    wait: float | None = None
+    """Seconds the harness waited before sending this call again, when
+    OpenRouter's in-flight budget was full; ``None`` when it did not."""
 
 
 @dataclass
@@ -164,7 +168,9 @@ def exchanges(events: Iterable[Mapping[str, Any]]) -> list[Exchange]:
     """The harness log's exchanges, each with the reason the harness gave for
     not using its answer (its ``bad_answer`` event for the same question and
     attempt), or ``transport`` for a call that raised, unless the error was
-    the operator's."""
+    the operator's; and, for a call turned away by OpenRouter's in-flight
+    budget, how long the harness waited (its ``provider_wait``) before sending
+    it again."""
     listed = list(events)
 
     def key(ref: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -175,8 +181,13 @@ def exchanges(events: Iterable[Mapping[str, Any]]) -> list[Exchange]:
         for event in listed
         if event.get("event") == "bad_answer"
     }
-    out = []
+    out: list[Exchange] = []
+    last: dict[tuple[Any, ...], int] = {}
     for event in listed:
+        if event.get("event") == "provider_wait" and key(event["ref"]) in last:
+            index = last[key(event["ref"])]
+            out[index] = out[index].model_copy(update={"wait": event["seconds"]})
+            continue
         if event.get("event") != "exchange":
             continue
         ref = event["ref"]
@@ -197,6 +208,7 @@ def exchanges(events: Iterable[Mapping[str, Any]]) -> list[Exchange]:
                 failure=failure,
             )
         )
+        last[key(ref)] = len(out) - 1
     return out
 
 
@@ -224,16 +236,25 @@ class Bundle(Contract):
 def parts(record: GameRecord, calls: Sequence[Exchange]) -> list[tuple[PartKind, Any]]:
     """Everything the chain covers, in order: the game's header (all but its
     decisions and ledger), each decision, each ledger entry, each exchange. A
-    game played from no schedule has no arm, and its header leaves the field
-    out, so it hashes as records from before the field did."""
-    left_out = {"decisions", "ledger"} | ({"arm"} if record.arm is None else set())
+    game played from no schedule has no arm, and one no harness played has no
+    settings; its header leaves the field out, so it hashes as records from
+    before the field did."""
+    left_out = {"decisions", "ledger"}
+    left_out |= {"arm"} if record.arm is None else set()
+    left_out |= {"settings"} if record.settings is None else set()
     header = record.model_dump(mode="json", exclude=left_out)
     return [
         ("game", header),
         *(("decision", d.model_dump(mode="json")) for d in record.decisions),
         *(("entry", e.model_dump(mode="json")) for e in record.ledger),
-        *(("exchange", x.model_dump(mode="json")) for x in calls),
+        *(("exchange", _exchange(x)) for x in calls),
     ]
+
+
+def _exchange(call: Exchange) -> dict[str, Any]:
+    """An exchange as the chain hashes it. One with no wait leaves the field
+    out, so it hashes as exchanges from before the field did."""
+    return call.model_dump(mode="json", exclude={"wait"} if call.wait is None else None)
 
 
 def chain(record: GameRecord, calls: Sequence[Exchange]) -> list[str]:

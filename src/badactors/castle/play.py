@@ -26,12 +26,13 @@ As each phase opens, anything stolen since the last one is missed and reported.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, Self
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from badactors.castle.anonymity import Aliases, aliases, check_words, public_words
 from badactors.castle.cast import Cast
@@ -662,6 +663,46 @@ UNRATED_ARMS: frozenset[ArmKind] = frozenset({"single", "invader", "names_visibl
 by an operator error (a bad key, no credit). Only a finished game is whole."""
 
 
+Reasoning = Literal["default", "least", "off", "minimal", "low", "medium", "high"]
+"""A run's ``--reasoning`` setting. Each model then plays at its own effective
+setting: "least" is "off", or "minimal" for a model whose reasoning cannot be
+switched off; "default" leaves each model at its own default."""
+
+
+class ModelSettings(Contract):
+    """How one model was asked in a game."""
+
+    reasoning: Reasoning
+    """Its effective setting: never "least"."""
+    max_tokens: int = Field(ge=1)
+    """The most one answer was asked to generate."""
+
+    @field_validator("reasoning")
+    @classmethod
+    def effective(cls, value: Reasoning) -> Reasoning:
+        if value == "least":
+            raise ValueError('"least" is a run setting, not a model\'s')
+        return value
+
+
+class RunSettings(Contract):
+    """How a model game's seats were asked, so games played otherwise are never
+    compared without saying so."""
+
+    reasoning: Reasoning
+    models: dict[str, ModelSettings]
+
+    @property
+    def label(self) -> str:
+        """The run setting, with each effective setting it took, e.g.
+        ``least (minimal 6, off 4)``."""
+        taken = Counter(setting.reasoning for setting in self.models.values())
+        if set(taken) == {self.reasoning}:
+            return self.reasoning
+        shown = ", ".join(f"{name} {count}" for name, count in sorted(taken.items()))
+        return f"{self.reasoning} ({shown})"
+
+
 class GameRecord(Contract):
     """Everything needed to replay a game exactly, and the ledger it produced.
 
@@ -686,6 +727,10 @@ class GameRecord(Contract):
     arm: ArmKind | None = None
     """The arm of the benchmark schedule this game was played from; ``None``
     for a game played from no schedule, and for records older than the field."""
+    settings: RunSettings | None = None
+    """The reasoning setting and output limit each cast model was asked with;
+    ``None`` for a game no harness played, and for records older than the
+    field."""
 
     @model_validator(mode="after")
     def every_seat_says_who_played_it(self) -> Self:
@@ -748,6 +793,7 @@ def record(
     outcome: Outcome = "finished",
     rated: bool = False,
     arm: ArmKind | None = None,
+    settings: RunSettings | None = None,
 ) -> GameRecord:
     game = played.game
     return GameRecord(
@@ -766,6 +812,7 @@ def record(
         outcome=outcome,
         rated=rated,
         arm=arm,
+        settings=settings,
     )
 
 
@@ -868,13 +915,16 @@ __all__ = [
     "FailureReason",
     "GameRecord",
     "LoggedDecision",
+    "ModelSettings",
     "Outcome",
     "Played",
     "Player",
+    "Reasoning",
     "Referee",
     "ReplayDiverged",
     "ReplayReferee",
     "ReplayStopped",
+    "RunSettings",
     "TurnFailure",
     "agent_of",
     "defused",
