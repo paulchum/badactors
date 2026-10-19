@@ -74,7 +74,7 @@ export function Scrubber({
           {moment ? (
             <div
               aria-hidden
-              className="pointer-events-none absolute top-1/2 h-2 -translate-y-1/2 rounded bg-candle/30"
+              className="pointer-events-none absolute top-1/2 h-2 -translate-y-1/2 rounded-sm bg-candle/30"
               style={{ left: at(moment.first_tick), width: `max(6px, ${((moment.last_tick - moment.first_tick) / Math.max(last, 1)) * 100}%)` }}
             />
           ) : null}
@@ -86,7 +86,7 @@ export function Scrubber({
             value={tick}
             onChange={(event) => onTick(Number(event.target.value))}
             aria-label="Tick"
-            className="relative w-full accent-[#f2c46d]"
+            className="relative w-full accent-candle"
           />
         </div>
       </div>

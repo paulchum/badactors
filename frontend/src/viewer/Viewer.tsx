@@ -178,7 +178,7 @@ export function Replay({
               ))}
             </div>
             <label className="inline-flex items-center gap-1.5 text-stone-300">
-              <input type="checkbox" checked={roles} onChange={(e) => setRoles(e.target.checked)} className="accent-[#e13d45]" />
+              <input type="checkbox" checked={roles} onChange={(e) => setRoles(e.target.checked)} className="accent-traitor" />
               Show roles
             </label>
           </div>
@@ -220,7 +220,7 @@ export function Replay({
                     <button
                       type="button"
                       onClick={() => setFocus(event.seq)}
-                      className={`w-full rounded px-2 py-1 text-left hover:bg-white/5 ${focus === event.seq ? "bg-candle/10 text-candle" : "text-stone-300"}`}
+                      className={`w-full rounded-sm px-2 py-1 text-left hover:bg-white/5 ${focus === event.seq ? "bg-candle/10 text-candle" : "text-stone-300"}`}
                     >
                       {eventText(event, style)}
                       {event.quote && event.actor ? <span className="text-stone-400"> “{naming.words(event.quote)}”</span> : null}

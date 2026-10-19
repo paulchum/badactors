@@ -254,7 +254,7 @@ class Busy:
         self.sent: list[CallRef] = []
 
     async def complete(self, call: ProviderCall) -> Reply:
-        if call.ref.key == f"{SEAT}/0/1":
+        if (call.ref.seat, call.ref.ordinal) == (SEAT, 0):
             self.sent.append(call.ref)
             if len(self.sent) <= self.times:
                 return replay_fixture(fixture("in_flight_402"))
@@ -287,7 +287,8 @@ def test_an_in_flight_402_waits_and_sends_the_same_call_again() -> None:
     live, busy, pauses = busy_game(times=2)
     stored = live.record
     assert stored.outcome == "finished"
-    assert len(busy.sent) == 3 and len(set(busy.sent)) == 1
+    assert [ref.attempt for ref in busy.sent] == [1, 2, 3]
+    assert len({(ref.seat, ref.ordinal, ref.kind) for ref in busy.sent}) == 1
     assert pauses == [2.0, 4.0]
     waits = live.harness.of("provider_wait")
     assert [(w["ref"]["seat"], w["tries"], w["seconds"]) for w in waits] == [
@@ -299,10 +300,12 @@ def test_an_in_flight_402_waits_and_sends_the_same_call_again() -> None:
     assert len(first) == 1 and first[0].decision is not None
     assert first[0].reason is None and not first[0].refused
     assert not [e for e in stored.ledger if e.type == "turn_failed"]
-    assert live.budget.spent.requests == len(live.harness.of("call"))
+    sent = len(live.harness.of("call")) + len(live.harness.of("provider_wait"))
+    assert live.budget.spent.requests == sent and live.budget.held.requests == 0
     bundle = make_bundle(stored, live.harness.events)
     assert verify(bundle) == []
     mine = [call for call in bundle.exchanges if call.seat == SEAT][:3]
+    assert [c.attempt for c in mine] == [1, 2, 3]
     assert [(c.status, c.wait, c.failure) for c in mine] == [
         (402, 2.0, None),
         (402, 4.0, None),
@@ -320,7 +323,7 @@ def test_an_in_flight_budget_that_stays_full_aborts_after_the_last_wait() -> Non
     live, busy, pauses = busy_game(times=100)
     stored = live.record
     assert pauses == [2.0, 4.0, 8.0, 16.0, 30.0]
-    assert len(busy.sent) == 6
+    assert [ref.attempt for ref in busy.sent] == [1, 2, 3, 4, 5, 6]
     assert stored.outcome == "aborted:operator" and not stored.rated
     assert "in-flight budget was still full" in (live.referee.stopped_by or "")
     assert not [e for e in stored.ledger if e.type == "turn_failed"]

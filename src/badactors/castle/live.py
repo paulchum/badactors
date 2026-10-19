@@ -236,12 +236,7 @@ def main(argv: list[str] | None = None) -> None:
         openrouter = OpenRouterProvider(
             api_key=key,
             timeout=args.timeout,
-            reasoning=args.reasoning,
-            on_fallback=lambda model: harness.write(
-                "reasoning_fallback", model=model, setting="minimal"
-            ),
         )
-        harness.write("reasoning", setting=args.reasoning)
         closers.append(openrouter.aclose)
         provider = openrouter
     provider = HashingProvider(
@@ -260,6 +255,7 @@ def main(argv: list[str] | None = None) -> None:
         limits=limits,
         outputs=outputs,
         concurrency=args.concurrency,
+        reasoning=args.reasoning,
         harness=harness,
         check_leaks=not args.no_leak_check,
         concurrent=not args.sequential,
@@ -267,7 +263,6 @@ def main(argv: list[str] | None = None) -> None:
         mock=args.mock,
         world_id=seating.world_id if seating is not None else "castle-game",
         arm=seating.arm if seating is not None else None,
-        reasoning=args.reasoning,
     )
     save_record(live.record, save)
     bundle = make_bundle(live.record, live.harness.events)

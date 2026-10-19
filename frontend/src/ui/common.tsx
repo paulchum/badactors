@@ -22,9 +22,9 @@ export function BotBanner({ compact = false }: { compact?: boolean }) {
   return (
     <div
       role="note"
-      className="flex items-center gap-2 border-y border-amber-500/30 bg-amber-950/70 px-4 py-1.5 text-xs text-amber-100 backdrop-blur"
+      className="flex items-center gap-2 border-y border-amber-500/30 bg-amber-950/70 px-4 py-1.5 text-xs text-amber-100 backdrop-blur-sm"
     >
-      <span className="rounded bg-amber-400 px-1.5 py-0.5 font-black uppercase tracking-wider text-amber-950">Bots</span>
+      <span className="rounded-sm bg-amber-400 px-1.5 py-0.5 font-black uppercase tracking-wider text-amber-950">Bots</span>
       <span className="min-w-0">
         This one's bots. The real cast hasn't played yet.
         {compact ? null : <span className="hidden sm:inline"> Bot games never count in the standings.</span>}
@@ -55,7 +55,7 @@ const LIGHT_STYLE: Record<Lighting, string> = {
 export function LightBadge({ light }: { light: Lighting | null | undefined }) {
   if (!light) return null;
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${LIGHT_STYLE[light]}`}>
+    <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${LIGHT_STYLE[light]}`}>
       {light}
     </span>
   );

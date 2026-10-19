@@ -149,7 +149,10 @@ export function Stage({ game, summary, puzzle, number }: { game: Game; summary: 
           {step === "captions" ? (
             <div className="mt-auto flex items-center justify-between pt-8 text-sm text-stone-500">
               <span>Tap to go faster</span>
-              <button type="button" className="underline underline-offset-4" onClick={() => setStep("ask")}>
+              <button type="button" className="underline underline-offset-4" onClick={() => {
+                setShown(puzzle.captions.length);
+                setStep("ask");
+              }}>
                 Skip to the vote
               </button>
             </div>
@@ -264,11 +267,11 @@ export function Reveal({
                   <strong className="text-base text-stone-900">{naming.name(suspect.id)}</strong>
                   <span className="flex items-center gap-1.5">
                     {checked ? (
-                      <a href={receiptHref(summary.id, checked)} className="rounded bg-ink px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-stone-100">
+                      <a href={receiptHref(summary.id, checked)} className="rounded-sm bg-ink px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-stone-100">
                         {checked.stamp}
                       </a>
                     ) : null}
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white ${suspect.traitor ? "bg-traitor" : "bg-faithful"}`}>
+                    <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white ${suspect.traitor ? "bg-traitor" : "bg-faithful"}`}>
                       {suspect.traitor ? "traitor" : "faithful"}
                     </span>
                   </span>
@@ -358,7 +361,7 @@ export function Reveal({
               return (
                 <div key={suspect.id} className="flex items-center gap-2 text-sm">
                   <span className="w-20 truncate">{naming.name(suspect.id)}</span>
-                  <span className="h-3 flex-1 overflow-hidden rounded bg-white/10">
+                  <span className="h-3 flex-1 overflow-hidden rounded-sm bg-white/10">
                     <span className={`block h-full ${suspect.traitor ? "bg-traitor" : "bg-stone-400"}`} style={{ width: `${share}%` }} />
                   </span>
                   <span className="w-10 text-right font-mono text-xs">{share}%</span>

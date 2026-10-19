@@ -2,7 +2,9 @@
 
 ## Reporting something
 
-Please don't open a public issue for a security problem. Report it privately through GitHub instead: the **Security** tab of this repo, then **Report a vulnerability**. Only the maintainers see it.
+Please don't open a public issue for a security problem. Report it privately by emailing [paulchum1@gmail.com](mailto:paulchum1@gmail.com).
+
+When GitHub's private vulnerability reporting is enabled, you can also use the [private report form](https://github.com/paulchum/badactors/security/advisories/new): the **Security** tab of this repo, then **Report a vulnerability**.
 
 Tell us what you found, how to reproduce it, and what you think it lets someone do. We aim to answer within a week, and we'll keep you posted while we fix it and credit you when it's out, unless you'd rather we didn't.
 

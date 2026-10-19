@@ -41,20 +41,38 @@ def test_a_mock_game_runs_the_harness_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     save = tmp_path / "game.json"
-    main(["--mock", "--seed", "7", "--max-days", "2", *BUDGET, "--save", str(save)])
+    main(
+        [
+            "--mock",
+            "--seed",
+            "7",
+            "--max-days",
+            "2",
+            "--reasoning",
+            "least",
+            *BUDGET,
+            "--save",
+            str(save),
+        ]
+    )
     out = capsys.readouterr().out
     assert out.startswith("Preflight")
     assert "Outcome: finished" in out
-    assert "Reasoning: default." in out
+    assert "Reasoning: least (off 10)." in out
     stored = load_record(save)
     assert stored.outcome == "finished"
-    assert stored.settings is not None and stored.settings.reasoning == "default"
+    assert stored.settings is not None and stored.settings.reasoning == "least"
     assert set(stored.settings.models) == set(MODELS)
     again = replay(stored)
     assert len(again.world.ledger) == len(stored.ledger)
     harness = save.with_suffix(".harness.jsonl").read_text().splitlines()
     events = {json.loads(line)["event"] for line in harness}
     assert {"mode", "call", "exchange", "prefetch", "spent", "output_limit"} <= events
+    assert [
+        json.loads(line)["setting"]
+        for line in harness
+        if json.loads(line)["event"] == "reasoning"
+    ] == ["least"]
 
 
 def test_a_mock_game_is_marked_mock_and_no_leaderboard_takes_it(

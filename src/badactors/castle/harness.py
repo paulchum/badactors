@@ -2,9 +2,10 @@
 
 :class:`ModelPlayer` puts one question to one model: it renders the player's
 observation (``prompt``), compiles the request's schema (``contract_schema``),
-reserves the call's worst case (``budget``), and makes exactly one provider call
-in the model's current mode (``provider``). What comes back is read, never
-argued with:
+reserves each call's worst case (``budget``), and asks the provider in the model's
+current mode (``provider``). A mandatory-reasoning rejection under ``least`` may
+trigger a new, separately budgeted and receipted call with minimal reasoning.
+What the model answers is read, never argued with:
 
 * a provider's content filter, or a refusal in the model's own words, fails the
   turn at once as ``content_filter`` or ``refusal``. They are results;
@@ -35,10 +36,10 @@ would have written, whatever order the replies arrived in. Table speech,
 votes, doses, offers, nominations and interviews are asked one at a time.
 
 A 402 for OpenRouter's in-flight budget is no answer and nobody's fault: the
-same call is sent again after a wait, a few times with a growing pause, each
-wait logged as a ``provider_wait``. The model is not charged and its turn goes
-on; if the budget is still full after the last wait, the run stops as if the
-credit were gone.
+question is sent again after a wait, a few times with a growing pause, each
+wait logged as a ``provider_wait`` and each send its own budgeted, receipted
+attempt. The model is not charged and its turn goes on; if the budget is still
+full after the last wait, the run stops as if the credit were gone.
 
 When the budget cannot cover the next call the game stops there, marked
 ``stopped:budget``; a 401, 402 or 403 aborts it as ``aborted:operator``. Either
@@ -51,7 +52,7 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -96,7 +97,6 @@ from badactors.castle.play import (
     BadAnswer,
     Defused,
     GameRecord,
-    ModelSettings,
     Outcome,
     Played,
     Player,
@@ -110,6 +110,7 @@ from badactors.castle.play import (
 )
 from badactors.castle.prompt import Rendered, assert_render_clean, render, render_exit
 from badactors.castle.provider import (
+    REASONING,
     CallRef,
     Closer,
     HarnessLog,
@@ -121,6 +122,7 @@ from badactors.castle.provider import (
     ParameterRejected,
     Provider,
     ProviderCall,
+    ReasoningRequired,
     Reply,
     TransportError,
     Usage,
@@ -168,6 +170,31 @@ class Question:
 
 
 @dataclass
+class ReasoningBook:
+    """The run's reasoning policy, shared by every seat of each model."""
+
+    setting: str = "default"
+    minimal: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        if self.setting not in ("default", "least") and self.setting not in REASONING:
+            raise ValueError(f"unknown reasoning setting {self.setting!r}")
+
+    def for_model(self, model: str) -> str:
+        if self.setting != "least":
+            return self.setting
+        return "minimal" if model in self.minimal else "off"
+
+    def fallback(self, model: str, rejected: str) -> bool:
+        # Several off requests can be in flight when the first rejection arrives.
+        # Each may retry once, with its own reservation and minimal setting.
+        if self.setting != "least" or rejected != "off":
+            return False
+        self.minimal.add(model)
+        return True
+
+
+@dataclass
 class ModelPlayer:
     """One seat, played by one model through one provider."""
 
@@ -190,6 +217,8 @@ class ModelPlayer:
     """The provider is the mock one: the seeded bot answers for the model."""
     waits: Sequence[float] = WAITS
     sleep: Sleep = asyncio.sleep
+    reasoning: ReasoningBook = field(default_factory=ReasoningBook)
+    attempts: dict[int, int] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def agent(self) -> str:
@@ -231,86 +260,106 @@ class ModelPlayer:
     async def answer(
         self, question: Question, held: Reservation | None = None
     ) -> Decision:
-        """One provider call, read. Raises ``TurnFailure`` or ``BadAnswer``
+        """Ask one question, with a budgeted reasoning fallback if needed.
+        Raises ``TurnFailure`` or ``BadAnswer``
         for an answer that cannot be used, ``BudgetExhausted`` before a call
         that would not fit, and ``OperatorError`` for the run's own failures."""
         mode = self.modes.mode(self.model)
-        held = held if held is not None else self.reserve(question)
-        call = ProviderCall(
-            ref=question.ref,
-            messages=question.rendered.messages,
-            schema=question.sent(mode),
-            mode=mode,
-            max_tokens=self.max_tokens,
-            source=question.source,
-        )
-        try:
-            reply = await self._call(call)
-        except OperatorError as exc:
-            self.budget.release(held)
-            self.log.write("operator_error", ref=_ref(call.ref), status=exc.status)
-            raise
-        except ParameterRejected as exc:
-            self.budget.settle(held, self.info, Usage())
-            self.modes.rejected(self.model, mode, str(exc))
-            self._failed(call, "transport", str(exc))
-            raise TurnFailure(str(exc), "transport") from exc
-        except TransportError as exc:
-            known = Usage() if exc.status is not None else None
-            self.budget.settle(held, self.info, known)
-            self._failed(call, "transport", str(exc))
-            raise TurnFailure(str(exc), "transport") from exc
-        cost = self.budget.settle(held, self.info, reply.usage)
-        reserved = max(self.max_tokens, self.reserve_tokens or 0)
-        if reply.usage.completion_tokens > reserved:
-            self.log.write(
-                "over_reserve",
-                ref=_ref(call.ref),
-                completion_tokens=reply.usage.completion_tokens,
-                reserved=reserved,
+        waited = 0
+        while True:
+            held = held if held is not None else self.reserve(question)
+            ordinal = question.ref.ordinal
+            attempt = max(question.ref.attempt, self.attempts.get(ordinal, 0) + 1)
+            self.attempts[ordinal] = attempt
+            call = ProviderCall(
+                ref=replace(question.ref, attempt=attempt),
+                messages=question.rendered.messages,
+                schema=question.sent(mode),
+                mode=mode,
+                max_tokens=self.max_tokens,
+                source=question.source,
+                reasoning=self.reasoning.for_model(self.model),
             )
-        self.log.write(
-            "call",
-            ref=_ref(call.ref),
-            mode=mode,
-            finish_reason=reply.finish_reason,
-            prompt_tokens=reply.usage.prompt_tokens,
-            completion_tokens=reply.usage.completion_tokens,
-            dollars=cost.dollars,
-        )
-        try:
-            return self.read(reply, question, mode)
-        except (TurnFailure, BadAnswer) as exc:
-            self._failed(call, exc.reason, str(exc))
-            raise
-
-    async def _call(self, call: ProviderCall) -> Reply:
-        """The call, sent again after a wait while OpenRouter's in-flight budget
-        is full. Waiting holds no slot and charges nothing."""
-        for tries, pause in enumerate(self.waits, start=1):
             try:
-                return await self._send(call)
+                reply = await self._call(call)
             except InFlightFull as exc:
+                if waited == len(self.waits):
+                    self.budget.release(held)
+                    self.log.write(
+                        "operator_error", ref=_ref(call.ref), status=exc.status
+                    )
+                    raise OperatorError(
+                        "OpenRouter's in-flight budget was still full after "
+                        f"{waited} waits: {exc}",
+                        status=exc.status,
+                        body=exc.body,
+                    ) from exc
+                self.budget.settle(held, self.info, Usage())
+                pause = self.waits[waited]
+                waited += 1
                 self.log.write(
                     "provider_wait",
                     ref=_ref(call.ref),
                     status=exc.status,
-                    tries=tries,
+                    tries=waited,
                     seconds=pause,
                     retry_after=exc.retry_after,
                 )
-            await self.sleep(pause)
-        try:
-            return await self._send(call)
-        except InFlightFull as exc:
-            raise OperatorError(
-                f"OpenRouter's in-flight budget was still full after {len(self.waits)} "
-                f"waits: {exc}",
-                status=exc.status,
-                body=exc.body,
-            ) from exc
+                await self.sleep(pause)
+                held = None
+                continue
+            except ReasoningRequired as exc:
+                self.budget.settle(held, self.info, Usage())
+                if not self.reasoning.fallback(self.model, call.reasoning):
+                    self._failed(call, "transport", str(exc))
+                    raise TurnFailure(str(exc), "transport") from exc
+                self.log.write(
+                    "reasoning_fallback",
+                    ref=_ref(call.ref),
+                    model=self.model,
+                    setting="minimal",
+                )
+                held = None
+                continue
+            except OperatorError as exc:
+                self.budget.release(held)
+                self.log.write("operator_error", ref=_ref(call.ref), status=exc.status)
+                raise
+            except ParameterRejected as exc:
+                self.budget.settle(held, self.info, Usage())
+                self.modes.rejected(self.model, mode, str(exc))
+                self._failed(call, "transport", str(exc))
+                raise TurnFailure(str(exc), "transport") from exc
+            except TransportError as exc:
+                known = Usage() if exc.status is not None else None
+                self.budget.settle(held, self.info, known)
+                self._failed(call, "transport", str(exc))
+                raise TurnFailure(str(exc), "transport") from exc
+            cost = self.budget.settle(held, self.info, reply.usage)
+            reserved = max(self.max_tokens, self.reserve_tokens or 0)
+            if reply.usage.completion_tokens > reserved:
+                self.log.write(
+                    "over_reserve",
+                    ref=_ref(call.ref),
+                    completion_tokens=reply.usage.completion_tokens,
+                    reserved=reserved,
+                )
+            self.log.write(
+                "call",
+                ref=_ref(call.ref),
+                mode=mode,
+                finish_reason=reply.finish_reason,
+                prompt_tokens=reply.usage.prompt_tokens,
+                completion_tokens=reply.usage.completion_tokens,
+                dollars=cost.dollars,
+            )
+            try:
+                return self.read(reply, question, mode)
+            except (TurnFailure, BadAnswer) as exc:
+                self._failed(call, exc.reason, str(exc))
+                raise
 
-    async def _send(self, call: ProviderCall) -> Reply:
+    async def _call(self, call: ProviderCall) -> Reply:
         if self.slots is None:
             return await self.provider.complete(call)
         async with self.slots:
@@ -644,6 +693,7 @@ def play_live(
     concurrency: int = 4,
     harness: HarnessLog | None = None,
     modes: ModeBook | None = None,
+    reasoning: Reasoning = "default",
     scope: ContentScope | None = None,
     check_leaks: bool = True,
     concurrent: bool = True,
@@ -655,7 +705,6 @@ def play_live(
     arm: ArmKind | None = None,
     waits: Sequence[float] = WAITS,
     sleep: Sleep = asyncio.sleep,
-    reasoning: Reasoning = "default",
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
     the seats they name, and return its record. Each model generates at most
@@ -664,8 +713,8 @@ def play_live(
     never rated. A game played from a schedule passes its ``world_id`` and
     ``arm``, which the record keeps; a game of an arm that is never rated is
     not. The record also keeps the run's ``reasoning`` setting, each model's
-    effective one (a ``reasoning_fallback`` in the harness log moved it to
-    "minimal") and each model's output limit."""
+    effective one ("off", or "minimal" for a model that fell back to it under
+    "least") and each model's output limit."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -679,6 +728,7 @@ def play_live(
         )
     )
     budget = Budget(limits)
+    thinking = ReasoningBook(reasoning)
     slots = {
         model: asyncio.Semaphore(concurrency) for model in set(seat_models.values())
     }
@@ -697,6 +747,7 @@ def play_live(
             mock=mock,
             waits=waits,
             sleep=sleep,
+            reasoning=thinking,
         )
         for seat, model in seat_models.items()
     }
@@ -715,6 +766,7 @@ def play_live(
     )
     for model, mode in sorted(book.modes.items()):
         log.write("mode", model=model, mode=mode)
+    log.write("reasoning", setting=reasoning)
     for model, limit in sorted((outputs or {}).items()):
         log.write(
             "output_limit",
@@ -737,13 +789,12 @@ def play_live(
         cast,
         played,
         settings=settings(
-            reasoning,
+            thinking,
             {
                 seat.model: seat
                 for seat in seated.values()
                 if isinstance(seat, ModelPlayer)
             },
-            log,
         ),
         outcome=referee.outcome,
         rated=(
@@ -765,21 +816,21 @@ def play_live(
 
 
 def settings(
-    reasoning: Reasoning, players: Mapping[str, ModelPlayer], log: HarnessLog
+    reasoning: ReasoningBook, players: Mapping[str, ModelPlayer]
 ) -> RunSettings:
-    """How each model was asked: the run's setting, or "minimal" for a model
-    that fell back to it, and its output limit."""
-    fell = {event["model"] for event in log.of("reasoning_fallback")}
-    base: Reasoning = "off" if reasoning == "least" else reasoning
-    return RunSettings(
-        reasoning=reasoning,
-        models={
-            model: ModelSettings(
-                reasoning="minimal" if model in fell else base,
-                max_tokens=player.max_tokens,
-            )
-            for model, player in sorted(players.items())
-        },
+    """How each model was asked: its effective reasoning setting ("minimal"
+    for one that fell back to it under "least") and its output limit."""
+    return RunSettings.model_validate(
+        {
+            "reasoning": reasoning.setting,
+            "models": {
+                model: {
+                    "reasoning": reasoning.for_model(model),
+                    "max_tokens": player.max_tokens,
+                }
+                for model, player in sorted(players.items())
+            },
+        }
     )
 
 
@@ -789,5 +840,6 @@ __all__ = [
     "LiveReferee",
     "ModelPlayer",
     "Question",
+    "ReasoningBook",
     "play_live",
 ]

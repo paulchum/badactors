@@ -169,10 +169,11 @@ Search a room; inspect an object (reveals a partial custody chain, as a filtered
   3. `json_object` with the schema in the prompt (or the schema in the prompt alone, for a model that takes no `response_format`).
 
   Only request provider features the chosen mode needs. An HTTP 4xx for an unsupported parameter, or repeated schema-invalid output, downgrades that model's mode for the rest of the run, and the downgrade is logged. The provider never retries on its own: every call is one the harness chose, budgeted and logged.
+  - With `--reasoning least`, the harness starts with reasoning disabled. Only a 400 explicitly saying reasoning is mandatory permits a compatibility retry with minimal reasoning, retained for that model. It has a fresh budget reservation and a separate numbered HTTP attempt and receipt, hashing the actual reasoning setting sent. It does not downgrade the answer mode or consume the one corrective retry for a schema-invalid model answer. A failed minimal request follows the normal failure rules; a retry that cannot fit stops the run before it is sent.
 - **Failed turns.** A turn fails when no schema-valid action arrives after one corrective retry: a transport error, refusal, empty output, unparseable or invalid output.
   - A provider's content filter, a refusal in the model's own words and a transport error fail the turn at once: they are results, not mistakes to correct. An empty, unparseable or invalid answer gets the one retry, which names the exact error and restates every legal answer, passing and silence included, in the same words for every request. Nothing in it presses for any answer.
   - It's recorded as a visible `TurnFailed` event, which keeps its reason class: `transport`, `content_filter`, `refusal`, `empty`, `unparseable` or `invalid`.
-  - A 401, 402 or 403 is the operator's, not the model's: the run aborts, unrated, and no model is charged with a failure.
+  - A 401, 402 or 403 is the operator's, not the model's: the run aborts, unrated, and no model is charged with a failure. The exception is a 402 naming OpenRouter's `in_flight_budget_exhausted`: the question is sent again after a bounded backoff (2, 4, 8, 16 and 30 s), each send its own budgeted, numbered attempt and receipt, each wait logged as `provider_wait`; a budget still full after the last wait aborts the run.
   - In the world, the character hesitates and does nothing, and it is labeled as a failure everywhere; it's never presented as the model's choice.
   - `stay_silent` (§2) is not a failure.
 - **Channel integrity.**

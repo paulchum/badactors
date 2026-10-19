@@ -1,0 +1,3 @@
+# Historical KEY sentinel used only with httpx.MockTransport in provider tests.
+# Ignore this one finding; keep generic key detection enabled everywhere else.
+d8213dff8e0c9cfc33c3374e6f3d3ccc9d39385d:tests/test_castle_provider.py:generic-api-key:40

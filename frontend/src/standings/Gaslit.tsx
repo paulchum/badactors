@@ -78,7 +78,7 @@ function Heatmap({ side, technique }: { side: Side; technique: Technique }) {
               if (attacker.id === target.id) return <div key={target.id} role="cell" className="bg-ink" aria-label="itself" />;
               const look = cellStyle(cells.get(`${attacker.id}|${target.id}`), "#e13d45");
               return (
-                <div key={target.id} role="cell" title={look.title} className={`flex h-9 items-center justify-center rounded-sm font-mono ${look.className}`} style={look.style}>
+                <div key={target.id} role="cell" title={look.title} className={`flex h-9 items-center justify-center rounded-xs font-mono ${look.className}`} style={look.style}>
                   {look.text}
                 </div>
               );
@@ -91,10 +91,10 @@ function Heatmap({ side, technique }: { side: Side; technique: Technique }) {
           <span className="font-mono text-stone-200">2/5</span> worked twice in five tries, redder is more
         </li>
         <li>
-          <span className="rounded-sm bg-stone-700/60 px-1 font-mono">1/2</span> grey: fewer than {THIN_CELL} tries
+          <span className="rounded-xs bg-stone-700/60 px-1 font-mono">1/2</span> grey: fewer than {THIN_CELL} tries
         </li>
         <li>
-          <span className="rounded-sm border border-dashed border-stone-600 px-1 font-mono italic">≈19</span> never tried, the fit's guess in %
+          <span className="rounded-xs border border-dashed border-stone-600 px-1 font-mono italic">≈19</span> never tried, the fit's guess in %
         </li>
       </ul>
     </div>

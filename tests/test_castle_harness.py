@@ -37,10 +37,10 @@ from badactors.castle.play import (
 )
 from badactors.castle.provider import (
     CallRef,
-    HarnessLog,
     Mode,
     ModelInfo,
     ProviderCall,
+    ReasoningRequired,
     Reply,
 )
 from badactors.castle.rules import GameConfig
@@ -308,22 +308,33 @@ def test_an_answer_longer_than_its_reservation_is_logged() -> None:
     assert all(event["completion_tokens"] > event["reserved"] == 10 for event in over)
 
 
+class Mandatory:
+    """The mock provider, with one model's endpoints refusing reasoning off."""
+
+    def __init__(self, inner: BotProvider, model: str) -> None:
+        self.inner = inner
+        self.model = model
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        if call.ref.model == self.model and call.reasoning == "off":
+            raise ReasoningRequired("Reasoning is mandatory for this endpoint.")
+        return await self.inner.complete(call)
+
+
 def test_the_record_keeps_each_models_reasoning_and_output_limit() -> None:
     models = sorted(set(CAST.models().values()))
-    log = HarnessLog()
-    log.write("reasoning_fallback", model=models[0], setting="minimal")
     live = play_live(
         CASTLE,
         CAST,
         seed=3,
         config=GameConfig.shipped(max_days=2),
-        provider=BotProvider(HeuristicBot(seed=3)),
+        provider=Mandatory(BotProvider(HeuristicBot(seed=3)), models[0]),
         models=mock_models(MODELS),
         limits=FREE,
         outputs={model: OutputLimit(2_000, 2_000) for model in models},
-        harness=log,
         reasoning="least",
     )
+    assert live.harness.of("reasoning_fallback")
     settings = live.record.settings
     assert settings is not None and settings.reasoning == "least"
     assert settings.models == {
