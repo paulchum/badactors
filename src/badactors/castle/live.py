@@ -49,9 +49,15 @@ from pathlib import Path
 
 from badactors.castle.balance import load_balance
 from badactors.castle.bots import HeuristicBot
-from badactors.castle.budget import Limits, load_outputs, output_limits, preflight
+from badactors.castle.budget import (
+    Limits,
+    output_line,
+    output_options,
+    preflight,
+    resolve_outputs,
+)
 from badactors.castle.cast import Cast, load_cast_file
-from badactors.castle.configs import CAST, MAP, OUTPUTS
+from badactors.castle.configs import CAST, MAP
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mapfile import load_map
 from badactors.castle.mock_provider import BotProvider, mock_models
@@ -98,29 +104,7 @@ def parser() -> argparse.ArgumentParser:
     budget.add_argument("--max-requests", type=int)
     budget.add_argument("--max-tokens", type=int)
     budget.add_argument("--max-dollars", type=float)
-    parser.add_argument(
-        "--max-output-tokens",
-        type=int,
-        default=4096,
-        help=(
-            "The most one answer may generate; each call reserves this. Where "
-            "models think, a model that reasons gets the room --outputs gives it."
-        ),
-    )
-    parser.add_argument(
-        "--outputs",
-        default=str(OUTPUTS),
-        help="Per-model output limits for games where models think.",
-    )
-    parser.add_argument(
-        "--reasoning",
-        choices=("default", "least", "off", "minimal", "low", "medium", "high"),
-        default="default",
-        help=(
-            "OpenRouter's reasoning setting for every seat. default sends none; "
-            "least is off, or minimal where a model's reasoning is mandatory."
-        ),
-    )
+    output_options(parser)
     parser.add_argument(
         "--concurrency", type=int, default=4, help="Calls in flight per model."
     )
@@ -196,21 +180,18 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     models = _models(cast, args)
-    outputs = output_limits(
+    outputs = resolve_outputs(
         models,
-        base=args.max_output_tokens,
+        max_output_tokens=args.max_output_tokens,
         reasoning=args.reasoning,
-        table=load_outputs(args.outputs),
+        outputs=args.outputs,
     )
     estimate = preflight(
         castle, cast, models, seed=seed, config=config, outputs=outputs
     )
     print(estimate.summary())
     for model, limit in sorted(outputs.items()):
-        reserve = (
-            f", reserving {limit.reserve:,}" if limit.reserve > limit.max_tokens else ""
-        )
-        print(f"Output limit: {model} {limit.max_tokens:,} tokens{reserve}.")
+        print(output_line(model, limit))
     if args.dry_run:
         return
     if not estimate.fits(limits) and not args.allow_partial:

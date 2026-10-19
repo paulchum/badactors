@@ -23,12 +23,14 @@ seat would have been asked, through the same renderer the models read.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_args
 
 from pydantic import Field
 
@@ -40,7 +42,7 @@ from badactors.castle.contracts import CastleMap, Contract
 from badactors.castle.decisions import Decision, ExitAnswer
 from badactors.castle.interview import ExitObservation
 from badactors.castle.observe import GameObservation
-from badactors.castle.play import run_game, start_game
+from badactors.castle.play import Reasoning, run_game, start_game
 from badactors.castle.prompt import Rendered, render, render_exit
 from badactors.castle.provider import ModelInfo, Usage
 from badactors.castle.rules import GameConfig
@@ -108,6 +110,59 @@ def output_limits(
             sent = min(sent, info.max_completion_tokens)
         limits[model] = OutputLimit(sent, max(sent, entry.reserve or 0))
     return limits
+
+
+REASONING_CHOICES: tuple[Reasoning, ...] = get_args(Reasoning)
+
+
+def output_options(parser: argparse.ArgumentParser) -> None:
+    """The flags that set how much each model may generate, and how hard it
+    thinks: the same for every command that asks models."""
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=4096,
+        help=(
+            "The most one answer may generate; each call reserves this. Where "
+            "models think, a model that reasons gets the room --outputs gives it."
+        ),
+    )
+    parser.add_argument(
+        "--outputs",
+        default=str(OUTPUTS),
+        help="Per-model output limits for games where models think.",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=REASONING_CHOICES,
+        default="default",
+        help=(
+            "OpenRouter's reasoning setting for every model. default sends none; "
+            "least is off, or minimal where a model's reasoning is mandatory."
+        ),
+    )
+
+
+def resolve_outputs(
+    models: Mapping[str, ModelInfo],
+    *,
+    max_output_tokens: int,
+    reasoning: str,
+    outputs: str | Path = OUTPUTS,
+) -> dict[str, OutputLimit]:
+    """Each model's output limit, as every command that asks models resolves
+    it from :func:`output_options`."""
+    return output_limits(
+        models, base=max_output_tokens, reasoning=reasoning, table=load_outputs(outputs)
+    )
+
+
+def output_line(model: str, limit: OutputLimit) -> str:
+    """One model's output limit, as the commands print it."""
+    reserve = (
+        f", reserving {limit.reserve:,}" if limit.reserve > limit.max_tokens else ""
+    )
+    return f"Output limit: {model} {limit.max_tokens:,} tokens{reserve}."
 
 
 class BudgetExhausted(Exception):
@@ -304,6 +359,7 @@ def preflight(
 
 __all__ = [
     "CHARS_PER_TOKEN",
+    "REASONING_CHOICES",
     "Budget",
     "BudgetExhausted",
     "Estimate",
@@ -315,6 +371,9 @@ __all__ = [
     "Spend",
     "load_outputs",
     "output_limits",
+    "output_line",
+    "output_options",
     "preflight",
     "prompt_tokens",
+    "resolve_outputs",
 ]
