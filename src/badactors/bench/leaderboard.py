@@ -88,6 +88,10 @@ class Finished:
     """The dollars the harness says the game cost in all."""
 
 
+UNRECORDED = "unrecorded"
+"""The reasoning setting of a record that keeps none."""
+
+
 @dataclass(frozen=True)
 class Refusal:
     game: str
@@ -202,6 +206,9 @@ class Row:
     """Failed turns by reason class."""
     dollars: float = 0.0
     priced_games: int = 0
+    reasoning: Counter[str] = field(default_factory=Counter)
+    """Games by the reasoning setting this entrant played at, or
+    ``unrecorded`` for a record that keeps none."""
 
     @property
     def label(self) -> str:
@@ -245,6 +252,7 @@ class Row:
             "deception": self.deception.as_json(),
             "detection": self.detection.as_json(),
             "games": self.games,
+            "reasoning": dict(sorted(self.reasoning.items())),
             "traitor_games": self.traitor_games,
             "faithful_games": self.faithful_games,
             "traitor_win_rate": share(t["traitor_won"], self.traitor_games),
@@ -298,6 +306,14 @@ class Board:
     games: list[str] = field(default_factory=list)
     refused: list[Refusal] = field(default_factory=list)
     game_dollars: dict[str, float] = field(default_factory=dict)
+    reasoning: Counter[str] = field(default_factory=Counter)
+    """Rated games by their run's reasoning setting (``unrecorded`` for a
+    record that keeps none). More than one means the ratings pool games played
+    under different settings, and the board says so."""
+
+    @property
+    def mixed_reasoning(self) -> bool:
+        return len(self.reasoning) > 1
 
     def ranked(self) -> list[Row]:
         """Best conservative estimate first, deception and detection averaged."""
@@ -320,6 +336,8 @@ class Board:
             if self.reference_bots
             else "Models",
             "games": len(self.games),
+            "reasoning": dict(sorted(self.reasoning.items())),
+            "mixed_reasoning": self.mixed_reasoning,
             "rows": [row.as_json() for row in self.ranked()],
             "refused": [
                 {"game": item.game, "reason": item.reason} for item in self.refused
@@ -349,6 +367,8 @@ def board(
             out.refused.append(Refusal(finished.id, why))
             continue
         out.games.append(finished.id)
+        settings = finished.record.settings
+        out.reasoning[settings.reasoning if settings else UNRECORDED] += 1
         _rate_one(finished, out, deception, detection, metrics, reference=reference)
     for key, row in out.rows.items():
         row.deception = _interval(deception[key])
@@ -409,6 +429,8 @@ def _tally(
     for key, seats in by_entrant.items():
         row = out.rows.setdefault(key, Row(entrant=key, reference_bot=reference))
         row.games += 1
+        played = record.settings.models.get(key) if record.settings else None
+        row.reasoning[played.reasoning if played else UNRECORDED] += 1
         row.traitor_games += any(traitor[seat] for seat in seats)
         row.faithful_games += any(not traitor[seat] for seat in seats)
         for seat in seats:

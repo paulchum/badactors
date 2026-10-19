@@ -13,6 +13,7 @@ import random
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -25,9 +26,25 @@ from badactors.castle.harness import LiveGame, _unquoted, play_live
 from badactors.castle.interview import ExitObservation
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.observe import GameObservation
-from badactors.castle.play import Played, is_model, replay, run_game, start_game
-from badactors.castle.provider import CallRef, Mode, ModelInfo, ProviderCall, Reply
+from badactors.castle.play import (
+    GameRecord,
+    ModelSettings,
+    Played,
+    is_model,
+    replay,
+    run_game,
+    start_game,
+)
+from badactors.castle.provider import (
+    CallRef,
+    HarnessLog,
+    Mode,
+    ModelInfo,
+    ProviderCall,
+    Reply,
+)
 from badactors.castle.rules import GameConfig
+from badactors.castle.verify import make_bundle, parts, verify
 from castle_scenes import CAST, CASTLE, MODELS
 
 FREE = Limits(100_000, 10**10, 1_000.0)
@@ -289,3 +306,43 @@ def test_an_answer_longer_than_its_reservation_is_logged() -> None:
     over = live.harness.of("over_reserve")
     assert over and len(over) == len(live.harness.of("call"))
     assert all(event["completion_tokens"] > event["reserved"] == 10 for event in over)
+
+
+def test_the_record_keeps_each_models_reasoning_and_output_limit() -> None:
+    models = sorted(set(CAST.models().values()))
+    log = HarnessLog()
+    log.write("reasoning_fallback", model=models[0], setting="minimal")
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=BotProvider(HeuristicBot(seed=3)),
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs={model: OutputLimit(2_000, 2_000) for model in models},
+        harness=log,
+        reasoning="least",
+    )
+    settings = live.record.settings
+    assert settings is not None and settings.reasoning == "least"
+    assert settings.models == {
+        model: ModelSettings(
+            reasoning="minimal" if model == models[0] else "off", max_tokens=2_000
+        )
+        for model in models
+    }
+    assert settings.label == f"least (minimal 1, off {len(models) - 1})"
+    stored = GameRecord.model_validate_json(live.record.model_dump_json())
+    assert stored.settings == settings
+    bundle = make_bundle(live.record, live.harness.events)
+    assert verify(bundle) == []
+    header = parts(live.record, bundle.exchanges)[0][1]
+    assert header["settings"]["models"][models[0]]["reasoning"] == "minimal"
+    unset = live.record.model_copy(update={"settings": None})
+    assert "settings" not in parts(unset, [])[0][1]
+
+
+def test_least_is_a_run_setting_never_a_models() -> None:
+    with pytest.raises(ValueError, match="run setting"):
+        ModelSettings(reasoning="least", max_tokens=1)

@@ -267,6 +267,7 @@ def main(argv: list[str] | None = None) -> None:
         mock=args.mock,
         world_id=seating.world_id if seating is not None else "castle-game",
         arm=seating.arm if seating is not None else None,
+        reasoning=args.reasoning,
     )
     save_record(live.record, save)
     bundle = make_bundle(live.record, live.harness.events)
@@ -329,6 +330,7 @@ def report(live: LiveGame, save: Path, bundle: Bundle) -> str:
     spent = live.budget.spent
     lines = [
         *([f"Arm: {stored.arm}, {stored.world_id}."] if stored.arm else []),
+        *([f"Reasoning: {stored.settings.label}."] if stored.settings else []),
         f"Outcome: {stored.outcome}"
         + (f" ({live.referee.stopped_by})" if live.referee.stopped_by else "")
         + (f"; winner: {stored.winner}" if stored.winner else ""),

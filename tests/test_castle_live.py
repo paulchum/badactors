@@ -45,13 +45,16 @@ def test_a_mock_game_runs_the_harness_end_to_end(
     out = capsys.readouterr().out
     assert out.startswith("Preflight")
     assert "Outcome: finished" in out
+    assert "Reasoning: default." in out
     stored = load_record(save)
     assert stored.outcome == "finished"
+    assert stored.settings is not None and stored.settings.reasoning == "default"
+    assert set(stored.settings.models) == set(MODELS)
     again = replay(stored)
     assert len(again.world.ledger) == len(stored.ledger)
     harness = save.with_suffix(".harness.jsonl").read_text().splitlines()
     events = {json.loads(line)["event"] for line in harness}
-    assert {"mode", "call", "exchange", "prefetch", "spent"} <= events
+    assert {"mode", "call", "exchange", "prefetch", "spent", "output_limit"} <= events
 
 
 def test_a_mock_game_is_marked_mock_and_no_leaderboard_takes_it(

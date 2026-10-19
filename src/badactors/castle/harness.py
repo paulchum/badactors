@@ -96,10 +96,13 @@ from badactors.castle.play import (
     BadAnswer,
     Defused,
     GameRecord,
+    ModelSettings,
     Outcome,
     Played,
     Player,
+    Reasoning,
     Referee,
+    RunSettings,
     TurnFailure,
     plan_request,
     record,
@@ -652,6 +655,7 @@ def play_live(
     arm: ArmKind | None = None,
     waits: Sequence[float] = WAITS,
     sleep: Sleep = asyncio.sleep,
+    reasoning: Reasoning = "default",
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
     the seats they name, and return its record. Each model generates at most
@@ -659,7 +663,9 @@ def play_live(
     the provider is the mock one: its seats are recorded as ``mock:<id>`` and
     never rated. A game played from a schedule passes its ``world_id`` and
     ``arm``, which the record keeps; a game of an arm that is never rated is
-    not."""
+    not. The record also keeps the run's ``reasoning`` setting, each model's
+    effective one (a ``reasoning_fallback`` in the harness log moved it to
+    "minimal") and each model's output limit."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -730,6 +736,15 @@ def play_live(
         castle,
         cast,
         played,
+        settings=settings(
+            reasoning,
+            {
+                seat.model: seat
+                for seat in seated.values()
+                if isinstance(seat, ModelPlayer)
+            },
+            log,
+        ),
         outcome=referee.outcome,
         rated=(
             referee.outcome == "finished"
@@ -747,6 +762,25 @@ def play_live(
         outcome=referee.outcome,
     )
     return LiveGame(record=stored, referee=referee, budget=budget, harness=log)
+
+
+def settings(
+    reasoning: Reasoning, players: Mapping[str, ModelPlayer], log: HarnessLog
+) -> RunSettings:
+    """How each model was asked: the run's setting, or "minimal" for a model
+    that fell back to it, and its output limit."""
+    fell = {event["model"] for event in log.of("reasoning_fallback")}
+    base: Reasoning = "off" if reasoning == "least" else reasoning
+    return RunSettings(
+        reasoning=reasoning,
+        models={
+            model: ModelSettings(
+                reasoning="minimal" if model in fell else base,
+                max_tokens=player.max_tokens,
+            )
+            for model, player in sorted(players.items())
+        },
+    )
 
 
 __all__ = [

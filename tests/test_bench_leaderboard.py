@@ -9,9 +9,11 @@ from dataclasses import dataclass, field
 import pytest
 from pydantic import ValidationError
 
+from badactors.bench.cli import summary
 from badactors.bench.dryrun import ReferenceBot, play_schedule, play_seating, profiles
 from badactors.bench.leaderboard import (
     ARM_REFUSALS,
+    UNRECORDED,
     Finished,
     MixedBoards,
     board,
@@ -35,6 +37,9 @@ from badactors.castle.play import (
     RELIABILITY_GATE,
     UNRATED_ARMS,
     GameRecord,
+    ModelSettings,
+    Reasoning,
+    RunSettings,
     TurnFailure,
     record,
     run_game,
@@ -415,3 +420,44 @@ def test_a_dry_run_seat_says_which_profile_played_it() -> None:
     levels = profiles(5, seed=3)
     assert sorted(levels.values()) == [0.1, 0.275, 0.45, 0.625, 0.8]
     assert profiles(5, seed=3) == levels != profiles(5, seed=4)
+
+
+def _played_at(game: Finished, reasoning: Reasoning, effective: Reasoning) -> Finished:
+    models = set(game.record.cast.models().values())
+    settings = RunSettings(
+        reasoning=reasoning,
+        models={
+            model: ModelSettings(reasoning=effective, max_tokens=4_096)
+            for model in models
+        },
+    )
+    return Finished(
+        game.id, game.record.model_copy(update={"settings": settings}), game.game
+    )
+
+
+def test_a_board_says_which_reasoning_settings_its_games_were_played_under(
+    model_games: list[Finished],
+) -> None:
+    one, two = model_games[:2]
+    same = board([_played_at(one, "least", "off"), _played_at(two, "least", "off")])
+    assert same.reasoning == {"least": 2} and not same.mixed_reasoning
+    assert all(row.reasoning == {"off": row.games} for row in same.rows.values())
+    mixed = board(
+        [_played_at(one, "least", "off"), _played_at(two, "default", "default")]
+    )
+    shown = mixed.as_json()
+    assert shown["mixed_reasoning"] is True
+    assert shown["reasoning"] == {"default": 1, "least": 1}
+    assert any(len(row["reasoning"]) == 2 for row in shown["rows"])
+    old = board([one])
+    assert old.reasoning == {UNRECORDED: 1}
+    assert (
+        summary(mixed)
+        .splitlines()[1]
+        .startswith(
+            "  These ratings pool games played under different reasoning settings: "
+            "default 1, least 1"
+        )
+    )
+    assert "pool games" not in summary(same)
