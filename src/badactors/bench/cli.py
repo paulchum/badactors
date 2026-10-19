@@ -41,7 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -295,10 +295,10 @@ def summary(rated: Board) -> str:
         else "MODELS"
     )
     lines = [f"{title}: {len(rated.games)} games rated, {len(rated.refused)} refused."]
-    if rated.mixed_reasoning:
+    if rated.mixed_settings:
         lines.append(
-            "  These ratings pool games played under different reasoning settings: "
-            + _counts(rated.reasoning)
+            "  These ratings pool games played under different settings: "
+            + "; ".join(rated.differences())
             + "."
         )
     for row in rated.ranked():
@@ -308,11 +308,7 @@ def summary(rated: Board) -> str:
             f"{row.detection.mu:5.1f} [{row.detection.low:5.1f}, "
             f"{row.detection.high:5.1f}]  failed {row.reliability_rate:.1%}, "
             f"refused {row.refusal_rate:.1%}"
-            + (
-                f"  reasoning {_counts(row.reasoning)}"
-                if len(row.reasoning) > 1
-                else ""
-            )
+            + (f"  asked {row.asked()}" if len(row.played) > 1 else "")
         )
     reasons: dict[str, int] = {}
     for item in rated.refused:
@@ -320,10 +316,6 @@ def summary(rated: Board) -> str:
     for reason, count in sorted(reasons.items()):
         lines.append(f"  refused {count}: {reason}")
     return "\n".join(lines)
-
-
-def _counts(counts: Mapping[str, int]) -> str:
-    return ", ".join(f"{name} {count}" for name, count in sorted(counts.items()))
 
 
 def gate(models: Sequence[str], results: Path) -> list[str]:

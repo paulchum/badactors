@@ -422,18 +422,29 @@ def test_a_dry_run_seat_says_which_profile_played_it() -> None:
     assert profiles(5, seed=3) == levels != profiles(5, seed=4)
 
 
-def _played_at(game: Finished, reasoning: Reasoning, effective: Reasoning) -> Finished:
+def _played_at(
+    game: Finished,
+    reasoning: Reasoning,
+    effective: Reasoning,
+    tokens: int = 4_096,
+    **only: int,
+) -> Finished:
+    """The game, recorded as played at ``reasoning``: every model at
+    ``effective`` and ``tokens``, except the ones ``only`` names (by model id,
+    with ``/`` as ``__``) at theirs."""
     models = set(game.record.cast.models().values())
     settings = RunSettings(
         reasoning=reasoning,
         models={
-            model: ModelSettings(reasoning=effective, max_tokens=4_096)
+            model: ModelSettings(
+                reasoning=effective,
+                max_tokens=only.get(model.replace("/", "__"), tokens),
+            )
             for model in models
         },
     )
-    return Finished(
-        game.id, game.record.model_copy(update={"settings": settings}), game.game
-    )
+    stored = game.record.model_copy(update={"settings": settings})
+    return Finished(game.id, stored, game.game)
 
 
 def test_a_board_says_which_reasoning_settings_its_games_were_played_under(
@@ -441,23 +452,56 @@ def test_a_board_says_which_reasoning_settings_its_games_were_played_under(
 ) -> None:
     one, two = model_games[:2]
     same = board([_played_at(one, "least", "off"), _played_at(two, "least", "off")])
-    assert same.reasoning == {"least": 2} and not same.mixed_reasoning
-    assert all(row.reasoning == {"off": row.games} for row in same.rows.values())
+    assert not same.mixed_settings and same.differences() == []
+    assert all(row.played == {("off", 4_096): row.games} for row in same.rows.values())
+    assert "pool games" not in summary(same)
+
     mixed = board(
         [_played_at(one, "least", "off"), _played_at(two, "default", "default")]
     )
     shown = mixed.as_json()
-    assert shown["mixed_reasoning"] is True
-    assert shown["reasoning"] == {"default": 1, "least": 1}
-    assert any(len(row["reasoning"]) == 2 for row in shown["rows"])
-    old = board([one])
-    assert old.reasoning == {UNRECORDED: 1}
+    assert shown["mixed_settings"] is True
+    assert shown["differences"][0] == "reasoning default 1, least 1"
+    assert any(len(row["settings"]) == 2 for row in shown["rows"])
     assert (
         summary(mixed)
         .splitlines()[1]
         .startswith(
-            "  These ratings pool games played under different reasoning settings: "
-            "default 1, least 1"
+            "  These ratings pool games played under different settings: "
+            "reasoning default 1, least 1; "
         )
     )
-    assert "pool games" not in summary(same)
+
+    old = board([one])
+    assert old.settings == {(UNRECORDED, ()): 1}
+
+
+def test_a_board_warns_when_games_share_a_reasoning_setting_but_not_limits(
+    model_games: list[Finished],
+) -> None:
+    one, two = model_games[:2]
+    model = sorted(
+        set(one.record.cast.models().values()) & set(two.record.cast.models().values())
+    )[0]
+    roomy = {model.replace("/", "__"): 32_768}
+    rated = board(
+        [
+            _played_at(one, "default", "default"),
+            _played_at(two, "default", "default", **roomy),
+        ]
+    )
+    assert len(rated.settings) == 2 and rated.mixed_settings
+    assert rated.differences() == [
+        f"{model} default at 32,768 tokens 1, default at 4,096 tokens 1"
+    ]
+    assert rated.as_json()["mixed_settings"] is True
+    row = rated.rows[model]
+    assert row.played == {("default", 4_096): 1, ("default", 32_768): 1}
+    printed = summary(rated)
+    assert "pool games played under different settings" in printed
+    assert f"{model} default at 32,768 tokens 1" in printed
+    assert "asked default at 32,768 tokens 1, default at 4,096 tokens 1" in printed
+    alike = board(
+        [_played_at(one, "default", "default"), _played_at(two, "default", "default")]
+    )
+    assert not alike.mixed_settings

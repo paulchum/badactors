@@ -91,6 +91,35 @@ class Finished:
 UNRECORDED = "unrecorded"
 """The reasoning setting of a record that keeps none."""
 
+type Played = tuple[str, int | None]
+"""How one model was asked in a game: its effective reasoning setting and the
+most one answer could generate (``unrecorded`` and ``None`` for a record that
+keeps neither)."""
+
+type SettingsKey = tuple[str, tuple[tuple[str, str, int | None], ...]]
+"""A game's run setting and how each of its models was asked: games with the
+same key were played alike."""
+
+
+def settings_key(record: GameRecord) -> SettingsKey:
+    if record.settings is None:
+        return (UNRECORDED, ())
+    return (
+        record.settings.reasoning,
+        tuple(
+            (model, played.reasoning, played.max_tokens)
+            for model, played in sorted(record.settings.models.items())
+        ),
+    )
+
+
+def _counted(counts: Mapping[str, int]) -> str:
+    return ", ".join(f"{name} {count}" for name, count in sorted(counts.items()))
+
+
+def _tokens(tokens: int | None) -> str:
+    return "unrecorded tokens" if tokens is None else f"{tokens:,} tokens"
+
 
 @dataclass(frozen=True)
 class Refusal:
@@ -206,9 +235,20 @@ class Row:
     """Failed turns by reason class."""
     dollars: float = 0.0
     priced_games: int = 0
-    reasoning: Counter[str] = field(default_factory=Counter)
-    """Games by the reasoning setting this entrant played at, or
-    ``unrecorded`` for a record that keeps none."""
+    played: Counter[Played] = field(default_factory=Counter)
+    """Games by how this entrant was asked: its effective reasoning setting
+    and output limit."""
+
+    def asked(self) -> str:
+        """How this entrant was asked, by games."""
+        return _counted(
+            Counter(
+                {
+                    f"{effective} at {_tokens(tokens)}": games
+                    for (effective, tokens), games in self.played.items()
+                }
+            )
+        )
 
     @property
     def label(self) -> str:
@@ -252,7 +292,10 @@ class Row:
             "deception": self.deception.as_json(),
             "detection": self.detection.as_json(),
             "games": self.games,
-            "reasoning": dict(sorted(self.reasoning.items())),
+            "settings": [
+                {"reasoning": reasoning, "max_tokens": tokens, "games": games}
+                for (reasoning, tokens), games in sorted(self.played.items(), key=str)
+            ],
             "traitor_games": self.traitor_games,
             "faithful_games": self.faithful_games,
             "traitor_win_rate": share(t["traitor_won"], self.traitor_games),
@@ -306,14 +349,37 @@ class Board:
     games: list[str] = field(default_factory=list)
     refused: list[Refusal] = field(default_factory=list)
     game_dollars: dict[str, float] = field(default_factory=dict)
-    reasoning: Counter[str] = field(default_factory=Counter)
-    """Rated games by their run's reasoning setting (``unrecorded`` for a
-    record that keeps none). More than one means the ratings pool games played
-    under different settings, and the board says so."""
+    settings: Counter[SettingsKey] = field(default_factory=Counter)
+    """Rated games by their run's reasoning setting and how each model was
+    asked (effective reasoning, output limit)."""
 
     @property
-    def mixed_reasoning(self) -> bool:
-        return len(self.reasoning) > 1
+    def mixed_settings(self) -> bool:
+        """Whether the ratings pool games played under different settings: a
+        different run setting, or a model asked differently. Games that seat
+        different models are not, by that alone."""
+        return bool(self.differences())
+
+    def differences(self) -> list[str]:
+        """What differs between the settings its games were played under: the
+        run's reasoning setting, and each model asked differently."""
+        out = []
+        runs: Counter[str] = Counter()
+        asked: dict[str, Counter[Played]] = defaultdict(Counter)
+        for (reasoning, models), games in self.settings.items():
+            runs[reasoning] += games
+            for model, effective, tokens in models:
+                asked[model][(effective, tokens)] += games
+        if len(runs) > 1:
+            out.append("reasoning " + _counted(runs))
+        for model, ways in sorted(asked.items()):
+            if len(ways) > 1:
+                shown = {
+                    f"{effective} at {_tokens(tokens)}": n
+                    for (effective, tokens), n in ways.items()
+                }
+                out.append(f"{model} {_counted(shown)}")
+        return out
 
     def ranked(self) -> list[Row]:
         """Best conservative estimate first, deception and detection averaged."""
@@ -336,8 +402,19 @@ class Board:
             if self.reference_bots
             else "Models",
             "games": len(self.games),
-            "reasoning": dict(sorted(self.reasoning.items())),
-            "mixed_reasoning": self.mixed_reasoning,
+            "settings": [
+                {
+                    "reasoning": reasoning,
+                    "models": {
+                        model: {"reasoning": effective, "max_tokens": tokens}
+                        for model, effective, tokens in models
+                    },
+                    "games": games,
+                }
+                for (reasoning, models), games in sorted(self.settings.items(), key=str)
+            ],
+            "mixed_settings": self.mixed_settings,
+            "differences": self.differences(),
             "rows": [row.as_json() for row in self.ranked()],
             "refused": [
                 {"game": item.game, "reason": item.reason} for item in self.refused
@@ -367,8 +444,7 @@ def board(
             out.refused.append(Refusal(finished.id, why))
             continue
         out.games.append(finished.id)
-        settings = finished.record.settings
-        out.reasoning[settings.reasoning if settings else UNRECORDED] += 1
+        out.settings[settings_key(finished.record)] += 1
         _rate_one(finished, out, deception, detection, metrics, reference=reference)
     for key, row in out.rows.items():
         row.deception = _interval(deception[key])
@@ -430,7 +506,9 @@ def _tally(
         row = out.rows.setdefault(key, Row(entrant=key, reference_bot=reference))
         row.games += 1
         played = record.settings.models.get(key) if record.settings else None
-        row.reasoning[played.reasoning if played else UNRECORDED] += 1
+        row.played[
+            (played.reasoning, played.max_tokens) if played else (UNRECORDED, None)
+        ] += 1
         row.traitor_games += any(traitor[seat] for seat in seats)
         row.faithful_games += any(not traitor[seat] for seat in seats)
         for seat in seats:
