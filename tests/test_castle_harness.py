@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 from typing import Any
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from badactors.castle.bots import HeuristicBot
-from badactors.castle.budget import Limits
+from badactors.castle.budget import Limits, OutputLimit
 from badactors.castle.contract_schema import ROOT
 from badactors.castle.contracts import Plan, Whisper
 from badactors.castle.decisions import Decision, PlanChoice
@@ -25,7 +26,7 @@ from badactors.castle.interview import ExitObservation
 from badactors.castle.mock_provider import BotProvider, mock_models
 from badactors.castle.observe import GameObservation
 from badactors.castle.play import Played, is_model, replay, run_game, start_game
-from badactors.castle.provider import CallRef, Mode, ModelInfo
+from badactors.castle.provider import CallRef, Mode, ModelInfo, ProviderCall, Reply
 from badactors.castle.rules import GameConfig
 from castle_scenes import CAST, CASTLE, MODELS
 
@@ -229,3 +230,62 @@ def test_only_a_whole_object_in_a_decision_string_is_unquoted() -> None:
         assert _unquoted({ROOT: refused}) is None
     assert _unquoted({ROOT: text, "extra": 1}) is None
     assert _unquoted({ROOT: whole}) is None
+
+
+class Sizes:
+    """The mock provider, noting what each call asks for at most, and
+    claiming ``extra`` more completion tokens than the bot used."""
+
+    def __init__(self, inner: BotProvider, extra: int = 0) -> None:
+        self.inner = inner
+        self.extra = extra
+        self.asked: dict[str, set[int]] = {}
+
+    async def complete(self, call: ProviderCall) -> Reply:
+        self.asked.setdefault(call.ref.model, set()).add(call.max_tokens)
+        reply = await self.inner.complete(call)
+        usage = replace(
+            reply.usage, completion_tokens=reply.usage.completion_tokens + self.extra
+        )
+        return replace(reply, usage=usage)
+
+
+def test_each_model_is_asked_for_its_own_output_limit_and_reserves_it() -> None:
+    models = sorted(set(CAST.models().values()))
+    outputs = {
+        model: OutputLimit(1_000 + index, 5_000) for index, model in enumerate(models)
+    }
+    sizes = Sizes(BotProvider(HeuristicBot(seed=3)))
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=sizes,
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs=outputs,
+    )
+    assert sizes.asked == {model: {outputs[model].max_tokens} for model in models}
+    assert {
+        event["model"]: (event["max_tokens"], event["reserve"])
+        for event in live.harness.of("output_limit")
+    } == {model: (limit.max_tokens, limit.reserve) for model, limit in outputs.items()}
+    assert not live.harness.of("over_reserve")
+
+
+def test_an_answer_longer_than_its_reservation_is_logged() -> None:
+    outputs = {model: OutputLimit(10, 10) for model in set(CAST.models().values())}
+    live = play_live(
+        CASTLE,
+        CAST,
+        seed=3,
+        config=GameConfig.shipped(max_days=2),
+        provider=Sizes(BotProvider(HeuristicBot(seed=3)), extra=11),
+        models=mock_models(MODELS),
+        limits=FREE,
+        outputs=outputs,
+    )
+    over = live.harness.of("over_reserve")
+    assert over and len(over) == len(live.harness.of("call"))
+    assert all(event["completion_tokens"] > event["reserved"] == 10 for event in over)

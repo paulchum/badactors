@@ -49,9 +49,9 @@ from pathlib import Path
 
 from badactors.castle.balance import load_balance
 from badactors.castle.bots import HeuristicBot
-from badactors.castle.budget import Limits, preflight
+from badactors.castle.budget import Limits, load_outputs, output_limits, preflight
 from badactors.castle.cast import Cast, load_cast_file
-from badactors.castle.configs import CAST, MAP
+from badactors.castle.configs import CAST, MAP, OUTPUTS
 from badactors.castle.harness import LiveGame, play_live
 from badactors.castle.mapfile import load_map
 from badactors.castle.mock_provider import BotProvider, mock_models
@@ -102,7 +102,15 @@ def parser() -> argparse.ArgumentParser:
         "--max-output-tokens",
         type=int,
         default=4096,
-        help="The most one answer may generate; each call reserves this.",
+        help=(
+            "The most one answer may generate; each call reserves this. Where "
+            "models think, a model that reasons gets the room --outputs gives it."
+        ),
+    )
+    parser.add_argument(
+        "--outputs",
+        default=str(OUTPUTS),
+        help="Per-model output limits for games where models think.",
     )
     parser.add_argument(
         "--reasoning",
@@ -188,15 +196,21 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     models = _models(cast, args)
-    estimate = preflight(
-        castle,
-        cast,
+    outputs = output_limits(
         models,
-        seed=seed,
-        config=config,
-        max_tokens=args.max_output_tokens,
+        base=args.max_output_tokens,
+        reasoning=args.reasoning,
+        table=load_outputs(args.outputs),
+    )
+    estimate = preflight(
+        castle, cast, models, seed=seed, config=config, outputs=outputs
     )
     print(estimate.summary())
+    for model, limit in sorted(outputs.items()):
+        reserve = (
+            f", reserving {limit.reserve:,}" if limit.reserve > limit.max_tokens else ""
+        )
+        print(f"Output limit: {model} {limit.max_tokens:,} tokens{reserve}.")
     if args.dry_run:
         return
     if not estimate.fits(limits) and not args.allow_partial:
@@ -244,7 +258,7 @@ def main(argv: list[str] | None = None) -> None:
         provider=provider,
         models=models,
         limits=limits,
-        max_tokens=args.max_output_tokens,
+        outputs=outputs,
         concurrency=args.concurrency,
         harness=harness,
         check_leaks=not args.no_leak_check,

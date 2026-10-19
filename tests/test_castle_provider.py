@@ -297,7 +297,12 @@ LISTING = {
             "supported_parameters": ["response_format"],
             "pricing": {"prompt": "0", "completion": "0"},
         },
-        {"id": "d/plain", "supported_parameters": [], "pricing": {}},
+        {
+            "id": "d/plain",
+            "supported_parameters": [],
+            "pricing": {},
+            "top_provider": {"max_completion_tokens": 8_000},
+        },
     ]
 }
 
@@ -314,6 +319,8 @@ def test_capabilities_pick_the_best_mode_and_read_prices() -> None:
     ]
     assert models["a/tools"].prompt_price == 3e-6
     assert models["a/tools"].worst_case(1000, 100) == pytest.approx(0.0045)
+    assert models["d/plain"].max_completion_tokens == 8_000
+    assert models["a/tools"].max_completion_tokens is None
 
 
 def test_capabilities_are_cached_for_their_ttl(tmp_path: Path) -> None:

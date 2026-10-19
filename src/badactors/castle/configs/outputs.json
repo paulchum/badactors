@@ -1,0 +1,20 @@
+{
+  "thinking": 16384,
+  "models": {
+    "google/gemini-3.1-pro-preview": {
+      "why": "Seed 7, 2026-10-17, default thinking: 7 of 45 answers ran out at 4,096 tokens, the rest had a median of 2,152."
+    },
+    "moonshotai/kimi-k3": {
+      "thinking": 32768,
+      "why": "Seed 7, 2026-10-17, default thinking: 21 of 51 answers ran out at 4,096 tokens, median 3,551."
+    },
+    "qwen/qwen3.8-27b": {
+      "thinking": 32768,
+      "why": "Seed 7, 2026-10-17, default thinking: 46 of 76 answers ran out at 4,096 tokens."
+    },
+    "x-ai/grok-4.7": {
+      "reserve": 32768,
+      "why": "Seed 7, 2026-10-17: 13 of 50 answers generated more than the 4,096 tokens asked for (up to 11,707, all reasoning), so max_tokens does not bound it."
+    }
+  }
+}

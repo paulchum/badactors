@@ -60,6 +60,7 @@ from badactors.castle.budget import (
     Budget,
     BudgetExhausted,
     Limits,
+    OutputLimit,
     Reservation,
     prompt_tokens,
 )
@@ -175,6 +176,10 @@ class ModelPlayer:
     budget: Budget
     log: HarnessLog
     max_tokens: int = 4096
+    """The most one answer may generate, as the request asks."""
+    reserve_tokens: int | None = None
+    """What each call reserves for the answer, when the model may generate
+    past ``max_tokens``; ``max_tokens`` otherwise."""
     slots: asyncio.Semaphore | None = None
     """Shared by every seat of the same model: how many of its calls may be in
     flight at once."""
@@ -215,7 +220,8 @@ class ModelPlayer:
     def reserve(self, question: Question) -> Reservation:
         schema = max(len(json.dumps(question.schema)), len(json.dumps(question.strict)))
         prompt = prompt_tokens(question.rendered, schema)
-        return self.budget.reserve(self.info, prompt, self.max_tokens)
+        answer = max(self.max_tokens, self.reserve_tokens or 0)
+        return self.budget.reserve(self.info, prompt, answer)
 
     # -------------------------------------------------------------- asking
 
@@ -252,6 +258,14 @@ class ModelPlayer:
             self._failed(call, "transport", str(exc))
             raise TurnFailure(str(exc), "transport") from exc
         cost = self.budget.settle(held, self.info, reply.usage)
+        reserved = max(self.max_tokens, self.reserve_tokens or 0)
+        if reply.usage.completion_tokens > reserved:
+            self.log.write(
+                "over_reserve",
+                ref=_ref(call.ref),
+                completion_tokens=reply.usage.completion_tokens,
+                reserved=reserved,
+            )
         self.log.write(
             "call",
             ref=_ref(call.ref),
@@ -623,6 +637,7 @@ def play_live(
     models: Mapping[str, ModelInfo],
     limits: Limits,
     max_tokens: int = 4096,
+    outputs: Mapping[str, OutputLimit] | None = None,
     concurrency: int = 4,
     harness: HarnessLog | None = None,
     modes: ModeBook | None = None,
@@ -639,10 +654,12 @@ def play_live(
     sleep: Sleep = asyncio.sleep,
 ) -> LiveGame:
     """Play one game with every seat's cast model, or the given ``players`` in
-    the seats they name, and return its record. With ``mock``, the provider is
-    the mock one: its seats are recorded as ``mock:<id>`` and never rated. A
-    game played from a schedule passes its ``world_id`` and ``arm``, which the
-    record keeps; a game of an arm that is never rated is not."""
+    the seats they name, and return its record. Each model generates at most
+    ``max_tokens`` per answer, or its own limit in ``outputs``. With ``mock``,
+    the provider is the mock one: its seats are recorded as ``mock:<id>`` and
+    never rated. A game played from a schedule passes its ``world_id`` and
+    ``arm``, which the record keeps; a game of an arm that is never rated is
+    not."""
     log = harness if harness is not None else HarnessLog()
     seat_models = cast.models()
     missing = sorted({model for model in seat_models.values() if model not in models})
@@ -668,7 +685,8 @@ def play_live(
             modes=book,
             budget=budget,
             log=log,
-            max_tokens=max_tokens,
+            max_tokens=outputs[model].max_tokens if outputs else max_tokens,
+            reserve_tokens=outputs[model].reserve if outputs else None,
             slots=slots[model],
             mock=mock,
             waits=waits,
@@ -691,6 +709,13 @@ def play_live(
     )
     for model, mode in sorted(book.modes.items()):
         log.write("mode", model=model, mode=mode)
+    for model, limit in sorted((outputs or {}).items()):
+        log.write(
+            "output_limit",
+            model=model,
+            max_tokens=limit.max_tokens,
+            reserve=limit.reserve,
+        )
     try:
         referee.run()
     finally:

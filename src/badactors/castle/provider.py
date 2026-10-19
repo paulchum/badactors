@@ -416,6 +416,13 @@ class ModelInfo:
     completion_price: float
     """Dollars per completion token."""
     request_price: float = 0.0
+    max_completion_tokens: int | None = None
+    """The most its top endpoint will generate for one answer, when listed."""
+
+    @property
+    def reasons(self) -> bool:
+        """Whether the model takes a reasoning setting, and so may think."""
+        return "reasoning" in self.supported
 
     def best_mode(self) -> Mode:
         if "tools" in self.supported:
@@ -439,12 +446,15 @@ def models_from(listing: Mapping[str, Any]) -> dict[str, ModelInfo]:
     found: dict[str, ModelInfo] = {}
     for item in listing.get("data") or []:
         pricing = item.get("pricing") or {}
+        top = item.get("top_provider") or {}
+        most = top.get("max_completion_tokens")
         found[item["id"]] = ModelInfo(
             id=item["id"],
             supported=frozenset(item.get("supported_parameters") or ()),
             prompt_price=_price(pricing.get("prompt")),
             completion_price=_price(pricing.get("completion")),
             request_price=_price(pricing.get("request")),
+            max_completion_tokens=most if isinstance(most, int) and most > 0 else None,
         )
     return found
 
